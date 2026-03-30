@@ -949,17 +949,35 @@ function _resolveProperty (layer, propertyPath) {
     return null;
   }
 
-  // Generic segment walk — try matchName first, then display name.
+  // Generic segment walk.
+  // AE property() accepts matchNames and display names, but for shape layer
+  // content the display names (e.g. "Ellipse 1") don't always resolve via
+  // property(name). We try direct lookup first, then scan children by name.
   var segments = propertyPath.split('>');
   var current = layer;
   for (var i = 0; i < segments.length; i++) {
     var seg = segments[i];
     if (!seg) { current = null; break; }
-    try {
-      var next = current.property(seg);
-      if (!next) { current = null; break; }
-      current = next;
-    } catch (e2) { current = null; break; }
+    var next = null;
+    // Try direct lookup (works for matchNames and most display names).
+    try { next = current.property(seg); } catch (e2) { next = null; }
+    // If direct lookup failed and current is a group, scan children by name.
+    if (!next && current.numProperties !== undefined) {
+      try {
+        var segLower = seg.toLowerCase();
+        for (var ci = 1; ci <= current.numProperties; ci++) {
+          try {
+            var child = current.property(ci);
+            if (child && child.name && child.name.toLowerCase() === segLower) {
+              next = child;
+              break;
+            }
+          } catch (eChild) {}
+        }
+      } catch (eScan) {}
+    }
+    if (!next) { current = null; break; }
+    current = next;
   }
   return current;
 }
