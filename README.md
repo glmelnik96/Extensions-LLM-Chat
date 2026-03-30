@@ -241,5 +241,3 @@ Extensions LLM Chat — это расширение (CEP panel) для Adobe Aft
 - `docs/release-checklist.md`
 
 Этот README даёт только обзор и ссылки; подробности уточняются в документации выше.
-
-# Extensions-LLM-Chat
