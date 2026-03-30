@@ -36,6 +36,26 @@
        * before upload to avoid GPU OOM / "model runner has unexpectedly stopped". Set 0 to disable.
        */
       ollamaVisionMaxEdgePx: 1024,
+
+      /** ── Agent mode settings ─────────────────────────────────────────── */
+
+      /** Ollama chat model for full agent conversation (not just vision). */
+      ollamaChatModel: 'qwen2.5:14b',
+
+      /** Enable Ollama as a chat provider option (requires a running Ollama instance). */
+      ollamaChatEnabled: false,
+
+      /** Timeout for Ollama chat requests (ms). */
+      ollamaChatTimeoutMs: 120000,
+
+      /** Default provider: 'cloudru' or 'ollama'. */
+      defaultProvider: 'cloudru',
+
+      /** Maximum tool-call rounds per agent request. */
+      agentMaxSteps: 15,
+
+      /** Temperature for agent tool-use calls (lower = more precise tool usage). */
+      agentTemperature: 0.3,
     }
   }
 })()

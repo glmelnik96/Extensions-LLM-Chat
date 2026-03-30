@@ -14,6 +14,8 @@ body {
   background-color: #323232;
 }
 
+/* ── Sidebar ──────────────────────────────────────────────────────────── */
+
 .sidebar {
   width: 140px;
   min-width: 120px;
@@ -78,6 +80,8 @@ body {
   color: #ddd;
 }
 
+/* ── Chat area ────────────────────────────────────────────────────────── */
+
 .chat-area {
   flex: 1;
   display: flex;
@@ -92,24 +96,155 @@ body {
 .chat-transcript {
   flex: 1;
   border: 1px solid #444;
-  background-color: #222;
-  padding: 4px;
+  background-color: #1e1e1e;
+  padding: 8px;
   overflow-y: auto;
-  font-family: Menlo, Monaco, Consolas, monospace;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
   font-size: 11px;
+  line-height: 1.5;
 }
 
+/* ── Messages ─────────────────────────────────────────────────────────── */
+
 .chat-message {
-  margin-bottom: 4px;
+  margin-bottom: 8px;
+  padding: 6px 8px;
+  border-radius: 4px;
 }
 
 .chat-message.user {
+  background-color: #2a3a50;
   color: #c7e3ff;
+  border-left: 3px solid #5679aa;
 }
 
 .chat-message.assistant {
-  color: #ffe6b3;
+  background-color: #2a2a2a;
+  color: #e0e0e0;
+  border-left: 3px solid #6a8a5a;
 }
+
+.chat-message.system {
+  background-color: #3a2a2a;
+  color: #e0b0b0;
+  border-left: 3px solid #8a5a5a;
+  font-size: 10px;
+}
+
+.chat-message .msg-role {
+  font-size: 9px;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  color: #888;
+  margin-bottom: 2px;
+}
+
+.chat-message .msg-text {
+  white-space: pre-wrap;
+  word-break: break-word;
+}
+
+/* ── Tool call cards ──────────────────────────────────────────────────── */
+
+.tool-calls-container {
+  margin-top: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 3px;
+}
+
+.tool-call-card {
+  border: 1px solid #444;
+  border-radius: 3px;
+  background-color: #252525;
+  overflow: hidden;
+}
+
+.tool-call-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 8px;
+  cursor: pointer;
+  font-size: 10px;
+  user-select: none;
+}
+
+.tool-call-header:hover {
+  background-color: #2e2e2e;
+}
+
+.tool-icon {
+  font-size: 10px;
+  color: #888;
+}
+
+.tool-name {
+  font-family: Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  color: #9ad0ff;
+  flex: 1;
+}
+
+.tool-status {
+  font-size: 9px;
+  padding: 1px 5px;
+  border-radius: 2px;
+}
+
+.tool-status.ok {
+  background-color: #274d2f;
+  color: #a5f7b3;
+}
+
+.tool-status.error {
+  background-color: #5a2020;
+  color: #ffb3b3;
+}
+
+.tool-status.running {
+  background-color: #4a4a20;
+  color: #f0f0a0;
+}
+
+.tool-chevron {
+  font-size: 10px;
+  color: #666;
+  transition: transform 0.15s;
+}
+
+.tool-call-card.expanded .tool-chevron {
+  transform: rotate(180deg);
+}
+
+.tool-call-details {
+  display: none;
+  padding: 4px 8px 6px;
+  border-top: 1px solid #3a3a3a;
+  font-family: Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  max-height: 200px;
+  overflow: auto;
+}
+
+.tool-call-card.expanded .tool-call-details {
+  display: block;
+}
+
+.tool-detail-label {
+  color: #666;
+  font-size: 9px;
+  margin-top: 2px;
+}
+
+.tool-detail-content {
+  color: #ccc;
+  white-space: pre-wrap;
+  word-break: break-all;
+  margin-bottom: 4px;
+}
+
+/* ── Expression blocks (for backward compat with expression pipeline) ── */
 
 .chat-message.assistant .chat-expression {
   display: block;
@@ -119,6 +254,8 @@ body {
   margin-bottom: 4px;
   color: #e4f1ff;
   white-space: pre-wrap;
+  font-family: Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
 }
 
 .chat-expression-header {
@@ -143,46 +280,17 @@ body {
   background-color: #354159;
 }
 
-.chat-message.assistant .chat-separator {
-  color: #888;
-  font-size: 10px;
-  margin: 2px 0;
-}
-
-.chat-message.assistant .chat-explanation,
-.chat-message.assistant .chat-notes {
-  margin-left: 4px;
-}
-
-.chat-message.assistant .chat-explanation li,
-.chat-message.assistant .chat-notes li {
-  margin-left: 12px;
-}
+/* ── Status & provider bar ────────────────────────────────────────────── */
 
 .status-line {
-  margin-top: 2px;
   font-size: 10px;
   color: #bbbbbb;
-}
-
-.status-line span {
-  color: #9ad0ff;
-}
-
-.vision-ollama-status-line {
-  margin-top: 2px;
-  font-size: 9px;
-  font-family: Menlo, Monaco, Consolas, monospace;
-  color: #8fbc8f;
-  line-height: 1.35;
-}
-
-.vision-ollama-status-line #vision-ollama-status {
-  color: #a8d4a0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .model-status {
-  margin-left: 8px;
   padding: 1px 4px;
   border-radius: 2px;
   font-size: 9px;
@@ -203,180 +311,24 @@ body {
   color: #dddddd;
 }
 
-.target-bar {
+.provider-bar {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
   gap: 6px;
-  padding: 4px 0;
+}
+
+.model-selector {
+  flex: 1;
   font-size: 10px;
-  position: relative;
-  z-index: 10;
-}
-
-.vision-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  padding: 2px 0 6px;
-  font-size: 10px;
-  border-bottom: 1px solid #3a3a3a;
-  margin-bottom: 2px;
-}
-
-.vision-bar-label {
-  display: inline-flex;
-  align-items: center;
-  gap: 4px;
-  color: #c8c8c8;
-  cursor: pointer;
-  user-select: none;
-}
-
-.vision-bar-label input {
-  margin: 0;
-  flex-shrink: 0;
-}
-
-.vision-ollama-row {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 6px;
-  width: 100%;
-  margin-top: 4px;
-}
-
-.btn-tiny {
-  font-size: 9px;
-  padding: 2px 6px;
-  min-height: 20px;
-}
-
-.target-select-hidden {
-  position: absolute;
-  width: 0;
-  height: 0;
-  opacity: 0;
-  pointer-events: none;
-  overflow: hidden;
-}
-
-.target-dropdown-wrap {
-  position: relative;
-  flex: 0 0 auto;
-}
-
-.target-dropdown-trigger {
-  display: block;
-  min-width: 100px;
-  max-width: 200px;
-  width: 140px;
-  font-size: 10px;
-  padding: 4px 20px 4px 6px;
-  min-height: 22px;
-  cursor: pointer;
-  text-align: left;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  background-color: #3a3a3a;
-  border: 1px solid #555;
-  color: #f0f0f0;
-  border-radius: 2px;
-  appearance: none;
-  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='10' viewBox='0 0 10 10'%3E%3Cpath fill='%23aaa' d='M0 3l5 5 5-5z'/%3E%3C/svg%3E");
-  background-repeat: no-repeat;
-  background-position: right 4px center;
-}
-
-.target-dropdown-trigger:hover {
-  background-color: #4a4a4a;
-}
-
-.target-dropdown-trigger:focus {
-  outline: 1px solid #5679aa;
-  outline-offset: 1px;
-}
-
-.target-dropdown-trigger:disabled {
-  opacity: 0.6;
-  cursor: not-allowed;
-}
-
-.target-dropdown-list {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  margin: 2px 0 0 0;
-  padding: 0;
-  list-style: none;
-  min-width: 100%;
-  max-width: 240px;
-  max-height: 200px;
-  overflow-y: auto;
-  background-color: #2a2a2a;
-  border: 1px solid #555;
-  border-radius: 2px;
-  box-shadow: 0 4px 12px rgba(0,0,0,0.4);
-  z-index: 100;
-  display: none;
-}
-
-.target-dropdown-list.is-open {
-  display: block;
-}
-
-.target-dropdown-list li {
-  padding: 6px 8px;
-  cursor: pointer;
-  font-size: 10px;
-  color: #f0f0f0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  border-bottom: 1px solid #383838;
-}
-
-.target-dropdown-list li:last-child {
-  border-bottom: none;
-}
-
-.target-dropdown-list li:hover,
-.target-dropdown-list li[aria-selected="true"] {
-  background-color: #3c5a80;
-  color: #fff;
-}
-
-.target-summary {
-  flex: 1 1 auto;
   min-width: 0;
-  color: #aaa;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  font-size: 10px;
 }
+
+/* ── Input ────────────────────────────────────────────────────────────── */
 
 .chat-input-container {
   display: flex;
   flex-direction: column;
   gap: 4px;
-}
-
-.prompt-target-line {
-  font-size: 10px;
-  color: #9ad0ff;
-  min-height: 14px;
-  padding: 2px 0;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-}
-
-.prompt-target-line.is-set {
-  color: #a5f7b3;
 }
 
 .chat-input {
@@ -385,10 +337,18 @@ body {
   border: 1px solid #555;
   background-color: #1f1f1f;
   color: #f0f0f0;
-  padding: 4px;
+  padding: 6px;
   resize: vertical;
   min-height: 40px;
   max-height: 120px;
+  border-radius: 3px;
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+  font-size: 11px;
+}
+
+.chat-input:focus {
+  outline: 1px solid #5679aa;
+  border-color: #5679aa;
 }
 
 .chat-actions {
@@ -397,18 +357,26 @@ body {
   gap: 4px;
 }
 
+/* ── Buttons ──────────────────────────────────────────────────────────── */
+
 .btn {
   border: 1px solid #555;
   background-color: #3a3a3a;
   color: #f0f0f0;
-  padding: 2px 6px;
+  padding: 3px 8px;
   font-size: 11px;
   cursor: pointer;
   box-sizing: border-box;
+  border-radius: 2px;
 }
 
 .btn:hover {
   background-color: #4a4a4a;
+}
+
+.btn:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
 }
 
 .btn-primary {
@@ -424,9 +392,13 @@ body {
   background-color: #444;
 }
 
-.btn-secondary.batch-ready {
-  border-color: #5679aa;
-  color: #c7e3ff;
+.btn-warning {
+  background-color: #5a4a20;
+  border-color: #7a6a30;
+}
+
+.btn-warning:hover {
+  background-color: #6a5a28;
 }
 
 .btn-danger {
@@ -438,3 +410,53 @@ body {
   background-color: #8a3838;
 }
 
+/* ── Thinking/loading indicator ───────────────────────────────────────── */
+
+.agent-thinking {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 6px 8px;
+  color: #888;
+  font-size: 10px;
+}
+
+.thinking-dots {
+  display: inline-flex;
+  gap: 3px;
+}
+
+.thinking-dots span {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background-color: #666;
+  animation: pulse 1.2s infinite;
+}
+
+.thinking-dots span:nth-child(2) { animation-delay: 0.2s; }
+.thinking-dots span:nth-child(3) { animation-delay: 0.4s; }
+
+@keyframes pulse {
+  0%, 100% { opacity: 0.3; }
+  50% { opacity: 1; }
+}
+
+/* ── Scrollbar styling ────────────────────────────────────────────────── */
+
+::-webkit-scrollbar {
+  width: 6px;
+}
+
+::-webkit-scrollbar-track {
+  background: #1e1e1e;
+}
+
+::-webkit-scrollbar-thumb {
+  background: #555;
+  border-radius: 3px;
+}
+
+::-webkit-scrollbar-thumb:hover {
+  background: #666;
+}

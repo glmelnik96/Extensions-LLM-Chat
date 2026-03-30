@@ -888,6 +888,1070 @@ function extensionsLlmChat_applyExpressionBatch (targets) {
   }
 }
 
+// ============================================================================
+// Shared helpers
+// ============================================================================
+
+/**
+ * Resolve a layer inside a comp by persistent id (preferred) or by index.
+ * Returns the Layer or null.
+ */
+function _resolveLayer (comp, layerIndex, layerId) {
+  var layer = null;
+  // Prefer persistent id.
+  if (typeof layerId === 'number' && layerId >= 0) {
+    try {
+      for (var li = 1; li <= comp.numLayers; li++) {
+        var c = comp.layer(li);
+        if (c && c.id === layerId) { layer = c; break; }
+      }
+    } catch (e) { layer = null; }
+  }
+  // Fallback to index.
+  if (!layer) {
+    if (typeof layerIndex === 'number' && layerIndex >= 1 && layerIndex <= comp.numLayers) {
+      try { layer = comp.layer(layerIndex); } catch (e2) { layer = null; }
+    }
+  }
+  return layer;
+}
+
+/**
+ * Well-known property path → matchName fast-path map.
+ * Format: "Group>Prop" → ["ADBE Group MatchName", "ADBE Prop MatchName"]
+ */
+var _KNOWN_PATHS = {
+  'Transform>Anchor Point': ['ADBE Transform Group', 'ADBE Anchor Point'],
+  'Transform>Position':     ['ADBE Transform Group', 'ADBE Position'],
+  'Transform>Scale':        ['ADBE Transform Group', 'ADBE Scale'],
+  'Transform>Rotation':     ['ADBE Transform Group', 'ADBE Rotate Z'],
+  'Transform>X Rotation':   ['ADBE Transform Group', 'ADBE Rotate X'],
+  'Transform>Y Rotation':   ['ADBE Transform Group', 'ADBE Rotate Y'],
+  'Transform>Opacity':      ['ADBE Transform Group', 'ADBE Opacity'],
+  'Text>Source Text':       ['ADBE Text Properties', 'ADBE Text Document'],
+};
+
+/**
+ * Resolve a property on a layer given a path string like "Transform>Position",
+ * "Effects>Gaussian Blur>Blurriness", etc.
+ * Returns the Property/PropertyGroup or null.
+ */
+function _resolveProperty (layer, propertyPath) {
+  if (!layer || typeof propertyPath !== 'string' || !propertyPath.length) return null;
+
+  // Fast-path for well-known paths.
+  var known = _KNOWN_PATHS[propertyPath];
+  if (known) {
+    try {
+      var g = layer.property(known[0]);
+      if (g) return g.property(known[1]);
+    } catch (e) {}
+    return null;
+  }
+
+  // Generic segment walk — try matchName first, then display name.
+  var segments = propertyPath.split('>');
+  var current = layer;
+  for (var i = 0; i < segments.length; i++) {
+    var seg = segments[i];
+    if (!seg) { current = null; break; }
+    try {
+      var next = current.property(seg);
+      if (!next) { current = null; break; }
+      current = next;
+    } catch (e2) { current = null; break; }
+  }
+  return current;
+}
+
+/**
+ * Describe a layer type as a friendly string.
+ */
+function _layerTypeString (layer) {
+  if (!layer) return 'unknown';
+  try {
+    if (layer instanceof CameraLayer) return 'camera';
+    if (layer instanceof LightLayer) return 'light';
+    if (layer instanceof ShapeLayer) return 'shape';
+    if (layer instanceof TextLayer) return 'text';
+    if (layer.nullLayer === true) return 'null';
+    if (layer.adjustmentLayer === true) return 'adjustment';
+    if (layer.source && layer.source instanceof CompItem) return 'precomp';
+    return 'av';
+  } catch (e) { return 'unknown'; }
+}
+
+// ============================================================================
+// Layer operations
+// ============================================================================
+
+/**
+ * Create a new layer in the active composition.
+ * @param {string} layerType  'solid'|'shape'|'text'|'null'|'adjustment'|'camera'|'light'
+ * @param {string} name       Layer name
+ * @param {object} opts       Optional: { color:[r,g,b], width, height, duration, text, fontSize }
+ */
+function extensionsLlmChat_createLayer (layerType, name, opts) {
+  var result = { ok: false, message: '', layerIndex: null, layerId: null, layerName: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var comp = ctx.comp;
+    if (!opts || typeof opts !== 'object') opts = {};
+
+    var layer = null;
+    var w = typeof opts.width === 'number' ? opts.width : comp.width;
+    var h = typeof opts.height === 'number' ? opts.height : comp.height;
+    var dur = typeof opts.duration === 'number' ? opts.duration : comp.duration;
+    var col = (opts.color instanceof Array && opts.color.length >= 3)
+      ? opts.color : [0.5, 0.5, 0.5];
+    var layerName = (typeof name === 'string' && name.length) ? name : layerType;
+
+    app.beginUndoGroup('Agent: Create layer');
+
+    if (layerType === 'solid') {
+      layer = comp.layers.addSolid(col, layerName, w, h, 1, dur);
+    } else if (layerType === 'shape') {
+      layer = comp.layers.addShape();
+      layer.name = layerName;
+    } else if (layerType === 'text') {
+      var textDoc = new TextDocument(typeof opts.text === 'string' ? opts.text : '');
+      if (typeof opts.fontSize === 'number') textDoc.fontSize = opts.fontSize;
+      if (typeof opts.font === 'string') textDoc.font = opts.font;
+      layer = comp.layers.addText(textDoc);
+      layer.name = layerName;
+    } else if (layerType === 'null') {
+      layer = comp.layers.addNull(dur);
+      layer.name = layerName;
+    } else if (layerType === 'adjustment') {
+      layer = comp.layers.addSolid(col, layerName, w, h, 1, dur);
+      layer.adjustmentLayer = true;
+    } else if (layerType === 'camera') {
+      var camPreset = typeof opts.preset === 'string' ? opts.preset : '';
+      layer = comp.layers.addCamera(layerName, [comp.width / 2, comp.height / 2]);
+    } else if (layerType === 'light') {
+      layer = comp.layers.addLight(layerName, [comp.width / 2, comp.height / 2]);
+    } else {
+      app.endUndoGroup();
+      result.message = 'Unknown layer type: ' + layerType;
+      return resultToJson(result);
+    }
+
+    app.endUndoGroup();
+
+    result.ok = true;
+    result.layerIndex = layer.index;
+    result.layerId = layer.id;
+    result.layerName = layer.name;
+    result.message = 'Created ' + layerType + ' layer "' + layer.name + '" at index ' + layer.index + '.';
+    return resultToJson(result);
+  } catch (e) {
+    try { app.endUndoGroup(); } catch (x) {}
+    result.message = 'createLayer error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Delete a layer from the active composition.
+ */
+function extensionsLlmChat_deleteLayer (layerIndex, layerId) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var n = layer.name;
+    app.beginUndoGroup('Agent: Delete layer');
+    layer.remove();
+    app.endUndoGroup();
+    result.ok = true;
+    result.message = 'Deleted layer "' + n + '".';
+    return resultToJson(result);
+  } catch (e) {
+    try { app.endUndoGroup(); } catch (x) {}
+    result.message = 'deleteLayer error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Duplicate a layer. Returns info about the new layer.
+ */
+function extensionsLlmChat_duplicateLayer (layerIndex, layerId) {
+  var result = { ok: false, message: '', layerIndex: null, layerId: null, layerName: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    app.beginUndoGroup('Agent: Duplicate layer');
+    var dup = layer.duplicate();
+    app.endUndoGroup();
+    result.ok = true;
+    result.layerIndex = dup.index;
+    result.layerId = dup.id;
+    result.layerName = dup.name;
+    result.message = 'Duplicated "' + layer.name + '" → "' + dup.name + '" at index ' + dup.index + '.';
+    return resultToJson(result);
+  } catch (e) {
+    try { app.endUndoGroup(); } catch (x) {}
+    result.message = 'duplicateLayer error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Move a layer to a new index.
+ */
+function extensionsLlmChat_reorderLayer (layerIndex, layerId, newIndex) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (typeof newIndex !== 'number' || newIndex < 1 || newIndex > ctx.comp.numLayers) {
+      result.message = 'Invalid new index: ' + newIndex; return resultToJson(result);
+    }
+    app.beginUndoGroup('Agent: Reorder layer');
+    layer.moveTo(newIndex);
+    app.endUndoGroup();
+    result.ok = true;
+    result.message = 'Moved "' + layer.name + '" to index ' + newIndex + '.';
+    return resultToJson(result);
+  } catch (e) {
+    try { app.endUndoGroup(); } catch (x) {}
+    result.message = 'reorderLayer error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Set or clear a layer's parent.
+ * Pass parentLayerIndex=0 and parentLayerId=-1 to unparent.
+ */
+function extensionsLlmChat_setLayerParent (layerIndex, layerId, parentLayerIndex, parentLayerId) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var child = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!child) { result.message = 'Child layer not found.'; return resultToJson(result); }
+
+    app.beginUndoGroup('Agent: Set layer parent');
+    if ((!parentLayerIndex || parentLayerIndex <= 0) && (!parentLayerId || parentLayerId < 0)) {
+      child.parent = null;
+      app.endUndoGroup();
+      result.ok = true;
+      result.message = 'Unparented "' + child.name + '".';
+      return resultToJson(result);
+    }
+
+    var parent = _resolveLayer(ctx.comp, parentLayerIndex, parentLayerId);
+    if (!parent) {
+      app.endUndoGroup();
+      result.message = 'Parent layer not found.';
+      return resultToJson(result);
+    }
+    child.parent = parent;
+    app.endUndoGroup();
+    result.ok = true;
+    result.message = 'Parented "' + child.name + '" → "' + parent.name + '".';
+    return resultToJson(result);
+  } catch (e) {
+    try { app.endUndoGroup(); } catch (x) {}
+    result.message = 'setLayerParent error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Set in/out points for a layer.
+ */
+function extensionsLlmChat_setLayerTiming (layerIndex, layerId, inPoint, outPoint, startTime) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    app.beginUndoGroup('Agent: Set layer timing');
+    if (typeof startTime === 'number') layer.startTime = startTime;
+    if (typeof inPoint === 'number') layer.inPoint = inPoint;
+    if (typeof outPoint === 'number') layer.outPoint = outPoint;
+    app.endUndoGroup();
+    result.ok = true;
+    result.message = 'Set timing on "' + layer.name + '": in=' + layer.inPoint + ', out=' + layer.outPoint + '.';
+    return resultToJson(result);
+  } catch (e) {
+    try { app.endUndoGroup(); } catch (x) {}
+    result.message = 'setLayerTiming error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Rename a layer.
+ */
+function extensionsLlmChat_renameLayer (layerIndex, layerId, newName) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var old = layer.name;
+    app.beginUndoGroup('Agent: Rename layer');
+    layer.name = String(newName);
+    app.endUndoGroup();
+    result.ok = true;
+    result.message = 'Renamed "' + old + '" → "' + layer.name + '".';
+    return resultToJson(result);
+  } catch (e) {
+    try { app.endUndoGroup(); } catch (x) {}
+    result.message = 'renameLayer error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+// ============================================================================
+// Keyframe operations
+// ============================================================================
+
+/**
+ * Add keyframes to a property.
+ * @param {number} layerIndex
+ * @param {number} layerId
+ * @param {string} propertyPath e.g. "Transform>Position"
+ * @param {Array}  keyframes    [{ time:number, value:*, inType, outType, easeIn, easeOut }]
+ *
+ * inType/outType: 'linear'|'bezier'|'hold' (default 'bezier')
+ * easeIn/easeOut: [{ speed, influence }] per dimension — optional
+ */
+function extensionsLlmChat_addKeyframes (layerIndex, layerId, propertyPath, keyframes) {
+  var result = { ok: false, message: '', addedCount: 0 };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var prop = _resolveProperty(layer, propertyPath);
+    if (!prop) { result.message = 'Property "' + propertyPath + '" not found.'; return resultToJson(result); }
+    if (!(prop instanceof Property)) {
+      result.message = '"' + propertyPath + '" is a group, not a property.'; return resultToJson(result);
+    }
+    if (!(keyframes instanceof Array) || keyframes.length === 0) {
+      result.message = 'No keyframes provided.'; return resultToJson(result);
+    }
+
+    // Map string interpolation types to AE enums.
+    function toKeyType (str) {
+      if (str === 'linear') return KeyframeInterpolationType.LINEAR;
+      if (str === 'hold') return KeyframeInterpolationType.HOLD;
+      return KeyframeInterpolationType.BEZIER;
+    }
+
+    app.beginUndoGroup('Agent: Add keyframes');
+
+    for (var i = 0; i < keyframes.length; i++) {
+      var kf = keyframes[i];
+      if (!kf || typeof kf.time !== 'number') continue;
+      var val = kf.value;
+      // Ensure array values are proper AE arrays.
+      if (val instanceof Array) {
+        var arr = [];
+        for (var vi = 0; vi < val.length; vi++) arr.push(val[vi]);
+        val = arr;
+      }
+
+      var kIdx = prop.addKey(kf.time);
+      prop.setValueAtKey(kIdx, val);
+      result.addedCount++;
+
+      // Set interpolation type.
+      var inT = toKeyType(kf.inType);
+      var outT = toKeyType(kf.outType);
+      try { prop.setInterpolationTypeAtKey(kIdx, inT, outT); } catch (eInterp) {}
+
+      // Set easing if provided.
+      if (kf.easeIn || kf.easeOut) {
+        try {
+          var numDims = prop.value instanceof Array ? prop.value.length : 1;
+          var eIn = [];
+          var eOut = [];
+          for (var d = 0; d < numDims; d++) {
+            var inSpec = (kf.easeIn instanceof Array && kf.easeIn[d]) ? kf.easeIn[d] : null;
+            var outSpec = (kf.easeOut instanceof Array && kf.easeOut[d]) ? kf.easeOut[d] : null;
+            var speed_in = (inSpec && typeof inSpec.speed === 'number') ? inSpec.speed : 0;
+            var infl_in = (inSpec && typeof inSpec.influence === 'number') ? inSpec.influence : 33.33;
+            var speed_out = (outSpec && typeof outSpec.speed === 'number') ? outSpec.speed : 0;
+            var infl_out = (outSpec && typeof outSpec.influence === 'number') ? outSpec.influence : 33.33;
+            eIn.push(new KeyframeEase(speed_in, infl_in));
+            eOut.push(new KeyframeEase(speed_out, infl_out));
+          }
+          prop.setTemporalEaseAtKey(kIdx, eIn, eOut);
+        } catch (eEase) {}
+      }
+    }
+
+    app.endUndoGroup();
+    result.ok = true;
+    result.message = 'Added ' + result.addedCount + ' keyframe(s) to "' + propertyPath + '" on "' + layer.name + '".';
+    return resultToJson(result);
+  } catch (e) {
+    try { app.endUndoGroup(); } catch (x) {}
+    result.message = 'addKeyframes error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Read all keyframes from a property.
+ */
+function extensionsLlmChat_getKeyframes (layerIndex, layerId, propertyPath) {
+  var result = { ok: false, message: '', keyframes: [] };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var prop = _resolveProperty(layer, propertyPath);
+    if (!prop || !(prop instanceof Property)) {
+      result.message = 'Property not found or is a group.'; return resultToJson(result);
+    }
+    var numKeys = prop.numKeys;
+    for (var i = 1; i <= numKeys; i++) {
+      var kf = { time: prop.keyTime(i), value: prop.keyValue(i) };
+      try {
+        kf.inInterpolation = String(prop.keyInInterpolationType(i));
+        kf.outInterpolation = String(prop.keyOutInterpolationType(i));
+      } catch (eI) {}
+      try {
+        kf.temporalEaseIn = [];
+        kf.temporalEaseOut = [];
+        var teIn = prop.keyInTemporalEase(i);
+        var teOut = prop.keyOutTemporalEase(i);
+        for (var d = 0; d < teIn.length; d++) {
+          kf.temporalEaseIn.push({ speed: teIn[d].speed, influence: teIn[d].influence });
+        }
+        for (var d2 = 0; d2 < teOut.length; d2++) {
+          kf.temporalEaseOut.push({ speed: teOut[d2].speed, influence: teOut[d2].influence });
+        }
+      } catch (eEase) {}
+      result.keyframes.push(kf);
+    }
+    result.ok = true;
+    result.message = numKeys + ' keyframe(s) on "' + propertyPath + '".';
+    return resultToJson(result);
+  } catch (e) {
+    result.message = 'getKeyframes error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Delete keyframes at specified times (or all if times is empty/null).
+ */
+function extensionsLlmChat_deleteKeyframes (layerIndex, layerId, propertyPath, times) {
+  var result = { ok: false, message: '', deletedCount: 0 };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var prop = _resolveProperty(layer, propertyPath);
+    if (!prop || !(prop instanceof Property)) {
+      result.message = 'Property not found or is a group.'; return resultToJson(result);
+    }
+    app.beginUndoGroup('Agent: Delete keyframes');
+    if (!times || !(times instanceof Array) || times.length === 0) {
+      // Delete all keyframes, backwards to preserve indices.
+      for (var i = prop.numKeys; i >= 1; i--) {
+        prop.removeKey(i);
+        result.deletedCount++;
+      }
+    } else {
+      // Delete at specific times — find nearest key.
+      for (var t = 0; t < times.length; t++) {
+        var kIdx = prop.nearestKeyIndex(times[t]);
+        if (kIdx > 0 && Math.abs(prop.keyTime(kIdx) - times[t]) < 0.001) {
+          prop.removeKey(kIdx);
+          result.deletedCount++;
+        }
+      }
+    }
+    app.endUndoGroup();
+    result.ok = true;
+    result.message = 'Deleted ' + result.deletedCount + ' keyframe(s) from "' + propertyPath + '".';
+    return resultToJson(result);
+  } catch (e) {
+    try { app.endUndoGroup(); } catch (x) {}
+    result.message = 'deleteKeyframes error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Set easing on an existing keyframe by key index.
+ */
+function extensionsLlmChat_setKeyframeEasing (layerIndex, layerId, propertyPath, keyIndex, inType, outType, easeIn, easeOut) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var prop = _resolveProperty(layer, propertyPath);
+    if (!prop || !(prop instanceof Property)) {
+      result.message = 'Property not found.'; return resultToJson(result);
+    }
+    if (typeof keyIndex !== 'number' || keyIndex < 1 || keyIndex > prop.numKeys) {
+      result.message = 'Invalid keyframe index: ' + keyIndex; return resultToJson(result);
+    }
+
+    function toKeyType (str) {
+      if (str === 'linear') return KeyframeInterpolationType.LINEAR;
+      if (str === 'hold') return KeyframeInterpolationType.HOLD;
+      return KeyframeInterpolationType.BEZIER;
+    }
+
+    app.beginUndoGroup('Agent: Set keyframe easing');
+
+    if (typeof inType === 'string' || typeof outType === 'string') {
+      prop.setInterpolationTypeAtKey(keyIndex, toKeyType(inType), toKeyType(outType));
+    }
+
+    if (easeIn || easeOut) {
+      var numDims = prop.value instanceof Array ? prop.value.length : 1;
+      var eIn = [];
+      var eOut = [];
+      for (var d = 0; d < numDims; d++) {
+        var inSpec = (easeIn instanceof Array && easeIn[d]) ? easeIn[d] : null;
+        var outSpec = (easeOut instanceof Array && easeOut[d]) ? easeOut[d] : null;
+        var sp_in = (inSpec && typeof inSpec.speed === 'number') ? inSpec.speed : 0;
+        var inf_in = (inSpec && typeof inSpec.influence === 'number') ? inSpec.influence : 33.33;
+        var sp_out = (outSpec && typeof outSpec.speed === 'number') ? outSpec.speed : 0;
+        var inf_out = (outSpec && typeof outSpec.influence === 'number') ? outSpec.influence : 33.33;
+        eIn.push(new KeyframeEase(sp_in, inf_in));
+        eOut.push(new KeyframeEase(sp_out, inf_out));
+      }
+      prop.setTemporalEaseAtKey(keyIndex, eIn, eOut);
+    }
+
+    app.endUndoGroup();
+    result.ok = true;
+    result.message = 'Set easing on keyframe #' + keyIndex + ' of "' + propertyPath + '".';
+    return resultToJson(result);
+  } catch (e) {
+    try { app.endUndoGroup(); } catch (x) {}
+    result.message = 'setKeyframeEasing error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+// ============================================================================
+// Property operations
+// ============================================================================
+
+/**
+ * Get the value of a property, optionally at a specific time.
+ */
+function extensionsLlmChat_getPropertyValue (layerIndex, layerId, propertyPath, time) {
+  var result = { ok: false, message: '', value: null, hasExpression: false, expression: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var prop = _resolveProperty(layer, propertyPath);
+    if (!prop || !(prop instanceof Property)) {
+      result.message = 'Property not found or is a group.'; return resultToJson(result);
+    }
+    if (typeof time === 'number') {
+      result.value = prop.valueAtTime(time, false);
+    } else {
+      result.value = prop.value;
+    }
+    try {
+      result.hasExpression = prop.expressionEnabled === true;
+      result.expression = prop.expression || '';
+    } catch (eExpr) {}
+    result.ok = true;
+    result.message = 'Got value of "' + propertyPath + '" on "' + layer.name + '".';
+    return resultToJson(result);
+  } catch (e) {
+    result.message = 'getPropertyValue error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Set a static property value (no keyframes).
+ */
+function extensionsLlmChat_setPropertyValue (layerIndex, layerId, propertyPath, value) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var prop = _resolveProperty(layer, propertyPath);
+    if (!prop || !(prop instanceof Property)) {
+      result.message = 'Property not found or is a group.'; return resultToJson(result);
+    }
+    // Ensure array values.
+    if (value instanceof Array) {
+      var arr = [];
+      for (var i = 0; i < value.length; i++) arr.push(value[i]);
+      value = arr;
+    }
+    app.beginUndoGroup('Agent: Set property value');
+    prop.setValue(value);
+    app.endUndoGroup();
+    result.ok = true;
+    result.message = 'Set "' + propertyPath + '" on "' + layer.name + '".';
+    return resultToJson(result);
+  } catch (e) {
+    try { app.endUndoGroup(); } catch (x) {}
+    result.message = 'setPropertyValue error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * List all expressable properties on a layer (deeper scan than getActiveCompSummary).
+ */
+function extensionsLlmChat_getLayerProperties (layerIndex, layerId) {
+  var result = { ok: false, message: '', layerName: '', layerType: '', properties: [] };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    result.layerName = layer.name;
+    result.layerType = _layerTypeString(layer);
+
+    function walkGroup (group, pathPrefix) {
+      if (!group) return;
+      try {
+        var numP = group.numProperties;
+        if (typeof numP !== 'number') return;
+        for (var i = 1; i <= numP; i++) {
+          try {
+            var p = group.property(i);
+            if (!p) continue;
+            var pPath = pathPrefix ? (pathPrefix + '>' + p.name) : p.name;
+            if (p instanceof Property) {
+              var info = { path: pPath, name: p.name, matchName: p.matchName || '' };
+              try { info.canSetExpression = p.canSetExpression === true; } catch (eC) {}
+              try { info.numKeys = p.numKeys; } catch (eK) {}
+              try { info.hasExpression = p.expressionEnabled === true; } catch (eE) {}
+              result.properties.push(info);
+            } else if (p.numProperties !== undefined && p.numProperties > 0) {
+              // Recurse into property groups, but limit depth.
+              if (pPath.split('>').length < 5) {
+                walkGroup(p, pPath);
+              }
+            }
+          } catch (eInner) {}
+        }
+      } catch (eWalk) {}
+    }
+
+    walkGroup(layer, '');
+    result.ok = true;
+    result.message = 'Found ' + result.properties.length + ' properties on "' + layer.name + '".';
+    return resultToJson(result);
+  } catch (e) {
+    result.message = 'getLayerProperties error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+// ============================================================================
+// Effect operations
+// ============================================================================
+
+/**
+ * Add an effect to a layer by matchName or display name.
+ */
+function extensionsLlmChat_addEffect (layerIndex, layerId, effectMatchName) {
+  var result = { ok: false, message: '', effectIndex: null };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var effects = layer.property('ADBE Effect Parade');
+    if (!effects) { result.message = 'Layer does not support effects.'; return resultToJson(result); }
+    app.beginUndoGroup('Agent: Add effect');
+    var fx = effects.addProperty(effectMatchName);
+    app.endUndoGroup();
+    if (!fx) { result.message = 'Failed to add effect "' + effectMatchName + '".'; return resultToJson(result); }
+    result.ok = true;
+    result.effectIndex = fx.propertyIndex;
+    result.message = 'Added effect "' + fx.name + '" (index ' + fx.propertyIndex + ') to "' + layer.name + '".';
+    return resultToJson(result);
+  } catch (e) {
+    try { app.endUndoGroup(); } catch (x) {}
+    result.message = 'addEffect error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Remove an effect by index (1-based).
+ */
+function extensionsLlmChat_removeEffect (layerIndex, layerId, effectIndex) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var effects = layer.property('ADBE Effect Parade');
+    if (!effects) { result.message = 'Layer has no effects.'; return resultToJson(result); }
+    if (typeof effectIndex !== 'number' || effectIndex < 1 || effectIndex > effects.numProperties) {
+      result.message = 'Invalid effect index.'; return resultToJson(result);
+    }
+    var fx = effects.property(effectIndex);
+    var n = fx ? fx.name : '?';
+    app.beginUndoGroup('Agent: Remove effect');
+    fx.remove();
+    app.endUndoGroup();
+    result.ok = true;
+    result.message = 'Removed effect "' + n + '" from "' + layer.name + '".';
+    return resultToJson(result);
+  } catch (e) {
+    try { app.endUndoGroup(); } catch (x) {}
+    result.message = 'removeEffect error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * List properties of a specific effect on a layer.
+ */
+function extensionsLlmChat_getEffectProperties (layerIndex, layerId, effectIndex) {
+  var result = { ok: false, message: '', effectName: '', properties: [] };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var effects = layer.property('ADBE Effect Parade');
+    if (!effects) { result.message = 'Layer has no effects.'; return resultToJson(result); }
+    var fx = effects.property(effectIndex);
+    if (!fx) { result.message = 'Effect not found at index ' + effectIndex + '.'; return resultToJson(result); }
+    result.effectName = fx.name;
+
+    for (var i = 1; i <= fx.numProperties; i++) {
+      try {
+        var p = fx.property(i);
+        if (!p) continue;
+        var info = { index: i, name: p.name, matchName: p.matchName || '' };
+        if (p instanceof Property) {
+          try { info.value = p.value; } catch (eV) {}
+          try { info.canSetExpression = p.canSetExpression === true; } catch (eC) {}
+        }
+        result.properties.push(info);
+      } catch (eP) {}
+    }
+    result.ok = true;
+    result.message = 'Effect "' + fx.name + '" has ' + result.properties.length + ' properties.';
+    return resultToJson(result);
+  } catch (e) {
+    result.message = 'getEffectProperties error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Set a specific effect property value.
+ * @param {number} effectIndex 1-based index in the Effects stack
+ * @param {number} propIndex   1-based index within the effect
+ * @param {*}      value       The value to set
+ */
+function extensionsLlmChat_setEffectPropertyValue (layerIndex, layerId, effectIndex, propIndex, value) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var effects = layer.property('ADBE Effect Parade');
+    if (!effects) { result.message = 'Layer has no effects.'; return resultToJson(result); }
+    var fx = effects.property(effectIndex);
+    if (!fx) { result.message = 'Effect not found.'; return resultToJson(result); }
+    var prop = fx.property(propIndex);
+    if (!prop || !(prop instanceof Property)) {
+      result.message = 'Effect property not found at index ' + propIndex + '.'; return resultToJson(result);
+    }
+    if (value instanceof Array) {
+      var arr = [];
+      for (var i = 0; i < value.length; i++) arr.push(value[i]);
+      value = arr;
+    }
+    app.beginUndoGroup('Agent: Set effect property');
+    prop.setValue(value);
+    app.endUndoGroup();
+    result.ok = true;
+    result.message = 'Set "' + prop.name + '" on effect "' + fx.name + '".';
+    return resultToJson(result);
+  } catch (e) {
+    try { app.endUndoGroup(); } catch (x) {}
+    result.message = 'setEffectPropertyValue error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+// ============================================================================
+// Composition operations
+// ============================================================================
+
+/**
+ * Create a new composition in the project.
+ */
+function extensionsLlmChat_createComp (name, width, height, pixelAspect, duration, frameRate) {
+  var result = { ok: false, message: '', compName: '' };
+  try {
+    if (!app || !app.project) { result.message = 'No active project.'; return resultToJson(result); }
+    var n = (typeof name === 'string' && name.length) ? name : 'New Comp';
+    var w = (typeof width === 'number' && width > 0) ? width : 1920;
+    var h = (typeof height === 'number' && height > 0) ? height : 1080;
+    var pa = (typeof pixelAspect === 'number' && pixelAspect > 0) ? pixelAspect : 1;
+    var d = (typeof duration === 'number' && duration > 0) ? duration : 10;
+    var fr = (typeof frameRate === 'number' && frameRate > 0) ? frameRate : 30;
+
+    app.beginUndoGroup('Agent: Create composition');
+    var comp = app.project.items.addComp(n, w, h, pa, d, fr);
+    app.endUndoGroup();
+
+    result.ok = true;
+    result.compName = comp.name;
+    result.message = 'Created composition "' + comp.name + '" (' + w + 'x' + h + ', ' + fr + 'fps, ' + d + 's).';
+    return resultToJson(result);
+  } catch (e) {
+    try { app.endUndoGroup(); } catch (x) {}
+    result.message = 'createComp error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Precompose selected layers (by indices).
+ * @param {Array}  layerIndices  Array of 1-based layer indices to precompose
+ * @param {string} compName      Name for the new precomp
+ * @param {boolean} moveAttributes  If true, move attributes into precomp (option 1). Default true.
+ */
+function extensionsLlmChat_precomposeLayers (layerIndices, compName, moveAttributes) {
+  var result = { ok: false, message: '', precompName: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    if (!(layerIndices instanceof Array) || layerIndices.length === 0) {
+      result.message = 'No layer indices provided.'; return resultToJson(result);
+    }
+    var n = (typeof compName === 'string' && compName.length) ? compName : 'Precomp';
+    var moveAttr = (typeof moveAttributes === 'boolean') ? moveAttributes : true;
+
+    app.beginUndoGroup('Agent: Precompose layers');
+    var newComp = ctx.comp.layers.precompose(layerIndices, n, moveAttr);
+    app.endUndoGroup();
+
+    result.ok = true;
+    result.precompName = newComp ? newComp.name : n;
+    result.message = 'Precomposed ' + layerIndices.length + ' layer(s) into "' + result.precompName + '".';
+    return resultToJson(result);
+  } catch (e) {
+    try { app.endUndoGroup(); } catch (x) {}
+    result.message = 'precomposeLayers error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Update settings of the active composition.
+ */
+function extensionsLlmChat_setCompSettings (settings) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    if (!settings || typeof settings !== 'object') {
+      result.message = 'No settings provided.'; return resultToJson(result);
+    }
+    var comp = ctx.comp;
+    app.beginUndoGroup('Agent: Set comp settings');
+    if (typeof settings.name === 'string') comp.name = settings.name;
+    if (typeof settings.width === 'number') comp.width = settings.width;
+    if (typeof settings.height === 'number') comp.height = settings.height;
+    if (typeof settings.duration === 'number') comp.duration = settings.duration;
+    if (typeof settings.frameRate === 'number') comp.frameRate = settings.frameRate;
+    if (typeof settings.bgColor instanceof Array) comp.bgColor = settings.bgColor;
+    app.endUndoGroup();
+    result.ok = true;
+    result.message = 'Updated comp settings for "' + comp.name + '".';
+    return resultToJson(result);
+  } catch (e) {
+    try { app.endUndoGroup(); } catch (x) {}
+    result.message = 'setCompSettings error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+// ============================================================================
+// Text layer operations
+// ============================================================================
+
+/**
+ * Set text document properties on a text layer's Source Text.
+ * @param {object} textProps { text, font, fontSize, fillColor, strokeColor, strokeWidth,
+ *                             justification, tracking, leading, baselineShift }
+ */
+function extensionsLlmChat_setTextDocument (layerIndex, layerId, textProps) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!textProps || typeof textProps !== 'object') {
+      result.message = 'No text properties provided.'; return resultToJson(result);
+    }
+
+    var textProp = _resolveProperty(layer, 'Text>Source Text');
+    if (!textProp || !(textProp instanceof Property)) {
+      result.message = 'Layer is not a text layer or Source Text not found.'; return resultToJson(result);
+    }
+
+    app.beginUndoGroup('Agent: Set text document');
+    var doc = textProp.value;
+    if (typeof textProps.text === 'string') doc.text = textProps.text;
+    if (typeof textProps.font === 'string') doc.font = textProps.font;
+    if (typeof textProps.fontSize === 'number') doc.fontSize = textProps.fontSize;
+    if (textProps.fillColor instanceof Array) doc.fillColor = textProps.fillColor;
+    if (textProps.strokeColor instanceof Array) doc.strokeColor = textProps.strokeColor;
+    if (typeof textProps.strokeWidth === 'number') doc.strokeWidth = textProps.strokeWidth;
+    if (typeof textProps.justification === 'string') {
+      var justMap = {
+        'left': ParagraphJustification.LEFT_JUSTIFY,
+        'center': ParagraphJustification.CENTER_JUSTIFY,
+        'right': ParagraphJustification.RIGHT_JUSTIFY,
+        'full': ParagraphJustification.FULL_JUSTIFY_LASTLINE_LEFT,
+      };
+      if (justMap[textProps.justification]) doc.justification = justMap[textProps.justification];
+    }
+    if (typeof textProps.tracking === 'number') doc.tracking = textProps.tracking;
+    if (typeof textProps.leading === 'number') doc.leading = textProps.leading;
+    if (typeof textProps.baselineShift === 'number') doc.baselineShift = textProps.baselineShift;
+    textProp.setValue(doc);
+    app.endUndoGroup();
+    result.ok = true;
+    result.message = 'Updated text on "' + layer.name + '".';
+    return resultToJson(result);
+  } catch (e) {
+    try { app.endUndoGroup(); } catch (x) {}
+    result.message = 'setTextDocument error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+// ============================================================================
+// Extended comp summary (richer than getActiveCompSummary)
+// ============================================================================
+
+/**
+ * Return a detailed summary of the active composition including layer types,
+ * parent chains, in/out points, effects list, and expression status.
+ */
+function extensionsLlmChat_getDetailedCompSummary () {
+  var result = {
+    ok: false, message: '', compName: '', width: 0, height: 0,
+    duration: 0, frameRate: 0, numLayers: 0, layers: []
+  };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var comp = ctx.comp;
+    result.compName = comp.name;
+    result.width = comp.width;
+    result.height = comp.height;
+    result.duration = comp.duration;
+    result.frameRate = comp.frameRate;
+    result.numLayers = comp.numLayers;
+
+    for (var i = 1; i <= comp.numLayers; i++) {
+      try {
+        var layer = comp.layer(i);
+        if (!layer) continue;
+        var info = {
+          index: layer.index,
+          id: layer.id,
+          name: layer.name,
+          type: _layerTypeString(layer),
+          matchName: layer.matchName || '',
+          inPoint: layer.inPoint,
+          outPoint: layer.outPoint,
+          startTime: layer.startTime,
+          parentIndex: null,
+          parentName: '',
+          effects: [],
+          hasExpressions: false,
+        };
+        try {
+          if (layer.parent) {
+            info.parentIndex = layer.parent.index;
+            info.parentName = layer.parent.name;
+          }
+        } catch (eP) {}
+
+        // List effects.
+        try {
+          var fx = layer.property('ADBE Effect Parade');
+          if (fx) {
+            for (var fi = 1; fi <= fx.numProperties; fi++) {
+              try {
+                var eff = fx.property(fi);
+                if (eff) info.effects.push({ index: fi, name: eff.name, matchName: eff.matchName || '' });
+              } catch (eEff) {}
+            }
+          }
+        } catch (eFx) {}
+
+        // Check for expressions on common properties.
+        var commonPaths = [
+          'Transform>Position', 'Transform>Scale', 'Transform>Rotation', 'Transform>Opacity'
+        ];
+        for (var cp = 0; cp < commonPaths.length; cp++) {
+          try {
+            var pr = _resolveProperty(layer, commonPaths[cp]);
+            if (pr && pr instanceof Property && pr.expressionEnabled) {
+              info.hasExpressions = true;
+              break;
+            }
+          } catch (eExp) {}
+        }
+
+        result.layers.push(info);
+      } catch (eLayer) {}
+    }
+
+    result.ok = true;
+    result.message = 'Detailed summary of "' + comp.name + '" with ' + result.layers.length + ' layers.';
+    return resultToJson(result);
+  } catch (e) {
+    result.message = 'getDetailedCompSummary error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+// ============================================================================
+// JSON serialization
+// ============================================================================
+
 function resultToJson (obj) {
   // Recursive JSON stringifier for simple objects and arrays used by this panel.
   // ExtendScript does not have JSON.stringify by default in older versions, so we

@@ -2,21 +2,17 @@
 <html lang="en">
   <head>
     <meta charset="UTF-8" />
-    <title>Extensions LLM Chat</title>
+    <title>AE Motion Agent</title>
     <link rel="stylesheet" href="./styles.css" />
   </head>
   <body>
     <div id="app" class="panel-root">
       <aside class="sidebar">
         <div class="sidebar-header">
-          <button id="new-session-btn" class="btn btn-primary">New</button>
+          <button id="new-session-btn" class="btn btn-primary" title="New chat session">New</button>
         </div>
         <ul id="session-list" class="session-list"></ul>
         <div class="sidebar-footer">
-          <select id="model-select" class="btn">
-            <option value="Qwen/Qwen3-Coder-Next">Qwen3 Coder (cloud)</option>
-            <option value="openai/gpt-oss-120b">GPT-OSS 120B</option>
-          </select>
           <button id="rename-session-btn" class="btn btn-secondary">Rename</button>
           <button id="clear-session-btn" class="btn btn-secondary">Clear</button>
           <button id="clear-all-btn" class="btn btn-danger">Clear All</button>
@@ -25,68 +21,40 @@
       <main class="chat-area">
         <div id="chat-transcript" class="chat-transcript"></div>
         <div id="status-line" class="status-line">
-          <span id="status-text">Готово.</span>
+          <span id="status-text">Ready</span>
           <span id="model-status" class="model-status model-status-unknown">model: unknown</span>
         </div>
-        <div id="vision-ollama-status-line" class="vision-ollama-status-line" aria-live="polite">
-          <span id="vision-ollama-status">Ollama: idle</span>
-        </div>
-        <div id="target-bar" class="target-bar">
-          <button id="target-refresh-btn" class="btn btn-secondary">@</button>
-          <div class="target-dropdown-wrap" id="target-layer-wrap">
-            <select id="target-layer-select" class="target-select-hidden" aria-hidden="true" tabindex="-1">
-              <option value="">No layer</option>
-            </select>
-            <button type="button" class="target-dropdown-trigger" id="target-layer-trigger">No layer</button>
-            <ul class="target-dropdown-list" id="target-layer-list" role="listbox"></ul>
-          </div>
-          <div class="target-dropdown-wrap" id="target-property-wrap">
-            <select id="target-property-select" class="target-select-hidden" aria-hidden="true" tabindex="-1">
-              <option value="">No property</option>
-            </select>
-            <button type="button" class="target-dropdown-trigger" id="target-property-trigger">No property</button>
-            <ul class="target-dropdown-list" id="target-property-list" role="listbox"></ul>
-          </div>
-          <span id="target-summary" class="target-summary">No active target</span>
-        </div>
-        <div id="vision-bar" class="vision-bar" aria-label="Screen capture for UI analysis">
-          <button type="button" id="capture-fullscreen-btn" class="btn btn-secondary">Capture full screen</button>
-          <button type="button" id="capture-comp-area-btn" class="btn btn-secondary" title="Crops the frontmost After Effects window using previewCaptureInset in config (approx. Composition viewer, not pixel-perfect)">
-            Capture comp area
-          </button>
-          <label class="vision-bar-label">
-            <input type="checkbox" id="include-ui-capture-send" />
-            <span>Include UI capture in next Send</span>
-          </label>
-          <div class="vision-ollama-row">
-            <button type="button" id="analyze-ui-ollama-btn" class="btn btn-secondary btn-tiny">Analyze UI (Ollama)</button>
-            <button type="button" id="analyze-frame-ollama-btn" class="btn btn-secondary btn-tiny">Analyze frame (Ollama)</button>
-          </div>
+        <div class="provider-bar">
+          <select id="model-select" class="btn model-selector">
+            <optgroup label="Cloud.ru">
+              <option value="cloudru/Qwen/Qwen3-Coder-Next">Qwen3 Coder</option>
+              <option value="cloudru/openai/gpt-oss-120b">GPT-OSS 120B</option>
+            </optgroup>
+            <optgroup id="ollama-optgroup" label="Local (Ollama)" style="display:none">
+            </optgroup>
+          </select>
+          <button id="undo-btn" class="btn btn-warning" title="Undo last agent action (Ctrl+Z in AE)">Undo</button>
         </div>
         <div class="chat-input-container">
-          <div id="prompt-target-line" class="prompt-target-line" aria-live="polite"></div>
           <textarea
             id="user-input"
             class="chat-input"
             rows="3"
-            placeholder="Type your prompt (e.g. generate an After Effects expression)..."
+            placeholder="Describe what you want to animate, create, or improve..."
           ></textarea>
           <div class="chat-actions">
             <button id="send-btn" class="btn btn-primary">Send</button>
-            <button id="apply-expression-btn" class="btn btn-secondary">
-              Apply Expression
-            </button>
-            <button id="apply-batch-btn" class="btn btn-secondary">
-              Apply Batch
-            </button>
           </div>
         </div>
       </main>
     </div>
 
+    <!-- Config (load order matters) -->
     <script src="./config/example.config.js"></script>
     <script src="./config/runtime-config.js"></script>
     <script src="./config/secrets.local.js"></script>
+
+    <!-- Existing modules (kept for backward compat) -->
     <script src="./diagnostics.js"></script>
     <script src="./knowledge-base/index/corpusIndex.js"></script>
     <script src="./prompt-library/promptsBundle.js"></script>
@@ -99,7 +67,15 @@
     <script src="./lib/captureMacOS.js"></script>
     <script src="./lib/ollamaVision.js"></script>
     <script src="./lib/CSInterface.js"></script>
+
+    <!-- New agent modules -->
+    <script src="./toolRegistry.js"></script>
+    <script src="./agentSystemPrompt.js"></script>
+    <script src="./chatProvider.js"></script>
+    <script src="./hostBridge.js"></script>
+    <script src="./agentToolLoop.js"></script>
+
+    <!-- Main runtime (must be last) -->
     <script src="./main.js"></script>
   </body>
 </html>
-
