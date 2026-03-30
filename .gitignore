@@ -1,0 +1,13 @@
+# Local overrides and secrets — never commit real keys
+config/runtime-config.js
+config/secrets.local.js
+
+# CEP developer debug (opens a local port; do not ship in public repos)
+.debug
+
+# OS
+.DS_Store
+
+# Editor
+*.swp
+*.swo
