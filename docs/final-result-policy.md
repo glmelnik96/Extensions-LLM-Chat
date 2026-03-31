@@ -1,10 +1,12 @@
 # Final Result Policy
 
-This document describes how the pipeline publishes results to the chat and how disposition (acceptable, warned_draft, blocked) affects what the user sees and whether Apply is available.
+> **Legacy (multi-pass expression pipeline).** Текущая панель — **AE Motion Agent**: публикация результатов описана в **[chat-publication-policy.md](chat-publication-policy.md)** (раздел *Current agent*) и **[final-architecture.md](final-architecture.md)**. Ниже — правила исторического pipeline.
+
+This document describes how the **historical** pipeline published results to the chat and how disposition (acceptable, warned_draft, blocked) affected what the user saw and whether Apply was available.
 
 ---
 
-## Final-only chat publication
+## Final-only chat publication (legacy)
 
 - **No intermediate messages**: Generator drafts, validator reports, rules findings, and repair attempts are **not** shown as normal chat messages. They are used only inside the pipeline.
 - **Single final message**: Only after the **finalize** stage does the pipeline add **one** new message to the transcript:

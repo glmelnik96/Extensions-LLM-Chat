@@ -1,6 +1,9 @@
 # Целевая архитектура — Multi-pass pipeline и Knowledge Base
 
-Документ фиксирует целевое состояние проекта после внедрения нового пайплайна и локальной knowledge base. Реализация — только поэтапно, без поломки текущего рабочего flow.
+> **Актуальный продукт (2025–2026):** панель работает как **AE Motion Agent** с циклом tool calling. См. **[capabilities-and-roadmap.md](capabilities-and-roadmap.md)** и **[final-architecture.md](final-architecture.md)**.  
+> Этот документ сохраняет **целевое описание исторического multi-pass pipeline** (expression + KB + manual Apply) для справки и возможного reuse кода в `pipelineAssembly.js` / смежных модулях.
+
+Документ ниже фиксирует целевое состояние проекта после внедрения пайплайна и локальной knowledge base в логике «один Send → multi-pass → один финальный ответ». Реализация того pipeline в текущем **main.js** **не активна**; агент — отдельный путь.
 
 ---
 

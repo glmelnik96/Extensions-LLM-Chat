@@ -1,44 +1,38 @@
 # Host bridge notes
 
-How the panel talks to After Effects for target resolution and expression apply.
+How the panel talks to After Effects in the **AE Motion Agent** build.
+
+**Tool list and behavior:** **[capabilities-and-roadmap.md](capabilities-and-roadmap.md)**.
 
 ---
 
-## Entry points
+## Primary path: `hostBridge.js`
 
-- **Target refresh / layer list**: The panel calls into the host to get the active comp and its layers (and properties). This is used to populate the @ dropdown and to resolve the current target (layer + property).
-- **Apply Expression**: The only path that **writes** an expression to the host is **Apply Expression**. The panel calls `CSInterface.evalScript(...)` with the host script that invokes `extensionsLlmChat_applyExpressionToTarget(layerIndex, layerId, propertyPath, expressionText)` (or equivalent). See **host/index.jsx** for the ExtendScript implementation.
+- **hostBridge.js** loads **host/index.jsx** (cached), builds a single **evalScript** string, and runs **CSInterface.evalScript**.
+- **executeToolCall(toolName, args)** maps each OpenAI-style tool name to an ExtendScript function call (see the `switch` / registry in **hostBridge.js**).
+- Return values are JSON strings from the host, parsed in JS; errors surface as rejected promises or structured `{ ok: false, message }` payloads depending on the tool.
 
----
-
-## Where Apply enters the host
-
-- **handleApplyExpression()** in main.js (or equivalent) is the single UI entry for Apply.
-- It reads `session.latestExtractedExpression`, resolves the target via **getResolvedTarget()** (layer index/id and property path), builds the script string, and runs it via **CSInterface.evalScript**.
-- The host script (e.g. in host/index.jsx) receives the expression and applies it to the given layer/property; it returns a JSON result (success or error message) that the panel shows as a system message.
-
-So **all** expression application goes: User click Apply → handleApplyExpression → getResolvedTarget → evalScript(host script) → host applies to layer/property → result back to panel.
+So **mutating** the comp (layers, keyframes, effects, expressions, etc.) happens **inside the agent loop**, when the model emits a **tool_calls** entry — not via a separate **Apply Expression** button in the current UI.
 
 ---
 
-## Conditions for Apply to be enabled
+## Legacy: manual Apply + target dropdown
 
-- Active session exists.
-- **session.latestExtractedExpression** is set (non-null) — i.e. last pipeline result was **acceptable**.
-- No request in flight.
+Earlier versions documented:
 
-The host does not decide whether Apply is enabled; the panel does, based on pipeline disposition. See **docs/manual-apply-policy.md**.
+- **Apply Expression** → **handleApplyExpression** → **latestExtractedExpression** → **extensionsLlmChat_applyExpressionToTarget** (or similar).
+- **@** target refresh for layer/property dropdowns.
 
----
-
-## Invalid target / unsupported property
-
-- If the user deletes the layer or changes comp, **getResolvedTarget()** may still return the old indices; the host may then return an error (e.g. "layer not found").
-- Some properties may not support expression application in the host implementation; the host returns an error and the panel shows it as a system message.
-- The panel does not auto-apply when the target becomes invalid; the user must refresh target (@) and/or run Apply again after fixing the comp.
+That flow is **not** present in the current **main.js**. ExtendScript in **host/index.jsx** may still contain helpers used only by specific tools (e.g. **apply_expression** as a named agent tool). If you reintroduce manual Apply, reuse **docs/manual-apply-policy.md** (legacy) and wire UI accordingly.
 
 ---
 
-## No auto-apply
+## Undo
 
-- The pipeline never calls the host apply logic automatically. Apply is **manual only**. Any legacy or unused auto-apply codepaths are deprecated and not wired to the pipeline. See **docs/manual-apply-policy.md**.
+- The panel **Undo** button triggers After Effects undo; host operations should remain inside **app.beginUndoGroup** / **endUndoGroup** in ExtendScript where applicable.
+
+---
+
+## Diagnostics
+
+- EvalScript failures often appear as strings starting with `EvalScript error`; **hostBridge** surfaces these to the agent loop as tool errors.

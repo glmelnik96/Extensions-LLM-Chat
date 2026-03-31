@@ -1,90 +1,89 @@
 # Extensions LLM Chat (After Effects CEP Panel)
 
-Extensions LLM Chat — это расширение (CEP panel) для Adobe After Effects, которое открывает чат с облачной моделью и помогает писать, валидировать и применять выражения (Expressions) для After Effects через локальный multi-pass pipeline.
+Extensions LLM Chat — это CEP-панель для Adobe After Effects с **AI-агентом (AE Motion Agent)**, который через вызовы инструментов может осматривать, создавать и изменять активную композицию в ExtendScript. Модель планирует последовательность действий, выполняет их по одному и возвращает результат в чат.
 
-Панель понимает запросы на русском языке и генерирует корректные, готовые к копированию выражения, а также короткие структурированные объяснения.
+Актуальный перечень инструментов, ограничений и планов развития — в **[docs/capabilities-and-roadmap.md](docs/capabilities-and-roadmap.md)** (точка истины по текущим возможностям).
+
+Панель понимает запросы на русском языке.
 
 ---
 
 ## Что делает это расширение
 
-- Открывает панель чата внутри After Effects.
-- Через локальный multi-pass pipeline (prepare → generate → validate → rules → repair → finalize) общается с облачной моделью (configurable baseUrl + модели по умолчанию/фолбэк; см. `docs/configuration.md` и `docs/final-architecture.md`).
-- Использует системный и роль-специфичные промпты (generator/validator/repair) и локальную knowledge base для устойчивого поведения.
-- Возвращает выражение + краткое объяснение в стабильном формате, удобном для парсинга.
-- Позволяет вручную применить финальное, прошедшее проверки выражение к выбранному свойству в композиции.
+- Запускает **чат с агентом** внутри After Effects: запросы на естественном языке превращаются в цепочку операций над композицией.
+- Использует **25 инструментов** (чтение состояния компа и слоёв, слои, анимация и кейфреймы, эффекты, композиция, текст и др.) — полная таблица в [docs/capabilities-and-roadmap.md](docs/capabilities-and-roadmap.md).
+- Подключается к **Cloud.ru Foundation Models** (OpenAI-совместимый chat completions с tool calling) и при настройке — к **Ollama (локально)** для чата и сценариев с анализом изображений.
+- Сохраняет **сессии** чата, показывает **карточки вызовов инструментов** (аргументы и результаты), индикатор «thinking» на время работы агента, кнопку **Undo** (откат в AE).
+
+Дополнительные детали архитектуры конфигурации, knowledge base, диагностики и политик ответов — в [docs/README.md](docs/README.md), [docs/final-architecture.md](docs/final-architecture.md) и связанных файлах.
 
 ---
 
 ## Основные возможности
 
-- **Мультисессионный чат**
-  - Создание новых сессий.
-  - Переключение между сессиями.
-  - Переименование активной сессии.
-  - Очистка текущей сессии (с подтверждением).
-  - Полная очистка всех сессий (с подтверждением) с созданием новой чистой.
+- **Агент и инструменты**
+  - Категории: осмотр (comp summary, свойства, кейфреймы, эффекты), операции со слоями, анимация и выражения, эффекты, композиция, текст.
+  - Выполнение через единый цикл **LLM ↔ tool calls ↔ ExtendScript** (см. структуру модулей ниже).
 
-- **Работа с облачной моделью**
-  - Запросы к облачному API `https://foundation-models.api.cloud.ru/v1/chat/completions`.
-  - **Модель по умолчанию**: `Qwen/Qwen3-Coder-Next` (используется и как основная, и как фолбэк).
+- **Интерфейс**
+  - Чат с визуализацией tool calls.
+  - Сессии: создание, переименование, очистка, переключение.
+  - Выбор модели: модели Cloud.ru и локальные модели Ollama (при включении в конфиге).
+  - Undo и индикатор выполнения агента.
 
-- **Генерация Expressions**
-  - Встроенный системный промпт для After Effects 26.0.
-  - Поддержка типичных задач: привязки (links), лупы, задержки, смещения, wiggle, valueAtTime, posterizeTime, sourceRectAtTime, текстовая логика, контроллеры и т.д.
-  - Стабильный формат ответа:
-    1. Только выражение (без комментариев и обёрток).
-    2. `---EXPLANATION---`.
-    3. 1–5 коротких буллетов.
-    4. Опционально `---NOTES---` с допущениями/заметками по совместимости.
+- **Провайдеры API**
+  - **Cloud.ru Foundation Models** — основной облачный чат с поддержкой инструментов.
+  - **Ollama** — локальный чат и анализ кадров/скриншотов при `ollamaChatEnabled: true` (подробности конфигурации: [docs/configuration.md](docs/configuration.md), [config/README.md](config/README.md)).
 
-- **Применение выражений**
-  - Кнопка **Apply Expression** отправляет последнее извлечённое выражение в ExtendScript.
-  - Если возможно, выражение применяется к выбранному свойству.
-  - В панель возвращается структурированный статус (успех / ошибка) и показывается как сообщение в чате.
+- **Русский язык**
+  - Запросы и пояснения в чате могут быть на русском; имена API After Effects, свойств и выражений остаются в синтаксисе AE.
 
 ---
 
-## Поддерживаемый рабочий процесс
+## Типичный сценарий работы
 
-Типичный сценарий:
+1. Установите панель и `CSInterface.js` (см. ниже), настройте API-ключ Cloud.ru в `config/secrets.local.js`.
+2. Откройте композицию в After Effects и панель **Extensions LLM Chat**.
+3. Создайте сессию или используйте существующую, выберите модель.
+4. Опишите задачу на русском или английском (например: «добавь текст по центру и анимацию появления по opacity»).
+5. Агент при необходимости осмотрит комп (`get_detailed_comp_summary` и др.), затем вызовет нужные инструменты; результаты отображаются в чате.
+6. При ошибке инструмента сообщение попадает в чат; часть ограничений и обходных путей описана в [docs/capabilities-and-roadmap.md](docs/capabilities-and-roadmap.md) (раздел Known Limitations).
 
-1. Открываете панель **Extensions LLM Chat** в After Effects.
-2. Убедитесь, что у вас есть действующий доступ к облачному API и корректный API-ключ.
-3. В левой колонке создаёте сессию или используете `Session 1`.
-4. Пишете запрос **на русском** (например:  
-   «Сделай wiggle по позиции, но только по X, с лёгким затуханием»).
-5. Нажимаете **Send**:
-   - Пока запрос выполняется, кнопка Send и выбор модели блокируются.
-   - В ответ вы получаете:
-     - Выражение (первая часть ответа).
-     - `---EXPLANATION---`.
-     - Несколько буллетов с объяснением (могут быть на русском).
-     - При необходимости `---NOTES---` с краткими комментариями.
-6. Если выражение успешно извлечено, кнопка **Apply Expression** становится активной.
-7. В After Effects выбираете нужное свойство (например, Position слоя) и нажимаете **Apply Expression** — выражение применяется к выбранному свойству.
+Целевое развитие продукта и UX — в том же файле, раздел **Improvement Roadmap**.
 
 ---
 
 ## Структура проекта (высокоуровнево)
 
-- `CSXS/manifest.xml` – CEP-манифест панели для After Effects.
-- `index.html` – HTML-разметка панели, подключение стилей и скриптов.
-- `styles.css` – компактные стили под панель After Effects.
-- `main.js` – основной рантайм: сессии, UI, multi-pass pipeline, связь с облачной моделью, парсинг и ручной Apply Expression.
-- `systemPrompt.js` – базовый системный промпт для AE Expressions 26.0+.
-- `host/index.jsx` – ExtendScript-хост, выполняющий операции в AE (target summary, apply expression).
-- `lib/CSInterface.js` – официальный Adobe CSInterface (**нужно установить вручную**, см. ниже).
-- `config/` – локальная конфигурация API (см. `config/README.md`, `docs/configuration.md`).
-- `knowledge-base/` – локальная база знаний по Expressions (см. `knowledge-base/README.md`, `docs/local-knowledge-base.md`).
-- `prompt-library/` – role-specific prompt library для generator/validator/repair (см. `prompt-library/README.md`, `docs/prompt-library-architecture.md`).
-- `docs/` – основная документация (архитектура, конфиг, pipeline, apply policy, troubleshooting, QA). **Индекс активной документации:** [docs/README.md](docs/README.md).
+Модули агента (актуальная схема):
+
+| Файл | Назначение |
+|------|------------|
+| `agentSystemPrompt.js` | Персона агента и правила рабочего процесса |
+| `agentToolLoop.js` | Цикл LLM ↔ выполнение инструментов |
+| `chatProvider.js` | Единый API: Cloud.ru и Ollama |
+| `hostBridge.js` | Сопоставление имён инструментов и вызовов ExtendScript |
+| `toolRegistry.js` | Описания 25 инструментов в формате OpenAI functions |
+| `host/index.jsx` | Реализация операций в After Effects |
+| `main.js` | UI, сессии, обработка событий |
+
+Также:
+
+- `CSXS/manifest.xml` — манифест CEP для After Effects.
+- `index.html`, `styles.css` — разметка и стили панели.
+- `lib/CSInterface.js` — Adobe CSInterface (**нужно установить вручную**, см. ниже).
+- `lib/captureMacOS.js`, `lib/ollamaVision.js` — захват и локальный анализ изображений (macOS / Ollama), см. [docs/vision-grounding.md](docs/vision-grounding.md).
+- `config/` — ключи и runtime-конфиг ([config/README.md](config/README.md)).
+- `knowledge-base/`, `prompt-library/` — база знаний и промпты ([docs/local-knowledge-base.md](docs/local-knowledge-base.md), [docs/prompt-library-architecture.md](docs/prompt-library-architecture.md)).
+- `pipelineAssembly.js`, `systemPrompt.js` и др. — вспомогательные части legacy-пайплайна и контекста; детали в [docs/final-architecture.md](docs/final-architecture.md), [docs/pipeline-runtime-flow.md](docs/pipeline-runtime-flow.md).
+
+**Индекс документации:** [docs/README.md](docs/README.md).
 
 ---
 
 ## Установка CSInterface.js (обязательно)
 
-Панель не заработает с After Effects без этого файла. Без него в консоли будет ошибка загрузки и список слоёв не появится.
+Панель не заработает с After Effects без этого файла. Без него в консоли будет ошибка загрузки и связь с хостом AE не появится.
 
 1. **Скачайте файл** в папку `lib` расширения одной командой в Терминале (macOS):
 
@@ -112,20 +111,9 @@ Extensions LLM Chat — это расширение (CEP panel) для Adobe Aft
 
 ## Сессии и состояние
 
-Актуальная схема сессии и pipeline описана в `docs/runtime-state-schema.md` и `docs/final-architecture.md`. Вкратце:
-
-- Сессии персистятся (localStorage) между перезапусками панели.
-- Каждая сессия хранит:
-  - `id`, `title`, `createdAt`, `updatedAt`, `model`;
-  - `messages` (включая первый `system`-месседж с системным промптом);
-  - `latestExtractedExpression` — последнее финальное выражение (только при disposition `acceptable`);
-  - `pipeline` — компактное состояние multi-pass pipeline.
-- В UI поддерживаются:
-  - Создание сессий (**New**).
-  - Переключение между сессиями.
-  - Переименование активной сессии (**Rename**).
-  - Очистка текущей сессии (**Clear**, с подтверждением).
-  - Полная очистка всех сессий (**Clear All**, с подтверждением).
+- Сессии сохраняются в **localStorage** между перезапусками панели.
+- В UI: **New**, переключение списка сессий, **Rename**, **Clear** (текущая), **Clear All** (с подтверждением).
+- Детальная схема полей сессии, пайплайна и публикации ответов — [docs/runtime-state-schema.md](docs/runtime-state-schema.md), [docs/final-architecture.md](docs/final-architecture.md).
 
 ---
 
@@ -142,102 +130,53 @@ Extensions LLM Chat — это расширение (CEP panel) для Adobe Aft
    - В зависимости от версии AE и macOS может понадобиться включить загрузку не подписанных CEP расширений (через debug-файл или настройки AE).
 
 3. **CSInterface** (обязательно)
-   - Установите `CSInterface.js` в папку `lib/` по инструкции выше (раздел «Установка CSInterface.js»). Без этого файла панель не сможет получать список слоёв и применять выражения.
+   - Установите `CSInterface.js` в папку `lib/` по инструкции выше.
 
 4. **Настройка облачного API**
-   - Убедитесь, что у вас есть Bearer-токен для Cloud.ru Foundation Models.
+   - Bearer-токен для Cloud.ru Foundation Models.
    - Скопируйте `config/secrets.local.example.js` → `config/secrets.local.js` и вставьте ключ в `apiKey` (без префикса `Bearer `). Файл **не коммитится** (см. `.gitignore`).
-   - При необходимости скопируйте `config/runtime-config.example.js` → `config/runtime-config.js` для переопределения `baseUrl` / моделей **без** хранения ключа там.
-   - В `index.html` уже подключены `example.config.js`, затем `runtime-config.js`, затем `secrets.local.js` — см. `config/README.md`, `docs/secret-handling.md`.
+   - При необходимости скопируйте `config/runtime-config.example.js` → `config/runtime-config.js` для переопределения `baseUrl` и моделей **без** хранения ключа там.
+   - Порядок подключения скриптов в `index.html`: см. [config/README.md](config/README.md), [docs/secret-handling.md](docs/secret-handling.md).
 
 5. **Открытие панели в After Effects**
-   - Запустите After Effects.
-   - Откройте меню Extensions и выберите **Extensions LLM Chat**.
+   - Запустите After Effects → меню **Extensions** → **Extensions LLM Chat**.
 
 ---
 
-## Работа на русском языке
+## Захват экрана и Ollama (macOS)
 
-- Вы можете писать запросы на русском (например: «Объясни, как сделать циклическую анимацию по opacity»).
-- Модель обязана правильно интерпретировать русский текст и выдать:
-  - Корректное expression-выражение (на английском синтаксисе AE).
-  - Краткие буллеты-объяснения; они могут быть на русском.
-- Имена свойств, функций и API After Effects **не переводятся**:
-  - Используются реальные имена: `thisComp`, `thisLayer`, `transform.position`, `effect("Slider Control")("Slider")`, `wiggle()`, `valueAtTime()`, `posterizeTime()`, `sourceRectAtTime()` и т.п.
-
----
-
-## Формат ответа ассистента
-
-Каждый ответ ассистента внутри панели имеет строгий формат:
-
-1. **Только выражение** (expression) — без комментариев и обёрток.
-2. Строка-разделитель: `---EXPLANATION---`
-3. 1–5 коротких буллетов с пояснением (часто на русском, если запрос был на русском).
-4. Опционально строка: `---NOTES---`
-5. 1–3 коротких буллета с допущениями или заметками о совместимости (версия AE, тип слоя/свойства и т.п.).
-
-Это позволяет панели надёжно извлекать выражение (часть до `---EXPLANATION---`) для применения.
-
----
-
-## Как работает Apply Expression
-
-1. Вы делаете запрос и получаете ответ ассистента в корректном формате.
-2. Панель автоматически извлекает всё, что идёт **до** строки `---EXPLANATION---` — это и есть `latestExtractedExpression` для текущей сессии.
-3. Кнопка **Apply Expression** становится активной, если:
-   - Есть валидное извлечённое выражение.
-- В данный момент не выполняется запрос к модели.
-4. В After Effects выбираете свойство, которое поддерживает Expressions (например, Position, Opacity, Source Text и т.п.).
-5. Нажимаете **Apply Expression**:
-   - Панель вызывает через `CSInterface.evalScript` функцию `extensionsLlmChat_applyExpression(expressionText)` в `host/index.jsx`.
-   - ExtendScript:
-     - Проверяет наличие активного проекта и композиции.
-     - Проверяет, выбрано ли хотя бы одно свойство.
-     - Ищет первое свойство, у которого `canSetExpression === true`.
-     - Применяет выражение (`property.expression = expressionText`, `expressionEnabled = true`) внутри `app.beginUndoGroup(...)`.
-     - Возвращает JSON-строку с полями `ok` и `message`.
-   - Панель парсит JSON и добавляет `system`-сообщение с текстом `message` (успех или ошибка).
-
-История чата при этом **не стирается** — добавляется только новый статус.
-
----
-
-## Выбор слоя и свойства (targeting)
-
-- **Что работает:** откройте композицию в AE (или выберите её в панели Project), нажмите **@** в поле ввода или кнопку **@** над ним — панель запросит у After Effects список слоёв активной композиции и заполнит выпадающие списки «Layer» и «Property». Выберите слой и свойство — выражение будет применяться к этому свойству.
-- **Что не реализовано:** перетаскивание слоя из таймлайна AE в чат (drag-and-drop) и автоматическая подстановка слоя в поле ввода при клике по слою в таймлайне в текущей версии AE/CEP недоступны; используется только синхронизация по @ и выбор из списков.
-
----
-
-## Захват экрана (macOS, UI analysis)
-
-- **Capture full screen** и **Capture comp area** вызывают `screencapture` через **Node.js внутри CEP** (см. `CSXS/manifest.xml`: `--enable-nodejs`, `--mixed-context`). **Comp area** — приблизительный кроп окна AE в сторону панели Composition (доли `previewCaptureInset` в конфиге; может понадобиться **Автоматизация** для System Events).
+- **Capture full screen** и **Capture comp area** используют `screencapture` через **Node.js внутри CEP** (`CSXS/manifest.xml`: `--enable-nodejs`, `--mixed-context`). Для **comp area** может понадобиться доступ **Автоматизация** для System Events.
 - Нужно разрешение **Screen Recording** для **After Effects** (Системные настройки → Конфиденциальность и безопасность).
-- PNG сохраняется во временный каталог; путь — в строке статуса. Отдельная строка **Ollama** показывает этапы локального анализа.
-- **Clear All:** удаляет временные PNG (`ext-llm-chat-capture-*`, `ext-llm-chat-frame-*`) из системного temp и запрашивает у Ollama выгрузку моделей из памяти (`/api/ps` + `keep_alive: 0`). Постоянной «истории ответов» у Ollama по HTTP нет; выгрузка сбрасывает удерживаемое в RAM состояние.
-- **Analyze UI (Ollama)** / **Analyze frame (Ollama):** локальный Ollama описывает последний захват или кадр композиции (`comp.saveFrameToPng`). Текст сохраняется в сессии и подмешивается в облачный запрос как `[UI_ANALYSIS]` (если включён чекбокс) и `[FRAME_ANALYSIS]`. Как это используется облачной моделью: **`docs/vision-grounding.md`**. Перед Send хост отдаёт `[AE_HOST_STATE]`.
-- Дорожная карта: **`docs/north-star-vision-agent.md`**.
+- **Analyze UI (Ollama)** / **Analyze frame (Ollama):** локальное описание захвата или кадра композиции; текст может подмешиваться в контекст запроса. Подробности: [docs/vision-grounding.md](docs/vision-grounding.md).
+- По [docs/capabilities-and-roadmap.md](docs/capabilities-and-roadmap.md): vision-сценарии пока **не интегрированы в основной цикл агента**; в roadmap запланировано переподключение (раздел *Vision-informed animation*).
+
+Дополнительно о направлении «vision + автоматизация»: [docs/north-star-vision-agent.md](docs/north-star-vision-agent.md).
 
 ---
 
-## Известные ограничения
+## Известные ограничения (кратко)
 
-- Применение выражения выполняется только к **первому** выбранному свойству, которое поддерживает Expressions.
-- Некоторые типы свойств в AE не могут иметь выражения — в этом случае вы получите понятное сообщение об ошибке.
-- Панель ожидает стандартный формат ответа от облачного API (`choices[0].message.content`); другие форматы могут приводить к ошибке парсинга.
-- Не реализована тонкая настройка таймаутов запросов — сетевые проблемы отображаются как общие ошибки связи с облачной моделью.
-- Системный промпт ориентирован на After Effects 26.0+ и использует современный JavaScript Expression Engine; в старых версиях возможны расхождения.
+Полный список и формулировки — [docs/capabilities-and-roadmap.md](docs/capabilities-and-roadmap.md) (Known Limitations).
+
+- Пустой shape-слой при `create_layer('shape')` без программного добавления контента путей; обходной путь — дорисовать формы вручную, затем анимировать.
+- Нет операций с масками, импорта футажа, очереди рендера, маркеров, переключения 3D у слоя.
+- Нет тонкого управления пространственными безье по position (только временной easing).
+- Агент работает в контексте **активной** композиции; явного переключения компа нет.
+- Ограничения моделей (путаница anchor/position, пути свойств) смягчаются системным промптом, но не исчезают полностью.
+
+---
+
+## Добавление нового инструмента
+
+Порядок шагов — в [docs/capabilities-and-roadmap.md](docs/capabilities-and-roadmap.md) (раздел *Adding a New Tool*): ExtendScript в `host/index.jsx`, схема в `toolRegistry.js`, маппинг в `hostBridge.js`, при необходимости правки `agentSystemPrompt.js`.
 
 ---
 
 ## Troubleshooting и QA
 
-Актуальный troubleshooting, QA и релизные чек-листы находятся в:
+- [docs/troubleshooting.md](docs/troubleshooting.md)
+- [docs/qa-test-plan.md](docs/qa-test-plan.md)
+- [docs/archive/qa/manual-test-matrix.md](docs/archive/qa/manual-test-matrix.md)
+- [docs/release-checklist.md](docs/release-checklist.md)
 
-- `docs/troubleshooting.md`
-- `docs/qa-test-plan.md`
-- `docs/archive/qa/manual-test-matrix.md`
-- `docs/release-checklist.md`
-
-Этот README даёт только обзор и ссылки; подробности уточняются в документации выше.
+Корневой README даёт обзор и ссылки; детали — в `docs/`.

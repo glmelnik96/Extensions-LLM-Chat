@@ -2,13 +2,14 @@
 
 This document is the **durable product and technical brief** for evolving **Extensions LLM Chat** into a motion-design–aware assistant. It records decisions from planning so **new chat sessions or contributors** can implement work without relying on conversation history.
 
-**Current implemented behavior** remains described in [final-architecture.md](final-architecture.md), [pipeline-runtime-flow.md](pipeline-runtime-flow.md), and the root [README.md](../README.md). This file describes **target direction** and **planned phases**.
+**Current shipped behavior** is the **AE Motion Agent** (tool loop, Cloud.ru + optional Ollama): [capabilities-and-roadmap.md](capabilities-and-roadmap.md), [final-architecture.md](final-architecture.md), root [README.md](../README.md). The multi-pass expression pipeline is **legacy** (see [pipeline-runtime-flow.md](pipeline-runtime-flow.md)). This file describes **target direction** and **planned phases** for vision and workflow.
 
 ---
 
 ## Vision
 
-- **Copilot (today):** multi-pass pipeline, grounded expressions, manual Apply, Cloud.ru chat/completions.
+- **Shipped today:** agent with ~25 host tools, chat/completions + tool calling, optional local Ollama for chat (vision integration into the agent loop is roadmap — see capabilities doc).
+- **Historical Copilot:** multi-pass pipeline, grounded expressions, manual Apply (not the active **main.js** path).
 - **Target:** same quality bar for expressions, plus **accurate task understanding** via:
   - **Structured host state** from ExtendScript (authoritative).
   - **Frame analysis** (comp still at playhead → local vision → text summary for the cloud model).

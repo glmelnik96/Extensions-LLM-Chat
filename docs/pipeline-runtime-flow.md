@@ -1,6 +1,8 @@
 # Pipeline Runtime Flow
 
-This document describes the stage sequence and model role assignment of the multi-pass pipeline implemented in Stage 3.
+> **Legacy documentation.** Описывает **исторический multi-pass expression pipeline** (generate → validate → repair → finalize). Текущий **Send** в **main.js** использует **agent tool loop** — см. **[capabilities-and-roadmap.md](capabilities-and-roadmap.md)** и **[final-architecture.md](final-architecture.md)**.
+
+This document describes the stage sequence and model role assignment of the multi-pass pipeline as originally implemented in Stage 3. The scripts remain in the repo (**pipelineAssembly.js**, related docs retrieval) but are not driven by the shipping agent UI.
 
 ---
 

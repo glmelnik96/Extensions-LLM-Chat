@@ -1,10 +1,20 @@
 # Final disposition policy
 
-This document clarifies how the pipeline maps internal outcomes to a **final disposition** and what that means for the user and for Apply.
+## Current agent
+
+The **AE Motion Agent** does not use **disposition** / **latestExtractedExpression**. Success is an **assistant** message with text + **toolCalls**; failure is a **system** message or thrown error handled in **main.js**. Tool-level failures appear inside **toolCalls** with **status** / **result**.
+
+**Capabilities:** [capabilities-and-roadmap.md](capabilities-and-roadmap.md).
 
 ---
 
-## Disposition values
+## Legacy: pipeline disposition and Apply
+
+This section clarifies how the **historical multi-pass pipeline** mapped internal outcomes to a **final disposition** and what that meant for **Apply Expression**.
+
+---
+
+## Disposition values (legacy)
 
 | Disposition | Meaning | latestExtractedExpression | Apply | Chat |
 |-------------|---------|---------------------------|-------|------|
@@ -15,35 +25,30 @@ This document clarifies how the pipeline maps internal outcomes to a **final dis
 
 ---
 
-## When latestExtractedExpression is updated
+## When latestExtractedExpression is updated (legacy)
 
-- **Set only** when the final disposition is **acceptable**. The value is the single final expression string used for display and for Apply.
+- **Set only** when the final disposition is **acceptable**.
 - **Cleared (null)** when disposition is warned_draft, blocked, or runtime_failure; also when the user clears the session.
 
 ---
 
-## When Apply is enabled
+## When Apply is enabled (legacy)
 
-- Apply is enabled only when:
-  - There is an active session,
-  - `session.latestExtractedExpression` is non-null,
-  - No request is in flight.
-
-So in practice Apply is enabled **only after an acceptable result**. See **docs/manual-apply-policy.md**.
+- Apply was enabled only when `session.latestExtractedExpression` is non-null and no request is in flight. See **docs/manual-apply-policy.md** (legacy).
 
 ---
 
-## Blocked vs runtime failure
+## Blocked vs runtime failure (legacy)
 
-- **Blocked**: Semantic or deterministic outcome — e.g. rules rejected the expression, or validation failed and repair did not succeed. The pipeline completed and decided "do not show an apply-ready result."
-- **Runtime failure**: Request never completed successfully — e.g. missing config, network error, HTTP error, malformed API response. The pipeline did not reach a final disposition; the catch handler shows a user-facing error.
+- **Blocked**: Semantic or deterministic outcome — e.g. rules rejected the expression, or validation failed and repair did not succeed.
+- **Runtime failure**: Request never completed successfully — e.g. missing config, network error, HTTP error, malformed API response.
 
-Diagnostics and error taxonomy (e.g. in diagnostics.js) categorize these for logging; the user sees a concise message in both cases, with Apply disabled.
+Diagnostics and error taxonomy (e.g. in diagnostics.js) may still categorize errors for logging.
 
 ---
 
 ## Summary
 
-- **acceptable** → apply-ready; **warned_draft** / **blocked** / **runtime_failure** → no Apply, clear user message.
-- **latestExtractedExpression** is the single source of truth for what can be applied; it is set only for acceptable.
-- See **docs/chat-publication-policy.md** for what appears in the chat and **docs/final-result-policy.md** for the full result policy.
+- **Agent today:** outcomes via assistant + toolCalls or system errors; no disposition table.
+- **Legacy pipeline:** **acceptable** → apply-ready; **warned_draft** / **blocked** / **runtime_failure** → no Apply, clear user message; **latestExtractedExpression** only for acceptable.
+- See **docs/chat-publication-policy.md** and **docs/final-result-policy.md** for legacy publication rules.
