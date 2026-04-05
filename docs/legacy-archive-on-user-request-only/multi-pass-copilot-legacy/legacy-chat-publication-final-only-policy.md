@@ -6,7 +6,7 @@
 - Ошибки (нет ключа, сеть, сбой цикла) добавляются как **system** сообщения.
 - Промежуточные шаги LLM без финального ответа пользователю не дублируются отдельными сообщениями; ход работы виден через **toolCalls** и индикатор «Agent working».
 
-**Продукт и инструменты:** [capabilities-and-roadmap.md](capabilities-and-roadmap.md).
+**Продукт и инструменты:** [capabilities-and-roadmap.md](../../capabilities-and-roadmap.md).
 
 ---
 
