@@ -33,6 +33,8 @@
     activeSessionId: null,
     nextSessionIndex: 1,
     isRequestInFlight: false,
+    currentAbortHandle: null,
+    lastMutatingToolCount: 0,
     lastModelStatus: { status: 'unknown', label: 'model: unknown' }
   }
 
@@ -50,6 +52,7 @@
     els.modelSelect = document.getElementById('model-select')
     els.sendBtn = document.getElementById('send-btn')
     els.undoBtn = document.getElementById('undo-btn')
+    els.cancelBtn = document.getElementById('cancel-btn')
     els.statusText = document.getElementById('status-text')
     els.modelStatus = document.getElementById('model-status')
     els.ollamaOptgroup = document.getElementById('ollama-optgroup')
@@ -209,11 +212,11 @@
           div.appendChild(toolsContainer)
         }
 
-        // Render text content.
+        // Render text content with markdown.
         if (msg.text) {
           var textDiv2 = document.createElement('div')
           textDiv2.className = 'msg-text'
-          textDiv2.textContent = msg.text
+          textDiv2.innerHTML = renderMarkdown(msg.text)
           div.appendChild(textDiv2)
         }
 
@@ -318,9 +321,11 @@
 
   // ── Thinking indicator ─────────────────────────────────────────────────
   var thinkingEl = null
+  var thinkingToolCount = 0
 
   function showThinking () {
     if (thinkingEl) return
+    thinkingToolCount = 0
     thinkingEl = document.createElement('div')
     thinkingEl.className = 'agent-thinking'
     thinkingEl.innerHTML = '<span>Agent working</span><span class="thinking-dots"><span></span><span></span><span></span></span>'
@@ -337,8 +342,9 @@
 
   function updateThinkingWithToolCall (tc) {
     if (!thinkingEl) return
+    if (tc.status === 'running') thinkingToolCount++
     var statusText = tc.status === 'running' ? 'calling ' + tc.name + '...' : tc.name + ' ' + tc.status
-    thinkingEl.querySelector('span').textContent = 'Agent: ' + statusText
+    thinkingEl.querySelector('span').textContent = 'Agent [' + thinkingToolCount + ']: ' + statusText
     scrollToBottom()
   }
 
@@ -376,6 +382,96 @@
     })
   }
 
+  // ── Minimal markdown → HTML ─────────────────────────────────────────────
+  /**
+   * Convert a subset of markdown to HTML for rendering agent responses.
+   * Supports: headers, bold, italic, inline code, code blocks, lists, paragraphs.
+   */
+  function renderMarkdown (text) {
+    if (!text) return ''
+    // Escape HTML entities.
+    var s = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+    // Code blocks (``` ... ```).
+    s = s.replace(/```(\w*)\n([\s\S]*?)```/g, function (_, lang, code) {
+      return '<pre class="md-code-block"><code>' + code.replace(/\n$/, '') + '</code></pre>'
+    })
+
+    // Inline code.
+    s = s.replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>')
+
+    // Headers.
+    s = s.replace(/^### (.+)$/gm, '<strong class="md-h3">$1</strong>')
+    s = s.replace(/^## (.+)$/gm, '<strong class="md-h2">$1</strong>')
+    s = s.replace(/^# (.+)$/gm, '<strong class="md-h1">$1</strong>')
+
+    // Bold and italic.
+    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+    s = s.replace(/\*(.+?)\*/g, '<em>$1</em>')
+
+    // Unordered list items.
+    s = s.replace(/^- (.+)$/gm, '<li>$1</li>')
+    // Wrap consecutive <li> in <ul>.
+    s = s.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>')
+
+    // Numbered list items.
+    s = s.replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
+
+    // Line breaks for remaining lines (but not inside pre/ul).
+    s = s.replace(/\n\n/g, '</p><p>')
+    s = s.replace(/\n/g, '<br>')
+
+    return '<p>' + s + '</p>'
+  }
+
+  // ── Conversation pruning ────────────────────────────────────────────────
+  /**
+   * Estimate token count for a message array (~4 chars per token).
+   */
+  function estimateTokens (messages) {
+    var total = 0
+    for (var i = 0; i < messages.length; i++) {
+      var m = messages[i]
+      if (m.content) total += m.content.length
+      if (m.tool_calls) {
+        for (var t = 0; t < m.tool_calls.length; t++) {
+          var tc = m.tool_calls[t]
+          total += (tc.function.name || '').length
+          total += (tc.function.arguments || '').length
+        }
+      }
+    }
+    return Math.ceil(total / 4)
+  }
+
+  /**
+   * Prune old messages to fit within a token budget.
+   * Always keeps the last user message. Removes oldest messages first,
+   * but preserves message groups (assistant+tool pairs stay together).
+   */
+  function pruneConversation (messages, maxTokens) {
+    if (estimateTokens(messages) <= maxTokens) return messages
+
+    // Always keep at least the last 2 messages (last user + preceding context).
+    var minKeep = 2
+    var pruned = messages.slice()
+
+    while (estimateTokens(pruned) > maxTokens && pruned.length > minKeep) {
+      // Remove from the front. If front is a tool message, keep removing
+      // until we clear the full assistant+tool group.
+      var removed = pruned.shift()
+      // If we removed an assistant message with tool_calls, also remove
+      // the subsequent tool result messages.
+      if (removed && removed.tool_calls && removed.tool_calls.length > 0) {
+        while (pruned.length > minKeep && pruned[0] && pruned[0].role === 'tool') {
+          pruned.shift()
+        }
+      }
+    }
+
+    return pruned
+  }
+
   // ── Handle Send ────────────────────────────────────────────────────────
   function handleSend () {
     if (state.isRequestInFlight) return
@@ -408,23 +504,64 @@
 
     // Start agent flow.
     state.isRequestInFlight = true
+    state.currentAbortHandle = window.AGENT_TOOL_LOOP.createAbortHandle()
     els.sendBtn.disabled = true
+    if (els.cancelBtn) els.cancelBtn.style.display = ''
     setStatus('Working...')
     showThinking()
 
     // Build conversation messages for the API (convert our format to OpenAI format).
+    // Include tool call history so the agent remembers what it did in previous turns.
     var apiMessages = []
     for (var i = 0; i < session.messages.length; i++) {
       var m = session.messages[i]
       if (m.role === 'user') {
         apiMessages.push({ role: 'user', content: m.text })
-      } else if (m.role === 'assistant' && m.text) {
-        apiMessages.push({ role: 'assistant', content: m.text })
+      } else if (m.role === 'assistant') {
+        // If this assistant message had tool calls, reconstruct the full
+        // assistant+tool message sequence so the model sees its prior actions.
+        if (m.toolCalls && m.toolCalls.length > 0) {
+          // First: push the assistant message with tool_calls (as the API expects).
+          var toolCallDefs = []
+          for (var tc = 0; tc < m.toolCalls.length; tc++) {
+            var call = m.toolCalls[tc]
+            toolCallDefs.push({
+              id: call.id,
+              type: 'function',
+              function: {
+                name: call.name,
+                arguments: JSON.stringify(call.args || {})
+              }
+            })
+          }
+          var assistantApiMsg = { role: 'assistant', tool_calls: toolCallDefs }
+          if (m.text) assistantApiMsg.content = m.text
+          apiMessages.push(assistantApiMsg)
+
+          // Then: push each tool result message.
+          for (var tr = 0; tr < m.toolCalls.length; tr++) {
+            var tcResult = m.toolCalls[tr]
+            apiMessages.push({
+              role: 'tool',
+              tool_call_id: tcResult.id,
+              content: JSON.stringify(tcResult.result || { ok: true })
+            })
+          }
+        } else if (m.text) {
+          // Plain text assistant response (no tool calls).
+          apiMessages.push({ role: 'assistant', content: m.text })
+        }
       }
       // Skip system messages from our UI — the agent system prompt is injected separately.
     }
 
+    // Prune conversation to fit within token budget.
+    // Rough estimate: ~4 chars per token. Keep system prompt + tools budget (~2000 tokens)
+    // and reserve the rest for conversation. Default context budget: 12000 tokens for messages.
     var agentCfg = window.EXTENSIONS_LLM_CHAT_CONFIG || {}
+    var maxConversationTokens = agentCfg.maxConversationTokens || 12000
+    apiMessages = pruneConversation(apiMessages, maxConversationTokens)
+
     var toolCallLog = []
 
     window.AGENT_TOOL_LOOP.runAgentLoop({
@@ -434,22 +571,38 @@
       tools: (window.AGENT_TOOL_REGISTRY && window.AGENT_TOOL_REGISTRY.tools) || [],
       maxSteps: agentCfg.agentMaxSteps || 15,
       temperature: agentCfg.agentTemperature || 0.3,
+      abortHandle: state.currentAbortHandle,
       onToolCall: function (tc) {
         updateThinkingWithToolCall(tc)
-        // Collect in the log for later.
-        // (the log entry is updated in place by the tool loop)
       },
       onStepComplete: function (stepIdx, results) {
-        setStatus('Step ' + (stepIdx + 1) + ' done (' + results.length + ' tool calls)')
+        var maxS = agentCfg.agentMaxSteps || 15
+        setStatus('Step ' + (stepIdx + 1) + '/' + maxS + ' (' + results.length + ' tool calls)')
       }
     }).then(function (result) {
       removeThinking()
+
+      // Count mutating tool calls for the Undo button.
+      var READ_ONLY_TOOLS = {
+        get_detailed_comp_summary: true, get_host_context: true,
+        get_property_value: true, get_keyframes: true,
+        get_layer_properties: true, get_effect_properties: true,
+        get_expression: true
+      }
+      var mutatingCount = 0
+      var allCalls = result.toolCallLog || []
+      for (var ci = 0; ci < allCalls.length; ci++) {
+        if (!READ_ONLY_TOOLS[allCalls[ci].name] && allCalls[ci].status === 'ok') {
+          mutatingCount++
+        }
+      }
+      state.lastMutatingToolCount = mutatingCount
 
       // Push assistant message with tool calls and final content.
       var assistantMsg = {
         role: 'assistant',
         text: result.content || '',
-        toolCalls: (result.toolCallLog || []).map(function (tc) {
+        toolCalls: allCalls.map(function (tc) {
           return {
             id: tc.id,
             name: tc.name,
@@ -463,7 +616,11 @@
       session.updatedAt = Date.now()
 
       setModelStatus('ok', 'model: ok')
-      setStatus('Ready')
+      var usageNote = ''
+      if (result.usage && result.usage.total_tokens > 0) {
+        usageNote = ' | tokens: ' + result.usage.total_tokens
+      }
+      setStatus('Ready' + usageNote)
       renderTranscript()
       persistState()
     }).catch(function (err) {
@@ -477,18 +634,30 @@
       renderTranscript()
       persistState()
     }).then(function () {
-      // finally block
       state.isRequestInFlight = false
+      state.currentAbortHandle = null
       if (els.sendBtn) els.sendBtn.disabled = false
+      if (els.cancelBtn) els.cancelBtn.style.display = 'none'
     })
   }
 
   // ── Handle Undo ────────────────────────────────────────────────────────
+  /**
+   * Undo all mutating tool calls from the last agent request.
+   * Each tool call creates its own undo group in AE, so we call
+   * app.executeCommand(16) once per mutating tool call.
+   */
   function handleUndo () {
     if (!window.HOST_BRIDGE) return
-    window.HOST_BRIDGE.evalHostFunction('app.executeCommand(16)') // 16 = Edit > Undo
-      .then(function () { setStatus('Undo executed') })
+    var count = state.lastMutatingToolCount || 1
+    if (count < 1) count = 1
+
+    // Build a script that calls undo N times in a single evalScript.
+    var script = '(function(){ for (var i = 0; i < ' + count + '; i++) { app.executeCommand(16); } return "' + count + '"; })()'
+    window.HOST_BRIDGE.evalHostFunction(script)
+      .then(function () { setStatus('Undo: ' + count + ' action' + (count > 1 ? 's' : '') + ' reverted') })
       .catch(function (e) { setStatus('Undo failed: ' + e.message) })
+    state.lastMutatingToolCount = 0
   }
 
   // ── Session actions ────────────────────────────────────────────────────
@@ -540,6 +709,12 @@
     if (els.clearAllBtn) els.clearAllBtn.addEventListener('click', handleClearAll)
     if (els.sendBtn) els.sendBtn.addEventListener('click', handleSend)
     if (els.undoBtn) els.undoBtn.addEventListener('click', handleUndo)
+    if (els.cancelBtn) els.cancelBtn.addEventListener('click', function () {
+      if (state.currentAbortHandle) {
+        state.currentAbortHandle.aborted = true
+        setStatus('Cancelling...')
+      }
+    })
     if (els.modelSelect) els.modelSelect.addEventListener('change', handleModelChange)
 
     // Enter to send (Shift+Enter for newline).

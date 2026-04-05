@@ -5,66 +5,66 @@
 (function () {
   'use strict'
 
-  var cachedHostScript = null
   var hostScriptPath = null
+  var hostScriptLoaded = false
+  var hostScriptLoadPromise = null
 
   /**
-   * Get the host script content (index.jsx), caching after first load.
+   * Load the host script (index.jsx) once into ExtendScript engine.
+   * Subsequent calls are no-ops. Returns a promise that resolves when ready.
    */
-  function getHostScriptContent (done) {
-    if (cachedHostScript) { done(cachedHostScript); return }
-    try {
-      var cs = new CSInterface()
-      var ext = cs.getSystemPath(SystemPath.EXTENSION)
-      hostScriptPath = ext + '/host/index.jsx'
-      // Read the file content via Node.js (available in CEP).
-      var fs = require('fs')
-      fs.readFile(hostScriptPath, 'utf8', function (err, data) {
-        if (err) {
-          // Fallback: use $.evalFile at runtime.
-          cachedHostScript = ''
-          done('')
-        } else {
-          cachedHostScript = data
-          done(data)
-        }
-      })
-    } catch (e) {
-      cachedHostScript = ''
-      done('')
-    }
-  }
+  function ensureHostScriptLoaded () {
+    if (hostScriptLoaded) return Promise.resolve()
+    if (hostScriptLoadPromise) return hostScriptLoadPromise
 
-  /**
-   * Build a script string for CSInterface.evalScript.
-   * If we have cached host content, inline it. Otherwise $.evalFile.
-   */
-  function buildHostEvalScript (bodyExpression, hostContent) {
-    if (hostContent && hostContent.length > 0) {
-      return hostContent + '\n' + bodyExpression
-    }
-    if (hostScriptPath) {
-      return '$.evalFile("' + hostScriptPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '");\n' + bodyExpression
-    }
-    return bodyExpression
+    hostScriptLoadPromise = new Promise(function (resolve, reject) {
+      try {
+        var cs = new CSInterface()
+        var ext = cs.getSystemPath(SystemPath.EXTENSION)
+        hostScriptPath = ext + '/host/index.jsx'
+        var escapedPath = hostScriptPath.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+        // Load once via $.evalFile — defines all functions in the ExtendScript engine.
+        cs.evalScript('$.evalFile("' + escapedPath + '"); "ok"', function (resultStr) {
+          if (resultStr === 'ok') {
+            hostScriptLoaded = true
+            resolve()
+          } else {
+            // Fallback: try reading and inlining the script.
+            try {
+              var fs = require('fs')
+              var content = fs.readFileSync(hostScriptPath, 'utf8')
+              cs.evalScript(content + '\n"ok"', function (r2) {
+                hostScriptLoaded = true
+                resolve()
+              })
+            } catch (eFallback) {
+              reject(new Error('Failed to load host script: ' + (resultStr || eFallback.message)))
+            }
+          }
+        })
+      } catch (e) {
+        reject(new Error('ensureHostScriptLoaded error: ' + e.message))
+      }
+    })
+
+    return hostScriptLoadPromise
   }
 
   /**
    * Execute a host function and return a promise that resolves with the parsed JSON result.
+   * The host script is loaded once on first call, then only the function call is sent.
    */
   function evalHostFunction (functionCall) {
-    return new Promise(function (resolve, reject) {
-      getHostScriptContent(function (hostContent) {
+    return ensureHostScriptLoaded().then(function () {
+      return new Promise(function (resolve, reject) {
         try {
           var cs = new CSInterface()
-          var script = buildHostEvalScript(functionCall, hostContent)
-          cs.evalScript(script, function (resultStr) {
+          cs.evalScript(functionCall, function (resultStr) {
             if (!resultStr || resultStr === 'undefined' || resultStr === 'null') {
               reject(new Error('Host returned empty result for: ' + functionCall))
               return
             }
             try {
-              // EvalScript returns a string — could be JSON or EvalScript error.
               if (resultStr.indexOf('EvalScript error') === 0) {
                 reject(new Error(resultStr))
                 return
@@ -72,7 +72,6 @@
               var parsed = JSON.parse(resultStr)
               resolve(parsed)
             } catch (parseErr) {
-              // If not JSON, return raw string.
               resolve({ ok: true, message: resultStr, raw: resultStr })
             }
           })
@@ -122,7 +121,12 @@
     switch (toolName) {
       // Read tools
       case 'get_detailed_comp_summary':
-        call = 'extensionsLlmChat_getDetailedCompSummary()'
+        var filterOpts = {}
+        if (args.compact) filterOpts.compact = true
+        if (args.layer_type) filterOpts.layerType = args.layer_type
+        if (args.name_contains) filterOpts.nameContains = args.name_contains
+        if (typeof args.max_layers === 'number') filterOpts.maxLayers = args.max_layers
+        call = 'extensionsLlmChat_getDetailedCompSummary(' + toESLiteral(filterOpts) + ')'
         break
       case 'get_host_context':
         call = 'extensionsLlmChat_getHostContext()'
@@ -244,6 +248,12 @@
         break
 
       // Property tools
+      case 'get_expression':
+        call = 'extensionsLlmChat_getExpression(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral(args.property_path) + ')'
+        break
       case 'set_property_value':
         call = 'extensionsLlmChat_setPropertyValue(' +
           toESLiteral(args.layer_index) + ',' +
@@ -339,8 +349,7 @@
     window.HOST_BRIDGE = {
       evalHostFunction: evalHostFunction,
       executeToolCall: executeToolCall,
-      buildHostEvalScript: buildHostEvalScript,
-      getHostScriptContent: getHostScriptContent,
+      ensureHostScriptLoaded: ensureHostScriptLoaded,
       toESLiteral: toESLiteral
     }
   }

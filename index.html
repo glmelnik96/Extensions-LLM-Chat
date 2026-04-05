@@ -9,13 +9,13 @@
     <div id="app" class="panel-root">
       <aside class="sidebar">
         <div class="sidebar-header">
-          <button id="new-session-btn" class="btn btn-primary" title="New chat session">New</button>
+          <button id="new-session-btn" class="btn btn-primary" title="Start a new chat session (agent forgets previous context)">New</button>
         </div>
         <ul id="session-list" class="session-list"></ul>
         <div class="sidebar-footer">
-          <button id="rename-session-btn" class="btn btn-secondary">Rename</button>
-          <button id="clear-session-btn" class="btn btn-secondary">Clear</button>
-          <button id="clear-all-btn" class="btn btn-danger">Clear All</button>
+          <button id="rename-session-btn" class="btn btn-secondary" title="Rename this chat session">Rename</button>
+          <button id="clear-session-btn" class="btn btn-secondary" title="Clear all messages in this session">Clear</button>
+          <button id="clear-all-btn" class="btn btn-danger" title="Delete ALL sessions permanently">Clear All</button>
         </div>
       </aside>
       <main class="chat-area">
@@ -33,17 +33,18 @@
             <optgroup id="ollama-optgroup" label="Local (Ollama)" style="display:none">
             </optgroup>
           </select>
-          <button id="undo-btn" class="btn btn-warning" title="Undo last agent action (Ctrl+Z in AE)">Undo</button>
+          <button id="undo-btn" class="btn btn-warning" title="Undo ALL agent actions from last request">Undo</button>
         </div>
         <div class="chat-input-container">
           <textarea
             id="user-input"
             class="chat-input"
             rows="3"
-            placeholder="Describe what you want to animate, create, or improve..."
+            placeholder="Describe what you want to animate, create, or improve...&#10;&#10;Examples: &quot;Add wiggle to selected layer&quot;, &quot;Create a counter from 0 to 100&quot;, &quot;Animate title flying in from left&quot;"
           ></textarea>
           <div class="chat-actions">
-            <button id="send-btn" class="btn btn-primary">Send</button>
+            <button id="send-btn" class="btn btn-primary" title="Send message (Enter). Shift+Enter for new line.">Send</button>
+            <button id="cancel-btn" class="btn btn-danger" style="display:none" title="Cancel the running agent">Stop</button>
           </div>
         </div>
       </main>

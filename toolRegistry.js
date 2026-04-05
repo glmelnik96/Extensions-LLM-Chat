@@ -11,8 +11,17 @@
       type: 'function',
       function: {
         name: 'get_detailed_comp_summary',
-        description: 'Get a detailed summary of the active composition: layers, types, parents, effects, timing, expressions. Always call this first to understand the current state before making changes.',
-        parameters: { type: 'object', properties: {}, required: [] }
+        description: 'Get a summary of the active composition: layers, types, parents, effects, timing, expressions, 3D status, dimensions. Always call this first. For large comps (20+ layers), use compact:true or filters to reduce token usage.',
+        parameters: {
+          type: 'object',
+          properties: {
+            compact: { type: 'boolean', description: 'If true, return minimal info per layer (index, id, name, type, 3D, parent) to save tokens. Default: false.' },
+            layer_type: { type: 'string', enum: ['shape', 'text', 'solid', 'null', 'adjustment', 'precomp', 'camera', 'light', 'av'], description: 'Filter layers by type' },
+            name_contains: { type: 'string', description: 'Filter layers whose name contains this substring (case-insensitive)' },
+            max_layers: { type: 'number', description: 'Maximum number of layers to return (0 = no limit)' }
+          },
+          required: []
+        }
       }
     },
     {
@@ -310,8 +319,24 @@
     {
       type: 'function',
       function: {
+        name: 'get_expression',
+        description: 'Read the current expression on a property: expression text, enabled state, error message, and whether the property supports expressions. Use this to inspect or debug existing expressions before modifying them.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID' },
+            property_path: { type: 'string', description: 'Property path like "Transform>Position"' }
+          },
+          required: ['layer_index', 'property_path']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
         name: 'apply_expression',
-        description: 'Apply an After Effects expression to a property. The expression is JavaScript code that AE evaluates each frame.',
+        description: 'Apply an After Effects expression to a property. The expression is JavaScript code that AE evaluates each frame. If the expression has errors, the tool returns ok:false with the error message — read it and fix the expression.',
         parameters: {
           type: 'object',
           properties: {

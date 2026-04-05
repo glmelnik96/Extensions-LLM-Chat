@@ -7,6 +7,26 @@
 
 //@target aftereffects
 
+// ============================================================================
+// Undo helpers.
+// Each tool call gets its own undo group. The panel counts mutating
+// tool calls and can batch-undo them via N × app.executeCommand(16).
+// ============================================================================
+
+/**
+ * Begin an undo group for the current tool operation.
+ */
+function _beginToolUndo (label) {
+  app.beginUndoGroup(label);
+}
+
+/**
+ * End the current undo group.
+ */
+function _endToolUndo () {
+  try { app.endUndoGroup(); } catch (e) {}
+}
+
 /**
  * Resolve the "active composition" in a defensive way.
  *
@@ -260,13 +280,13 @@ function extensionsLlmChat_applyExpression (expressionText) {
   }
 
   try {
-    app.beginUndoGroup('Apply Extensions LLM Chat Expression');
+    _beginToolUndo('Apply Expression');
     targetProp.expression = expressionText;
     targetProp.expressionEnabled = true;
-    app.endUndoGroup();
+    _endToolUndo();
   } catch (e2) {
     try {
-      app.endUndoGroup();
+      _endToolUndo();
     } catch (ignored) {}
 
     result.ok = false;
@@ -652,41 +672,8 @@ function extensionsLlmChat_applyExpressionToTarget (layerIndex, layerId, propert
       return resultToJson(result);
     }
 
-    // Resolve propertyPath in a locale-independent way.
-    // We currently support a small, curated set of paths like:
-    // "Transform>Position", "Transform>Scale", "Transform>Rotation",
-    // "Transform>Opacity", "Text>Source Text".
-    var current = null;
-    if (propertyPath === 'Transform>Position') {
-      current = layer.property('ADBE Transform Group');
-      if (current) current = current.property('ADBE Position');
-    } else if (propertyPath === 'Transform>Scale') {
-      current = layer.property('ADBE Transform Group');
-      if (current) current = current.property('ADBE Scale');
-    } else if (propertyPath === 'Transform>Rotation') {
-      current = layer.property('ADBE Transform Group');
-      if (current) current = current.property('ADBE Rotate Z');
-    } else if (propertyPath === 'Transform>Opacity') {
-      current = layer.property('ADBE Transform Group');
-      if (current) current = current.property('ADBE Opacity');
-    } else if (propertyPath === 'Text>Source Text') {
-      current = layer.property('ADBE Text Properties');
-      if (current) current = current.property('ADBE Text Document');
-    } else {
-      // Fallback: try to interpret the path segments as display names.
-      var segments = propertyPath.split('>');
-      var i;
-      current = layer;
-      for (i = 0; i < segments.length; i++) {
-        var segName = segments[i];
-        if (!segName) {
-          current = null;
-          break;
-        }
-        current = current.property(segName);
-        if (!current) break;
-      }
-    }
+    // Resolve propertyPath using the shared _resolveProperty helper.
+    var current = _resolveProperty(layer, propertyPath);
 
     if (!current) {
       result.ok = false;
@@ -707,13 +694,30 @@ function extensionsLlmChat_applyExpressionToTarget (layerIndex, layerId, propert
     var layerName = layer.name;
 
     try {
-      app.beginUndoGroup('Apply Extensions LLM Chat Expression to Target');
+      _beginToolUndo('Apply Expression to Target');
       targetProp.expression = expressionText;
       targetProp.expressionEnabled = true;
-      app.endUndoGroup();
+
+      // Check if AE flagged an expression error (AE does not throw on bad expressions).
+      var exprErr = '';
+      try { exprErr = targetProp.expressionError || ''; } catch (eCheck) {}
+      if (exprErr && exprErr.length > 0) {
+        // Roll back the broken expression.
+        try {
+          targetProp.expression = '';
+          targetProp.expressionEnabled = false;
+        } catch (eRollback) {}
+        _endToolUndo();
+        result.ok = false;
+        result.message = 'Expression error on "' + propName + '" (layer "' + layerName + '"): ' + exprErr;
+        result.expressionError = exprErr;
+        return resultToJson(result);
+      }
+
+      _endToolUndo();
     } catch (e3) {
       try {
-        app.endUndoGroup();
+        _endToolUndo();
       } catch (ignored) {}
 
       result.ok = false;
@@ -748,38 +752,7 @@ function extensionsLlmChat_applyExpressionBatch (targets) {
     results: [],
   };
 
-  function resolveTargetProperty (layer, propertyPath) {
-    var current = null;
-    if (propertyPath === 'Transform>Position') {
-      current = layer.property('ADBE Transform Group');
-      if (current) current = current.property('ADBE Position');
-    } else if (propertyPath === 'Transform>Scale') {
-      current = layer.property('ADBE Transform Group');
-      if (current) current = current.property('ADBE Scale');
-    } else if (propertyPath === 'Transform>Rotation') {
-      current = layer.property('ADBE Transform Group');
-      if (current) current = current.property('ADBE Rotate Z');
-    } else if (propertyPath === 'Transform>Opacity') {
-      current = layer.property('ADBE Transform Group');
-      if (current) current = current.property('ADBE Opacity');
-    } else if (propertyPath === 'Text>Source Text') {
-      current = layer.property('ADBE Text Properties');
-      if (current) current = current.property('ADBE Text Document');
-    } else {
-      var segments = propertyPath.split('>');
-      current = layer;
-      for (var i = 0; i < segments.length; i++) {
-        var segName = segments[i];
-        if (!segName) {
-          current = null;
-          break;
-        }
-        current = current.property(segName);
-        if (!current) break;
-      }
-    }
-    return current;
-  }
+  // Use the shared _resolveProperty function (no local duplicate).
 
   try {
     if (!(targets instanceof Array) || targets.length === 0) {
@@ -795,7 +768,7 @@ function extensionsLlmChat_applyExpressionBatch (targets) {
     }
 
     var comp = ctx.comp;
-    app.beginUndoGroup('Apply Extensions LLM Chat Expression Batch');
+    _beginToolUndo('Apply Expression Batch');
 
     for (var ti = 0; ti < targets.length; ti++) {
       var t = targets[ti];
@@ -846,7 +819,7 @@ function extensionsLlmChat_applyExpressionBatch (targets) {
           continue;
         }
 
-        var targetProp = resolveTargetProperty(layer, propertyPath);
+        var targetProp = _resolveProperty(layer, propertyPath);
         if (!(targetProp instanceof Property) || targetProp.canSetExpression !== true) {
           itemResult.message = 'Resolved property cannot accept expressions.';
           result.failedCount++;
@@ -856,6 +829,23 @@ function extensionsLlmChat_applyExpressionBatch (targets) {
 
         targetProp.expression = expressionText;
         targetProp.expressionEnabled = true;
+
+        // Check for expression error (AE does not throw on bad expressions).
+        var batchExprErr = '';
+        try { batchExprErr = targetProp.expressionError || ''; } catch (eBatchCheck) {}
+        if (batchExprErr && batchExprErr.length > 0) {
+          try {
+            targetProp.expression = '';
+            targetProp.expressionEnabled = false;
+          } catch (eBatchRollback) {}
+          itemResult.ok = false;
+          itemResult.message = 'Expression error on "' + targetProp.name + '" (layer "' + layer.name + '"): ' + batchExprErr;
+          itemResult.expressionError = batchExprErr;
+          result.failedCount++;
+          result.results.push(itemResult);
+          continue;
+        }
+
         itemResult.ok = true;
         itemResult.message = 'Applied to layer "' + layer.name + '" → "' + targetProp.name + '".';
         result.appliedCount++;
@@ -868,7 +858,7 @@ function extensionsLlmChat_applyExpressionBatch (targets) {
     }
 
     try {
-      app.endUndoGroup();
+      _endToolUndo();
     } catch (eEnd) {}
 
     result.ok = result.failedCount === 0;
@@ -880,7 +870,7 @@ function extensionsLlmChat_applyExpressionBatch (targets) {
     return resultToJson(result);
   } catch (eOuter) {
     try {
-      app.endUndoGroup();
+      _endToolUndo();
     } catch (ignored) {}
     result.ok = false;
     result.message = 'Unexpected error in batch apply: ' + eOuter.toString();
@@ -1025,7 +1015,7 @@ function extensionsLlmChat_createLayer (layerType, name, opts) {
       ? opts.color : [0.5, 0.5, 0.5];
     var layerName = (typeof name === 'string' && name.length) ? name : layerType;
 
-    app.beginUndoGroup('Agent: Create layer');
+    _beginToolUndo('Agent: Create layer');
 
     if (layerType === 'solid') {
       layer = comp.layers.addSolid(col, layerName, w, h, 1, dur);
@@ -1050,12 +1040,12 @@ function extensionsLlmChat_createLayer (layerType, name, opts) {
     } else if (layerType === 'light') {
       layer = comp.layers.addLight(layerName, [comp.width / 2, comp.height / 2]);
     } else {
-      app.endUndoGroup();
+      _endToolUndo();
       result.message = 'Unknown layer type: ' + layerType;
       return resultToJson(result);
     }
 
-    app.endUndoGroup();
+    _endToolUndo();
 
     result.ok = true;
     result.layerIndex = layer.index;
@@ -1064,7 +1054,7 @@ function extensionsLlmChat_createLayer (layerType, name, opts) {
     result.message = 'Created ' + layerType + ' layer "' + layer.name + '" at index ' + layer.index + '.';
     return resultToJson(result);
   } catch (e) {
-    try { app.endUndoGroup(); } catch (x) {}
+    try { _endToolUndo(); } catch (x) {}
     result.message = 'createLayer error: ' + e.toString();
     return resultToJson(result);
   }
@@ -1081,14 +1071,14 @@ function extensionsLlmChat_deleteLayer (layerIndex, layerId) {
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
     if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
     var n = layer.name;
-    app.beginUndoGroup('Agent: Delete layer');
+    _beginToolUndo('Agent: Delete layer');
     layer.remove();
-    app.endUndoGroup();
+    _endToolUndo();
     result.ok = true;
     result.message = 'Deleted layer "' + n + '".';
     return resultToJson(result);
   } catch (e) {
-    try { app.endUndoGroup(); } catch (x) {}
+    try { _endToolUndo(); } catch (x) {}
     result.message = 'deleteLayer error: ' + e.toString();
     return resultToJson(result);
   }
@@ -1104,9 +1094,9 @@ function extensionsLlmChat_duplicateLayer (layerIndex, layerId) {
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
     if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
-    app.beginUndoGroup('Agent: Duplicate layer');
+    _beginToolUndo('Agent: Duplicate layer');
     var dup = layer.duplicate();
-    app.endUndoGroup();
+    _endToolUndo();
     result.ok = true;
     result.layerIndex = dup.index;
     result.layerId = dup.id;
@@ -1114,7 +1104,7 @@ function extensionsLlmChat_duplicateLayer (layerIndex, layerId) {
     result.message = 'Duplicated "' + layer.name + '" → "' + dup.name + '" at index ' + dup.index + '.';
     return resultToJson(result);
   } catch (e) {
-    try { app.endUndoGroup(); } catch (x) {}
+    try { _endToolUndo(); } catch (x) {}
     result.message = 'duplicateLayer error: ' + e.toString();
     return resultToJson(result);
   }
@@ -1133,14 +1123,14 @@ function extensionsLlmChat_reorderLayer (layerIndex, layerId, newIndex) {
     if (typeof newIndex !== 'number' || newIndex < 1 || newIndex > ctx.comp.numLayers) {
       result.message = 'Invalid new index: ' + newIndex; return resultToJson(result);
     }
-    app.beginUndoGroup('Agent: Reorder layer');
+    _beginToolUndo('Agent: Reorder layer');
     layer.moveTo(newIndex);
-    app.endUndoGroup();
+    _endToolUndo();
     result.ok = true;
     result.message = 'Moved "' + layer.name + '" to index ' + newIndex + '.';
     return resultToJson(result);
   } catch (e) {
-    try { app.endUndoGroup(); } catch (x) {}
+    try { _endToolUndo(); } catch (x) {}
     result.message = 'reorderLayer error: ' + e.toString();
     return resultToJson(result);
   }
@@ -1158,10 +1148,10 @@ function extensionsLlmChat_setLayerParent (layerIndex, layerId, parentLayerIndex
     var child = _resolveLayer(ctx.comp, layerIndex, layerId);
     if (!child) { result.message = 'Child layer not found.'; return resultToJson(result); }
 
-    app.beginUndoGroup('Agent: Set layer parent');
+    _beginToolUndo('Agent: Set layer parent');
     if ((!parentLayerIndex || parentLayerIndex <= 0) && (!parentLayerId || parentLayerId < 0)) {
       child.parent = null;
-      app.endUndoGroup();
+      _endToolUndo();
       result.ok = true;
       result.message = 'Unparented "' + child.name + '".';
       return resultToJson(result);
@@ -1169,17 +1159,17 @@ function extensionsLlmChat_setLayerParent (layerIndex, layerId, parentLayerIndex
 
     var parent = _resolveLayer(ctx.comp, parentLayerIndex, parentLayerId);
     if (!parent) {
-      app.endUndoGroup();
+      _endToolUndo();
       result.message = 'Parent layer not found.';
       return resultToJson(result);
     }
     child.parent = parent;
-    app.endUndoGroup();
+    _endToolUndo();
     result.ok = true;
     result.message = 'Parented "' + child.name + '" → "' + parent.name + '".';
     return resultToJson(result);
   } catch (e) {
-    try { app.endUndoGroup(); } catch (x) {}
+    try { _endToolUndo(); } catch (x) {}
     result.message = 'setLayerParent error: ' + e.toString();
     return resultToJson(result);
   }
@@ -1195,16 +1185,16 @@ function extensionsLlmChat_setLayerTiming (layerIndex, layerId, inPoint, outPoin
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
     if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
-    app.beginUndoGroup('Agent: Set layer timing');
+    _beginToolUndo('Agent: Set layer timing');
     if (typeof startTime === 'number') layer.startTime = startTime;
     if (typeof inPoint === 'number') layer.inPoint = inPoint;
     if (typeof outPoint === 'number') layer.outPoint = outPoint;
-    app.endUndoGroup();
+    _endToolUndo();
     result.ok = true;
     result.message = 'Set timing on "' + layer.name + '": in=' + layer.inPoint + ', out=' + layer.outPoint + '.';
     return resultToJson(result);
   } catch (e) {
-    try { app.endUndoGroup(); } catch (x) {}
+    try { _endToolUndo(); } catch (x) {}
     result.message = 'setLayerTiming error: ' + e.toString();
     return resultToJson(result);
   }
@@ -1221,14 +1211,14 @@ function extensionsLlmChat_renameLayer (layerIndex, layerId, newName) {
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
     if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
     var old = layer.name;
-    app.beginUndoGroup('Agent: Rename layer');
+    _beginToolUndo('Agent: Rename layer');
     layer.name = String(newName);
-    app.endUndoGroup();
+    _endToolUndo();
     result.ok = true;
     result.message = 'Renamed "' + old + '" → "' + layer.name + '".';
     return resultToJson(result);
   } catch (e) {
-    try { app.endUndoGroup(); } catch (x) {}
+    try { _endToolUndo(); } catch (x) {}
     result.message = 'renameLayer error: ' + e.toString();
     return resultToJson(result);
   }
@@ -1271,7 +1261,7 @@ function extensionsLlmChat_addKeyframes (layerIndex, layerId, propertyPath, keyf
       return KeyframeInterpolationType.BEZIER;
     }
 
-    app.beginUndoGroup('Agent: Add keyframes');
+    _beginToolUndo('Agent: Add keyframes');
 
     for (var i = 0; i < keyframes.length; i++) {
       var kf = keyframes[i];
@@ -1314,12 +1304,12 @@ function extensionsLlmChat_addKeyframes (layerIndex, layerId, propertyPath, keyf
       }
     }
 
-    app.endUndoGroup();
+    _endToolUndo();
     result.ok = true;
     result.message = 'Added ' + result.addedCount + ' keyframe(s) to "' + propertyPath + '" on "' + layer.name + '".';
     return resultToJson(result);
   } catch (e) {
-    try { app.endUndoGroup(); } catch (x) {}
+    try { _endToolUndo(); } catch (x) {}
     result.message = 'addKeyframes error: ' + e.toString();
     return resultToJson(result);
   }
@@ -1383,7 +1373,7 @@ function extensionsLlmChat_deleteKeyframes (layerIndex, layerId, propertyPath, t
     if (!prop || !(prop instanceof Property)) {
       result.message = 'Property not found or is a group.'; return resultToJson(result);
     }
-    app.beginUndoGroup('Agent: Delete keyframes');
+    _beginToolUndo('Agent: Delete keyframes');
     if (!times || !(times instanceof Array) || times.length === 0) {
       // Delete all keyframes, backwards to preserve indices.
       for (var i = prop.numKeys; i >= 1; i--) {
@@ -1400,12 +1390,12 @@ function extensionsLlmChat_deleteKeyframes (layerIndex, layerId, propertyPath, t
         }
       }
     }
-    app.endUndoGroup();
+    _endToolUndo();
     result.ok = true;
     result.message = 'Deleted ' + result.deletedCount + ' keyframe(s) from "' + propertyPath + '".';
     return resultToJson(result);
   } catch (e) {
-    try { app.endUndoGroup(); } catch (x) {}
+    try { _endToolUndo(); } catch (x) {}
     result.message = 'deleteKeyframes error: ' + e.toString();
     return resultToJson(result);
   }
@@ -1435,7 +1425,7 @@ function extensionsLlmChat_setKeyframeEasing (layerIndex, layerId, propertyPath,
       return KeyframeInterpolationType.BEZIER;
     }
 
-    app.beginUndoGroup('Agent: Set keyframe easing');
+    _beginToolUndo('Agent: Set keyframe easing');
 
     if (typeof inType === 'string' || typeof outType === 'string') {
       prop.setInterpolationTypeAtKey(keyIndex, toKeyType(inType), toKeyType(outType));
@@ -1458,12 +1448,12 @@ function extensionsLlmChat_setKeyframeEasing (layerIndex, layerId, propertyPath,
       prop.setTemporalEaseAtKey(keyIndex, eIn, eOut);
     }
 
-    app.endUndoGroup();
+    _endToolUndo();
     result.ok = true;
     result.message = 'Set easing on keyframe #' + keyIndex + ' of "' + propertyPath + '".';
     return resultToJson(result);
   } catch (e) {
-    try { app.endUndoGroup(); } catch (x) {}
+    try { _endToolUndo(); } catch (x) {}
     result.message = 'setKeyframeEasing error: ' + e.toString();
     return resultToJson(result);
   }
@@ -1506,6 +1496,58 @@ function extensionsLlmChat_getPropertyValue (layerIndex, layerId, propertyPath, 
 }
 
 /**
+ * Read the expression on a property: text, enabled state, error info.
+ */
+function extensionsLlmChat_getExpression (layerIndex, layerId, propertyPath) {
+  var result = {
+    ok: false, message: '',
+    expression: '', expressionEnabled: false,
+    expressionError: '', canSetExpression: false
+  };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var prop = _resolveProperty(layer, propertyPath);
+    if (!prop || !(prop instanceof Property)) {
+      result.message = 'Property not found or is a group.'; return resultToJson(result);
+    }
+    try { result.canSetExpression = prop.canSetExpression === true; } catch (e1) {}
+    try { result.expressionEnabled = prop.expressionEnabled === true; } catch (e2) {}
+    try { result.expression = prop.expression || ''; } catch (e3) {}
+    try { result.expressionError = prop.expressionError || ''; } catch (e4) {}
+
+    // Force expression evaluation to surface errors that only appear after eval.
+    if (result.expressionEnabled && result.expression.length > 0) {
+      try {
+        // Reading valueAtTime forces AE to evaluate the expression at current time.
+        var comp = ctx.comp;
+        prop.valueAtTime(comp.time, false);
+        // Re-read error after forced evaluation.
+        try { result.expressionError = prop.expressionError || ''; } catch (e5) {}
+      } catch (eEval) {}
+    }
+
+    result.ok = true;
+    // Make the error prominent in the message so the agent can't miss it.
+    if (result.expressionError && result.expressionError.length > 0) {
+      result.message = 'EXPRESSION ERROR on "' + propertyPath + '" (layer "' + layer.name + '"): ' + result.expressionError;
+    } else if (result.expressionEnabled && result.expression.length > 0) {
+      result.message = 'Expression on "' + propertyPath + '" (layer "' + layer.name + '"): enabled, no errors.';
+    } else if (result.expression.length > 0) {
+      result.message = 'Expression on "' + propertyPath + '" (layer "' + layer.name + '"): present but disabled.';
+    } else {
+      result.message = 'No expression on "' + propertyPath + '" (layer "' + layer.name + '").';
+    }
+    return resultToJson(result);
+  } catch (e) {
+    result.message = 'getExpression error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
  * Set a static property value (no keyframes).
  */
 function extensionsLlmChat_setPropertyValue (layerIndex, layerId, propertyPath, value) {
@@ -1525,14 +1567,14 @@ function extensionsLlmChat_setPropertyValue (layerIndex, layerId, propertyPath, 
       for (var i = 0; i < value.length; i++) arr.push(value[i]);
       value = arr;
     }
-    app.beginUndoGroup('Agent: Set property value');
+    _beginToolUndo('Agent: Set property value');
     prop.setValue(value);
-    app.endUndoGroup();
+    _endToolUndo();
     result.ok = true;
     result.message = 'Set "' + propertyPath + '" on "' + layer.name + '".';
     return resultToJson(result);
   } catch (e) {
-    try { app.endUndoGroup(); } catch (x) {}
+    try { _endToolUndo(); } catch (x) {}
     result.message = 'setPropertyValue error: ' + e.toString();
     return resultToJson(result);
   }
@@ -1604,16 +1646,16 @@ function extensionsLlmChat_addEffect (layerIndex, layerId, effectMatchName) {
     if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
     var effects = layer.property('ADBE Effect Parade');
     if (!effects) { result.message = 'Layer does not support effects.'; return resultToJson(result); }
-    app.beginUndoGroup('Agent: Add effect');
+    _beginToolUndo('Agent: Add effect');
     var fx = effects.addProperty(effectMatchName);
-    app.endUndoGroup();
+    _endToolUndo();
     if (!fx) { result.message = 'Failed to add effect "' + effectMatchName + '".'; return resultToJson(result); }
     result.ok = true;
     result.effectIndex = fx.propertyIndex;
     result.message = 'Added effect "' + fx.name + '" (index ' + fx.propertyIndex + ') to "' + layer.name + '".';
     return resultToJson(result);
   } catch (e) {
-    try { app.endUndoGroup(); } catch (x) {}
+    try { _endToolUndo(); } catch (x) {}
     result.message = 'addEffect error: ' + e.toString();
     return resultToJson(result);
   }
@@ -1636,14 +1678,14 @@ function extensionsLlmChat_removeEffect (layerIndex, layerId, effectIndex) {
     }
     var fx = effects.property(effectIndex);
     var n = fx ? fx.name : '?';
-    app.beginUndoGroup('Agent: Remove effect');
+    _beginToolUndo('Agent: Remove effect');
     fx.remove();
-    app.endUndoGroup();
+    _endToolUndo();
     result.ok = true;
     result.message = 'Removed effect "' + n + '" from "' + layer.name + '".';
     return resultToJson(result);
   } catch (e) {
-    try { app.endUndoGroup(); } catch (x) {}
+    try { _endToolUndo(); } catch (x) {}
     result.message = 'removeEffect error: ' + e.toString();
     return resultToJson(result);
   }
@@ -1712,14 +1754,14 @@ function extensionsLlmChat_setEffectPropertyValue (layerIndex, layerId, effectIn
       for (var i = 0; i < value.length; i++) arr.push(value[i]);
       value = arr;
     }
-    app.beginUndoGroup('Agent: Set effect property');
+    _beginToolUndo('Agent: Set effect property');
     prop.setValue(value);
-    app.endUndoGroup();
+    _endToolUndo();
     result.ok = true;
     result.message = 'Set "' + prop.name + '" on effect "' + fx.name + '".';
     return resultToJson(result);
   } catch (e) {
-    try { app.endUndoGroup(); } catch (x) {}
+    try { _endToolUndo(); } catch (x) {}
     result.message = 'setEffectPropertyValue error: ' + e.toString();
     return resultToJson(result);
   }
@@ -1743,16 +1785,16 @@ function extensionsLlmChat_createComp (name, width, height, pixelAspect, duratio
     var d = (typeof duration === 'number' && duration > 0) ? duration : 10;
     var fr = (typeof frameRate === 'number' && frameRate > 0) ? frameRate : 30;
 
-    app.beginUndoGroup('Agent: Create composition');
+    _beginToolUndo('Agent: Create composition');
     var comp = app.project.items.addComp(n, w, h, pa, d, fr);
-    app.endUndoGroup();
+    _endToolUndo();
 
     result.ok = true;
     result.compName = comp.name;
     result.message = 'Created composition "' + comp.name + '" (' + w + 'x' + h + ', ' + fr + 'fps, ' + d + 's).';
     return resultToJson(result);
   } catch (e) {
-    try { app.endUndoGroup(); } catch (x) {}
+    try { _endToolUndo(); } catch (x) {}
     result.message = 'createComp error: ' + e.toString();
     return resultToJson(result);
   }
@@ -1775,16 +1817,16 @@ function extensionsLlmChat_precomposeLayers (layerIndices, compName, moveAttribu
     var n = (typeof compName === 'string' && compName.length) ? compName : 'Precomp';
     var moveAttr = (typeof moveAttributes === 'boolean') ? moveAttributes : true;
 
-    app.beginUndoGroup('Agent: Precompose layers');
+    _beginToolUndo('Agent: Precompose layers');
     var newComp = ctx.comp.layers.precompose(layerIndices, n, moveAttr);
-    app.endUndoGroup();
+    _endToolUndo();
 
     result.ok = true;
     result.precompName = newComp ? newComp.name : n;
     result.message = 'Precomposed ' + layerIndices.length + ' layer(s) into "' + result.precompName + '".';
     return resultToJson(result);
   } catch (e) {
-    try { app.endUndoGroup(); } catch (x) {}
+    try { _endToolUndo(); } catch (x) {}
     result.message = 'precomposeLayers error: ' + e.toString();
     return resultToJson(result);
   }
@@ -1802,19 +1844,19 @@ function extensionsLlmChat_setCompSettings (settings) {
       result.message = 'No settings provided.'; return resultToJson(result);
     }
     var comp = ctx.comp;
-    app.beginUndoGroup('Agent: Set comp settings');
+    _beginToolUndo('Agent: Set comp settings');
     if (typeof settings.name === 'string') comp.name = settings.name;
     if (typeof settings.width === 'number') comp.width = settings.width;
     if (typeof settings.height === 'number') comp.height = settings.height;
     if (typeof settings.duration === 'number') comp.duration = settings.duration;
     if (typeof settings.frameRate === 'number') comp.frameRate = settings.frameRate;
     if (typeof settings.bgColor instanceof Array) comp.bgColor = settings.bgColor;
-    app.endUndoGroup();
+    _endToolUndo();
     result.ok = true;
     result.message = 'Updated comp settings for "' + comp.name + '".';
     return resultToJson(result);
   } catch (e) {
-    try { app.endUndoGroup(); } catch (x) {}
+    try { _endToolUndo(); } catch (x) {}
     result.message = 'setCompSettings error: ' + e.toString();
     return resultToJson(result);
   }
@@ -1845,7 +1887,7 @@ function extensionsLlmChat_setTextDocument (layerIndex, layerId, textProps) {
       result.message = 'Layer is not a text layer or Source Text not found.'; return resultToJson(result);
     }
 
-    app.beginUndoGroup('Agent: Set text document');
+    _beginToolUndo('Agent: Set text document');
     var doc = textProp.value;
     if (typeof textProps.text === 'string') doc.text = textProps.text;
     if (typeof textProps.font === 'string') doc.font = textProps.font;
@@ -1866,12 +1908,12 @@ function extensionsLlmChat_setTextDocument (layerIndex, layerId, textProps) {
     if (typeof textProps.leading === 'number') doc.leading = textProps.leading;
     if (typeof textProps.baselineShift === 'number') doc.baselineShift = textProps.baselineShift;
     textProp.setValue(doc);
-    app.endUndoGroup();
+    _endToolUndo();
     result.ok = true;
     result.message = 'Updated text on "' + layer.name + '".';
     return resultToJson(result);
   } catch (e) {
-    try { app.endUndoGroup(); } catch (x) {}
+    try { _endToolUndo(); } catch (x) {}
     result.message = 'setTextDocument error: ' + e.toString();
     return resultToJson(result);
   }
@@ -1885,12 +1927,18 @@ function extensionsLlmChat_setTextDocument (layerIndex, layerId, textProps) {
  * Return a detailed summary of the active composition including layer types,
  * parent chains, in/out points, effects list, and expression status.
  */
-function extensionsLlmChat_getDetailedCompSummary () {
+function extensionsLlmChat_getDetailedCompSummary (filterOptions) {
   var result = {
     ok: false, message: '', compName: '', width: 0, height: 0,
     duration: 0, frameRate: 0, numLayers: 0, layers: []
   };
   try {
+    var opts = (typeof filterOptions === 'object' && filterOptions) ? filterOptions : {};
+    var filterType = typeof opts.layerType === 'string' ? opts.layerType : null;
+    var filterName = typeof opts.nameContains === 'string' ? opts.nameContains.toLowerCase() : null;
+    var maxLayers = typeof opts.maxLayers === 'number' ? opts.maxLayers : 0;
+    var compact = opts.compact === true;
+
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var comp = ctx.comp;
@@ -1901,24 +1949,65 @@ function extensionsLlmChat_getDetailedCompSummary () {
     result.frameRate = comp.frameRate;
     result.numLayers = comp.numLayers;
 
+    var addedCount = 0;
     for (var i = 1; i <= comp.numLayers; i++) {
       try {
         var layer = comp.layer(i);
         if (!layer) continue;
+
+        var layerType = _layerTypeString(layer);
+
+        // Apply filters.
+        if (filterType && layerType !== filterType) continue;
+        if (filterName) {
+          try {
+            if (layer.name.toLowerCase().indexOf(filterName) === -1) continue;
+          } catch (eFN) { continue; }
+        }
+        if (maxLayers > 0 && addedCount >= maxLayers) break;
+
+        // Compact mode: minimal info per layer to save tokens.
+        if (compact) {
+          var compactInfo = {
+            index: layer.index,
+            id: layer.id,
+            name: layer.name,
+            type: layerType,
+          };
+          try { compactInfo.threeDLayer = layer.threeDLayer === true; } catch (e3Dc) {}
+          try {
+            if (layer.parent) compactInfo.parentIndex = layer.parent.index;
+          } catch (ePc) {}
+          result.layers.push(compactInfo);
+          addedCount++;
+          continue;
+        }
+
+        // Full mode: detailed info per layer.
         var info = {
           index: layer.index,
           id: layer.id,
           name: layer.name,
-          type: _layerTypeString(layer),
+          type: layerType,
           matchName: layer.matchName || '',
           inPoint: layer.inPoint,
           outPoint: layer.outPoint,
           startTime: layer.startTime,
+          threeDLayer: false,
+          width: null,
+          height: null,
           parentIndex: null,
           parentName: '',
           effects: [],
           hasExpressions: false,
         };
+        // 3D layer flag.
+        try { info.threeDLayer = layer.threeDLayer === true; } catch (e3D) {}
+        // Layer dimensions (available for AVLayer/TextLayer/ShapeLayer, not for cameras/lights).
+        try {
+          if (typeof layer.width === 'number') info.width = layer.width;
+          if (typeof layer.height === 'number') info.height = layer.height;
+        } catch (eDim) {}
         try {
           if (layer.parent) {
             info.parentIndex = layer.parent.index;
@@ -1954,11 +2043,16 @@ function extensionsLlmChat_getDetailedCompSummary () {
         }
 
         result.layers.push(info);
+        addedCount++;
       } catch (eLayer) {}
     }
 
     result.ok = true;
-    result.message = 'Detailed summary of "' + comp.name + '" with ' + result.layers.length + ' layers.';
+    var filterNote = '';
+    if (filterType) filterNote += ' (type: ' + filterType + ')';
+    if (filterName) filterNote += ' (name: "' + opts.nameContains + '")';
+    if (compact) filterNote += ' [compact]';
+    result.message = 'Summary of "' + comp.name + '": ' + result.layers.length + '/' + comp.numLayers + ' layers' + filterNote + '.';
     return resultToJson(result);
   } catch (e) {
     result.message = 'getDetailedCompSummary error: ' + e.toString();

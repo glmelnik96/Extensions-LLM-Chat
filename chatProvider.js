@@ -171,10 +171,40 @@
     }
   }
 
+  // ── Retry helper ─────────────────────────────────────────────────────
+
+  /**
+   * Retry a function with exponential backoff on retryable errors (429, 5xx).
+   */
+  function withRetry (fn, maxRetries) {
+    if (typeof maxRetries !== 'number') maxRetries = 3
+    var attempt = 0
+    function tryOnce () {
+      attempt++
+      return fn().catch(function (err) {
+        var msg = err.message || ''
+        var isRetryable = msg.indexOf('HTTP 429') !== -1 ||
+          msg.indexOf('HTTP 500') !== -1 ||
+          msg.indexOf('HTTP 502') !== -1 ||
+          msg.indexOf('HTTP 503') !== -1 ||
+          msg.indexOf('HTTP 504') !== -1
+        if (isRetryable && attempt < maxRetries) {
+          var delay = Math.min(1000 * Math.pow(2, attempt - 1), 8000)
+          return new Promise(function (resolve) {
+            setTimeout(resolve, delay)
+          }).then(tryOnce)
+        }
+        throw err
+      })
+    }
+    return tryOnce()
+  }
+
   // ── Unified invoke ───────────────────────────────────────────────────
 
   /**
    * Send a chat completion request to the appropriate provider.
+   * Automatically retries on 429/5xx errors with exponential backoff.
    * @param {string} modelId  "cloudru/..." or "ollama/..." or legacy model name
    * @param {Array}  messages Chat messages array
    * @param {object} options  { tools?, tool_choice?, max_tokens?, temperature? }
@@ -182,10 +212,12 @@
    */
   function invoke (modelId, messages, options) {
     var parsed = parseModelId(modelId)
-    if (parsed.provider === 'ollama') {
-      return invokeOllama(parsed.model, messages, options)
-    }
-    return invokeCloudRu(parsed.model, messages, options)
+    return withRetry(function () {
+      if (parsed.provider === 'ollama') {
+        return invokeOllama(parsed.model, messages, options)
+      }
+      return invokeCloudRu(parsed.model, messages, options)
+    }, 3)
   }
 
   /**

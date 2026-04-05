@@ -144,6 +144,51 @@ body {
   word-break: break-word;
 }
 
+/* Allow HTML rendered markdown in assistant messages */
+.chat-message.assistant .msg-text {
+  white-space: normal;
+}
+
+.chat-message.assistant .msg-text p {
+  margin: 0 0 4px 0;
+}
+
+.chat-message.assistant .msg-text ul {
+  margin: 2px 0;
+  padding-left: 16px;
+}
+
+.chat-message.assistant .msg-text li {
+  margin-bottom: 1px;
+}
+
+.md-code-block {
+  display: block;
+  background-color: #1a1f28;
+  border: 1px solid #444;
+  padding: 4px 6px;
+  margin: 4px 0;
+  font-family: Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  white-space: pre-wrap;
+  word-break: break-all;
+  color: #e4f1ff;
+  border-radius: 2px;
+}
+
+.md-inline-code {
+  background-color: #1a1f28;
+  padding: 1px 3px;
+  border-radius: 2px;
+  font-family: Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  color: #9ad0ff;
+}
+
+.md-h1 { font-size: 13px; display: block; margin: 6px 0 3px; }
+.md-h2 { font-size: 12px; display: block; margin: 4px 0 2px; }
+.md-h3 { font-size: 11px; display: block; margin: 3px 0 2px; }
+
 /* ── Tool call cards ──────────────────────────────────────────────────── */
 
 .tool-calls-container {

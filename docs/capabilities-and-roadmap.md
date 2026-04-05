@@ -5,14 +5,15 @@
 ### Agent Tool System
 The extension works as an AI agent that can inspect, create, and modify After Effects compositions through tool calls. The LLM plans a sequence of actions, executes them one by one via ExtendScript, and reports results.
 
-**Supported tools (25):**
+**Supported tools (26):**
 
 #### Read (inspection)
 | Tool | Description |
 |------|-------------|
-| `get_detailed_comp_summary` | Full comp overview: layers, types, parents, effects, timing, expressions |
+| `get_detailed_comp_summary` | Full comp overview: layers, types, parents, effects, timing, expressions, 3D status, dimensions. Supports `compact` mode and filters (`layer_type`, `name_contains`, `max_layers`) for large compositions. |
 | `get_host_context` | Timeline state: current time, work area, selections |
 | `get_property_value` | Read any property value (optionally at a specific time), plus expression info |
+| `get_expression` | Read the current expression on a property: text, enabled state, error message, canSetExpression |
 | `get_keyframes` | Read all keyframes with times, values, easing |
 | `get_layer_properties` | Deep scan of all properties on a layer |
 | `get_effect_properties` | List properties of a specific effect |
@@ -35,7 +36,7 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 | `delete_keyframes` | Delete keyframes at specific times or all |
 | `set_keyframe_easing` | Change interpolation and easing on existing keyframes |
 | `set_property_value` | Set a static value on any property |
-| `apply_expression` | Apply an AE expression to any expressable property |
+| `apply_expression` | Apply an AE expression to any expressable property. Returns expression errors for agent self-correction. |
 
 #### Effects
 | Tool | Description |
@@ -58,10 +59,22 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 
 ### UI
 - Chat interface with tool-call visualization (collapsible cards showing args + results)
+- **Markdown rendering** in agent responses (headers, bold, italic, code blocks, lists)
 - Session management (create, rename, clear, switch between sessions)
 - Model selector: Cloud.ru models + local Ollama models (when enabled)
-- Undo button (triggers AE undo)
-- Thinking indicator during agent execution
+- **Undo button** — reverts ALL agent actions from last request (counts mutating tool calls and batch-undoes them via N × Cmd+Z)
+- **Stop button** — cancel a running agent mid-execution
+- **Step progress indicator** — shows `Step 2/15` and tool call count during execution
+- **Token usage display** — shows total tokens after each request
+- **Tooltips** on all buttons explaining their function
+- Thinking indicator during agent execution with tool call counter
+
+### Reliability
+- **Expression error detection** — `apply_expression` checks `expressionError` after applying and returns the error to the agent for self-correction
+- **API retry with backoff** — automatic retry on 429/5xx errors (3 attempts, exponential backoff)
+- **Conversation pruning** — old messages automatically trimmed to fit within token budget
+- **Tool call history preservation** — agent remembers its prior tool calls and results across turns in a session
+- **Host script single-load** — ExtendScript loaded once at startup, not re-parsed on every tool call
 
 ### API Providers
 - **Cloud.ru Foundation Models** — OpenAI-compatible chat/completions with tool calling
@@ -89,7 +102,7 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 
 9. **No graph editor control** — easing is set via speed/influence values, not visual curve editing.
 
-10. **Model limitations** — Cloud.ru models (Qwen3-Coder, GPT-OSS-120B) may occasionally confuse anchor point with position, or use wrong property paths. The system prompt mitigates this but doesn't eliminate it.
+10. **Model limitations** — Cloud.ru models (Qwen3-Coder, GPT-OSS-120B) may occasionally confuse anchor point with position, or use wrong property paths. The system prompt mitigates this but doesn't eliminate it. Expression errors are now detected and the agent retries automatically.
 
 ---
 
@@ -112,11 +125,12 @@ This is the most impactful improvement — shape layers are fundamental to motio
 - Add Z position/rotation to keyframe tools
 - Support camera and light property paths
 
-**1.3 Better error recovery**
-When a tool call fails, the agent currently reports the error but doesn't always retry with a corrected approach. Improve the system prompt to:
-- Re-read the comp state after failures
-- Try alternative property paths
-- Fall back to `get_layer_properties` to discover correct paths
+**1.3 Better error recovery** ✅ DONE
+- `apply_expression` now detects `expressionError` and returns it to the agent
+- Agent system prompt instructs retry on expression errors
+- `get_expression` tool added for reading/debugging existing expressions
+- Common expression mistakes documented in prompt (SourceText, 2D/3D, loopOut, etc.)
+- Few-shot tool chain examples in prompt guide correct workflows
 
 ### Priority 2 — Expand Capabilities
 
@@ -169,10 +183,8 @@ Build a library of common animation patterns in the knowledge base:
 
 The system prompt can reference these so the model doesn't reinvent them each time.
 
-**3.4 Multi-step undo awareness**
-Currently each tool call is a separate undo group. For complex animations (10+ tool calls), this means 10+ undos. Improvement:
-- Group related operations into a single undo group
-- "Create bouncing ball" = 1 undo, not 5
+**3.4 Multi-step undo awareness** ✅ DONE
+The panel counts mutating (non-read-only) tool calls per request and the Undo button batch-undoes them all at once via N × `app.executeCommand(16)`. AE cannot span a single undo group across multiple `evalScript()` calls (each execution auto-closes the group), so the batch-undo approach is used instead.
 
 **3.5 Comp frame preview after changes**
 After making changes, automatically capture and show a frame preview in the chat, so the user can see results without switching to AE.
@@ -201,16 +213,23 @@ Remember comp structure between sessions — "last time we worked on the intro c
 
 ## Architecture Notes
 
-### File Structure (new modules)
+### File Structure (agent modules)
 ```
-agentSystemPrompt.js  — Agent persona and workflow rules
-agentToolLoop.js      — LLM ↔ tool execution cycle
-chatProvider.js       — Cloud.ru + Ollama unified API
-hostBridge.js         — Tool name → ExtendScript mapping
-toolRegistry.js       — 25 OpenAI-compatible tool definitions
-host/index.jsx        — ExtendScript functions (AE operations)
-main.js               — UI rendering, sessions, event handling
+agentSystemPrompt.js  — Agent persona, workflow rules, expression guidance, few-shot examples
+agentToolLoop.js      — LLM ↔ tool execution cycle with abort support and usage tracking
+chatProvider.js       — Cloud.ru + Ollama unified API with retry on 429/5xx
+hostBridge.js         — Tool name → ExtendScript mapping (single-load host script)
+toolRegistry.js       — 26 OpenAI-compatible tool definitions
+host/index.jsx        — ExtendScript functions (AE operations, expression error detection)
+main.js               — UI, sessions, markdown rendering, pruning, cancel, batch-undo
 ```
+
+### Key Architecture Improvements (v2)
+- **Host script loaded once** — `hostBridge.js` uses `ensureHostScriptLoaded()` instead of inlining 2000+ lines per call
+- **Shared `_resolveProperty`** — single property resolution function used by all expression/property tools
+- **Expression error feedback loop** — `apply_expression` checks `expressionError` after apply, rolls back on failure
+- **Conversation pruning** — `pruneConversation()` in `main.js` trims old messages to fit token budget
+- **Tool call history** — full assistant+tool message chain preserved across turns in a session
 
 ### Adding a New Tool
 1. Add ExtendScript function in `host/index.jsx` (follow existing pattern: try/catch, undo group, `resultToJson`)

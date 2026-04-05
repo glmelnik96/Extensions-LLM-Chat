@@ -2,12 +2,26 @@
 config/runtime-config.js
 config/secrets.local.js
 
+# Environment files (optional local tooling)
+.env
+.env.local
+.env.*.local
+
 # CEP developer debug (opens a local port; do not ship in public repos)
 .debug
 
 # OS
 .DS_Store
+Thumbs.db
 
-# Editor
+# Editor / temp
 *.swp
 *.swo
+*~
+
+# Logs
+*.log
+npm-debug.log*
+
+# Node (if a package.json is added later)
+node_modules/

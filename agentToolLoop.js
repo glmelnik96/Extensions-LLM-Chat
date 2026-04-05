@@ -28,6 +28,13 @@
    *
    * @returns {Promise<object>} { content: string, toolCallLog: Array }
    */
+  /**
+   * Create an abort handle that can be passed to runAgentLoop and cancelled later.
+   */
+  function createAbortHandle () {
+    return { aborted: false }
+  }
+
   function runAgentLoop (options) {
     if (!options) throw new Error('runAgentLoop: options required')
 
@@ -39,6 +46,7 @@
     var temperature = (typeof options.temperature === 'number') ? options.temperature : DEFAULT_TEMPERATURE
     var onToolCall = options.onToolCall || function () {}
     var onStepComplete = options.onStepComplete || function () {}
+    var abortHandle = options.abortHandle || null
 
     // Build the full message array for the API.
     var messages = []
@@ -51,12 +59,21 @@
     }
 
     var toolCallLog = []
+    var totalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
 
     function step (stepIndex) {
+      if (abortHandle && abortHandle.aborted) {
+        return Promise.resolve({
+          content: '[Agent cancelled by user.]',
+          toolCallLog: toolCallLog,
+          usage: totalUsage
+        })
+      }
       if (stepIndex >= maxSteps) {
         return Promise.resolve({
           content: '[Agent reached maximum step limit (' + maxSteps + '). Partial results above.]',
-          toolCallLog: toolCallLog
+          toolCallLog: toolCallLog,
+          usage: totalUsage
         })
       }
 
@@ -69,6 +86,12 @@
 
       return window.CHAT_PROVIDER.invoke(modelId, messages, invokeOptions)
         .then(function (response) {
+          // Accumulate token usage.
+          if (response.usage) {
+            totalUsage.prompt_tokens += response.usage.prompt_tokens || 0
+            totalUsage.completion_tokens += response.usage.completion_tokens || 0
+            totalUsage.total_tokens += response.usage.total_tokens || 0
+          }
           var choice = response.choices[0]
           var assistantMsg = choice.message
 
@@ -99,7 +122,8 @@
           var content = assistantMsg.content || ''
           return {
             content: content,
-            toolCallLog: toolCallLog
+            toolCallLog: toolCallLog,
+            usage: totalUsage
           }
         })
     }
@@ -171,7 +195,8 @@
   // Export
   if (typeof window !== 'undefined') {
     window.AGENT_TOOL_LOOP = {
-      runAgentLoop: runAgentLoop
+      runAgentLoop: runAgentLoop,
+      createAbortHandle: createAbortHandle
     }
   }
 })()
