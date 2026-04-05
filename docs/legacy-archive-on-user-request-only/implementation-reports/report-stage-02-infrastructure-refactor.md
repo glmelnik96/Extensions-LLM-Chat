@@ -81,4 +81,4 @@ This document describes what was changed in Stage 2 (infrastructure refactor), w
 4. **session.pipeline** — Use for optional UI or logic (e.g. showing current stage, or limiting retries) without changing the existing session fields or persistence contract.
 5. **prompt-library/** and **knowledge-base/** — Stage 4 will populate and connect these; Stage 3 can still use the existing system prompt and docs context.
 
-See **../plans/pipeline-preparation-notes.md** for concise implementation notes.
+See **[../planning/plan-pipeline-preparation-stage-2-technical-notes.md](../planning/plan-pipeline-preparation-stage-2-technical-notes.md)** for concise implementation notes.

@@ -1,6 +1,6 @@
 # Промпт этапа 2: Инфраструктурный рефакторинг и каркас pipeline
 
-**Назначение**: Задать контекст и задачи для безопасного рефакторинга кода и введения каркаса pipeline без изменения пользовательского поведения. Использовать вместе с shared-project-context.md и docs/archive/plans/staged-implementation-plan.md (этап 2).
+**Назначение**: Задать контекст и задачи для безопасного рефакторинга кода и введения каркаса pipeline без изменения пользовательского поведения. Использовать вместе с shared-project-context.md и docs/legacy-archive-on-user-request-only/planning/plan-staged-implementation-stages-2-through-4.md (этап 2).
 
 ---
 

@@ -38,12 +38,12 @@ Session persistence (**localStorage** key **ae-motion-agent-state**): see **docs
 
 The repo still contains documentation and scripts for a historical **multi-pass expression pipeline** (prepare → generate → validate → rules → repair → finalize, **manual Apply Expression**, **latestExtractedExpression**). That pipeline is **not** invoked from the current **main.js** **Send** handler.
 
-| Topic | Legacy doc |
+| Topic | Legacy doc (full text under `legacy-archive-on-user-request-only/multi-pass-copilot-legacy/`) |
 |-------|------------|
-| Stage sequence | **docs/pipeline-runtime-flow.md** |
-| Chat output rules | **docs/chat-publication-policy.md** |
-| Disposition / Apply | **docs/final-disposition-policy.md**, **docs/manual-apply-policy.md** |
-| Target + Apply bridge | **docs/host-bridge-notes.md** (partially superseded for the agent path — see same file) |
+| Stage sequence | **docs/pipeline-runtime-flow.md** (stub → `legacy-pipeline-runtime-flow-stages-and-models.md`) |
+| Chat output rules | **docs/chat-publication-policy.md** (stub → `legacy-chat-publication-final-only-policy.md`) |
+| Disposition / Apply | **docs/final-disposition-policy.md**, **docs/manual-apply-policy.md** (stubs → legacy files there) |
+| Target + Apply bridge | **docs/host-bridge-notes.md** (current agent path; legacy Apply note inside) |
 
 Use these when maintaining or restoring the old flow, not when describing the shipping agent UX.
 

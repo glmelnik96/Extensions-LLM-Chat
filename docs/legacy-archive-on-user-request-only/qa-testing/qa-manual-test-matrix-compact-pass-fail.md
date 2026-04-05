@@ -1,6 +1,6 @@
 # Manual test matrix
 
-Compact matrix for QA. Tick when passed. See **docs/qa-test-plan.md** for steps.
+Compact matrix for QA. Tick when passed. See **docs/qa-test-plan.md** (short agent smoke) and **qa-legacy-full-test-plan-copilot-pipeline-ui.md** for full Copilot-era steps.
 
 | # | Area | Test | Pass |
 |---|------|------|-----:|

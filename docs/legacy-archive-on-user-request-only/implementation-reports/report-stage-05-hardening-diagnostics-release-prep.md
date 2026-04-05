@@ -98,6 +98,6 @@ Summary of production hardening, diagnostics, safety cleanup, QA readiness, and 
 
 1. Run `node scripts/validate-repo.js` and `node scripts/check-required-files.js` from repo root.
 2. Follow [../../release-checklist.md](../../release-checklist.md) (config, QA, deployment).
-3. Execute scenarios from [../../qa-test-plan.md](../../qa-test-plan.md) and mark [../qa/manual-test-matrix.md](../qa/manual-test-matrix.md).
+3. Execute scenarios from [../../qa-test-plan.md](../../qa-test-plan.md) and mark [../qa-testing/qa-manual-test-matrix-compact-pass-fail.md](../qa-testing/qa-manual-test-matrix-compact-pass-fail.md).
 
 Stage 5 hardening is complete when the panel runs, sessions and target work, the pipeline produces final-only output, manual Apply works, config is safe and documented, diagnostics are available, and the above docs and scripts are in place.

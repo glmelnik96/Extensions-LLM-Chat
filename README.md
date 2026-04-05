@@ -11,9 +11,9 @@ Extensions LLM Chat — это CEP-панель для Adobe After Effects с **
 ## Что делает это расширение
 
 - Запускает **чат с агентом** внутри After Effects: запросы на естественном языке превращаются в цепочку операций над композицией.
-- Использует **25 инструментов** (чтение состояния компа и слоёв, слои, анимация и кейфреймы, эффекты, композиция, текст и др.) — полная таблица в [docs/capabilities-and-roadmap.md](docs/capabilities-and-roadmap.md).
+- Использует **26 инструментов** (чтение состояния компа и слоёв, чтение экспрешенов, слои, анимация и кейфреймы, эффекты, композиция, текст и др.) — полная таблица в [docs/capabilities-and-roadmap.md](docs/capabilities-and-roadmap.md).
 - Подключается к **Cloud.ru Foundation Models** (OpenAI-совместимый chat completions с tool calling) и при настройке — к **Ollama (локально)** для чата и сценариев с анализом изображений.
-- Сохраняет **сессии** чата, показывает **карточки вызовов инструментов** (аргументы и результаты), индикатор «thinking» на время работы агента, кнопку **Undo** (откат в AE).
+- Сохраняет **сессии** чата, показывает **карточки вызовов инструментов** (аргументы и результаты), **markdown-рендеринг** ответов, **прогресс выполнения** (Step 2/15), кнопки **Undo** (batch-откат всех мутирующих действий агента) и **Stop** (отмена агента).
 
 Дополнительные детали архитектуры конфигурации, knowledge base, диагностики и политик ответов — в [docs/README.md](docs/README.md), [docs/final-architecture.md](docs/final-architecture.md) и связанных файлах.
 
@@ -26,10 +26,19 @@ Extensions LLM Chat — это CEP-панель для Adobe After Effects с **
   - Выполнение через единый цикл **LLM ↔ tool calls ↔ ExtendScript** (см. структуру модулей ниже).
 
 - **Интерфейс**
-  - Чат с визуализацией tool calls.
+  - Чат с визуализацией tool calls и **markdown-рендерингом** ответов.
   - Сессии: создание, переименование, очистка, переключение.
   - Выбор модели: модели Cloud.ru и локальные модели Ollama (при включении в конфиге).
-  - Undo и индикатор выполнения агента.
+  - **Undo** — откатывает все мутирующие действия агента за один клик (batch-undo через N × Cmd+Z).
+  - **Stop** — отмена работающего агента.
+  - **Прогресс**: Step N/15, счётчик tool calls, отображение использованных токенов.
+  - Подсказки (tooltips) на всех кнопках.
+
+- **Надёжность**
+  - Автоматический retry API-запросов при 429/5xx ошибках (3 попытки, exponential backoff).
+  - Обрезка истории диалога для контроля лимита токенов.
+  - Детекция и возврат ошибок экспрешенов агенту для самоисправления.
+  - Сохранение полной истории tool calls между запросами в сессии.
 
 - **Провайдеры API**
   - **Cloud.ru Foundation Models** — основной облачный чат с поддержкой инструментов.
@@ -63,7 +72,7 @@ Extensions LLM Chat — это CEP-панель для Adobe After Effects с **
 | `agentToolLoop.js` | Цикл LLM ↔ выполнение инструментов |
 | `chatProvider.js` | Единый API: Cloud.ru и Ollama |
 | `hostBridge.js` | Сопоставление имён инструментов и вызовов ExtendScript |
-| `toolRegistry.js` | Описания 25 инструментов в формате OpenAI functions |
+| `toolRegistry.js` | Описания 26 инструментов в формате OpenAI functions |
 | `host/index.jsx` | Реализация операций в After Effects |
 | `main.js` | UI, сессии, обработка событий |
 
@@ -78,6 +87,8 @@ Extensions LLM Chat — это CEP-панель для Adobe After Effects с **
 - `pipelineAssembly.js`, `systemPrompt.js` и др. — вспомогательные части legacy-пайплайна и контекста; детали в [docs/final-architecture.md](docs/final-architecture.md), [docs/pipeline-runtime-flow.md](docs/pipeline-runtime-flow.md).
 
 **Индекс документации:** [docs/README.md](docs/README.md).
+
+**Архив (legacy):** [docs/legacy-archive-on-user-request-only/](docs/legacy-archive-on-user-request-only/) — старые отчёты, multi-pass Copilot и расширенные тест-планы. Для ассистентов: не читать эту папку без **явного запроса пользователя** (см. [README архива](docs/legacy-archive-on-user-request-only/README.md)).
 
 ---
 
@@ -162,7 +173,7 @@ Extensions LLM Chat — это CEP-панель для Adobe After Effects с **
 - Нет операций с масками, импорта футажа, очереди рендера, маркеров, переключения 3D у слоя.
 - Нет тонкого управления пространственными безье по position (только временной easing).
 - Агент работает в контексте **активной** композиции; явного переключения компа нет.
-- Ограничения моделей (путаница anchor/position, пути свойств) смягчаются системным промптом, но не исчезают полностью.
+- Ограничения моделей (путаница anchor/position, пути свойств) смягчаются системным промптом и few-shot примерами. Ошибки экспрешенов теперь обнаруживаются и агент пытается исправить их автоматически.
 
 ---
 
@@ -176,7 +187,7 @@ Extensions LLM Chat — это CEP-панель для Adobe After Effects с **
 
 - [docs/troubleshooting.md](docs/troubleshooting.md)
 - [docs/qa-test-plan.md](docs/qa-test-plan.md)
-- [docs/archive/qa/manual-test-matrix.md](docs/archive/qa/manual-test-matrix.md)
+- Расширенные чеклисты: [docs/legacy-archive-on-user-request-only/qa-testing/](docs/legacy-archive-on-user-request-only/qa-testing/) (открывать при необходимости; см. [README архива](docs/legacy-archive-on-user-request-only/README.md))
 - [docs/release-checklist.md](docs/release-checklist.md)
 
 Корневой README даёт обзор и ссылки; детали — в `docs/`.

@@ -34,7 +34,7 @@ One-time audit to align prompts and local KB with the documented design without 
 - **corpusIndex.js** bodies/snippets are condensed from the .md files; topic IDs match projections. No structural drift. Minor enrichment: add one snippet to expression_basics (forbidden APIs), one to repair_fix_recipes (semicolons / no refactor), and extend property_targeting_constraints body to include Slider.
 
 ### Projection usefulness
-- Generator and validator projections match docs/grounding-policy-by-stage.md. Repair leads with repair_fix_recipes. No change to projection order.
+- Generator and validator projections match **../multi-pass-copilot-legacy/legacy-grounding-policy-by-pipeline-stage.md** (formerly docs/grounding-policy-by-stage.md). Repair leads with repair_fix_recipes. No change to projection order.
 
 ---
 

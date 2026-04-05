@@ -1,6 +1,6 @@
 # Промпт этапа 3: Внедрение Multi-pass pipeline
 
-**Назначение**: Задать контекст и задачи для внедрения реального multi-pass (generator → validator-1 → validator-2 → repair при необходимости) поверх каркаса, собранного на этапе 2. Использовать вместе с shared-project-context.md и docs/archive/plans/staged-implementation-plan.md (этап 3).
+**Назначение**: Задать контекст и задачи для внедрения реального multi-pass (generator → validator-1 → validator-2 → repair при необходимости) поверх каркаса, собранного на этапе 2. Использовать вместе с shared-project-context.md и docs/legacy-archive-on-user-request-only/planning/plan-staged-implementation-stages-2-through-4.md (этап 3).
 
 ---
 

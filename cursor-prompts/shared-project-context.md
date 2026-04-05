@@ -1,6 +1,8 @@
 # Общий контекст проекта — Extensions LLM Chat
 
-Используй этот блок как общий контекст при выполнении этапов 2–4. Не нарушай инварианты и не меняй поведение пользователя без явного указания в промпте этапа.
+> **Устарело для текущего продукта.** Репозиторий переведён на **AE Motion Agent** (см. **docs/capabilities-and-roadmap.md**, **docs/final-architecture.md**). Ниже — инварианты эпохи **multi-pass Copilot**; используй только если восстанавливаешь старый flow по запросу.
+
+Используй этот блок как общий контекст при выполнении этапов 2–4 (исторический план в **docs/legacy-archive-on-user-request-only/planning/**).
 
 ---
 
@@ -32,10 +34,10 @@
 
 ## Целевая архитектура (после этапов 2–4)
 
-- Оркестрация в main.js; один последовательный async pipeline: generate → validate-1 → validate-2 → при необходимости repair. gpt-oss-120b — generator + validators; Qwen — repair. Пользователь видит только финальный результат в чате; стадии — в UI status. Apply только manual. Локальная knowledge base с тремя проекциями (generator / validator / repair). См. docs/final-target-architecture.md и docs/archive/plans/staged-implementation-plan.md.
+- Оркестрация в main.js; один последовательный async pipeline: generate → validate-1 → validate-2 → при необходимости repair. gpt-oss-120b — generator + validators; Qwen — repair. Пользователь видит только финальный результат в чате; стадии — в UI status. Apply только manual. Локальная knowledge base с тремя проекциями (generator / validator / repair). См. **docs/final-target-architecture.md** (stub) и **docs/legacy-archive-on-user-request-only/planning/plan-staged-implementation-stages-2-through-4.md**.
 
 ---
 
 ## Риски
 
-См. docs/archive/analysis/risk-register.md: поломка handleSend, target/getResolvedTarget, совместимость сессий, конфликт с latestExtractedExpression, поломка Apply, нарушение isRequestInFlight и статусной строки. Все изменения — с учётом реестра рисков.
+См. **docs/legacy-archive-on-user-request-only/analysis-notes/analysis-risk-register-pipeline-implementation.md**: поломка handleSend, target/getResolvedTarget, совместимость сессий, конфликт с latestExtractedExpression, поломка Apply, нарушение isRequestInFlight и статусной строки. Все изменения — с учётом реестра рисков.

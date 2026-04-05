@@ -52,7 +52,7 @@ Used internally for logging and for mapping to user-facing text (e.g. "Configura
 - blocked  
 - runtime_failure  
 
-Used to align pipeline outcome with the final disposition policy (see docs/final-disposition-policy.md).
+Legacy multi-pass: disposition alignment was documented in **docs/final-disposition-policy.md** (stub → archived legacy file). The agent path surfaces errors in chat / tool cards instead.
 
 ---
 

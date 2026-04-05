@@ -66,7 +66,7 @@
 - глобальные **compSummary**, **activeTarget**, флаги захвата экрана;
 - опциональное **session.pipeline** (стадии generate / validate / repair).
 
-В **текущем** UI агента эти поля **не используются** в **main.js** для Send/persist. Старые сохранённые JSON в localStorage с другим ключом или форматом панель не подхватывает как текущее состояние. Если восстанавливаете старый pipeline из кода, ориентируйтесь на архивные версии **docs/runtime-state-schema.md** в git и на **docs/pipeline-runtime-flow.md**.
+В **текущем** UI агента эти поля **не используются** в **main.js** для Send/persist. Старые сохранённые JSON в localStorage с другим ключом или форматом панель не подхватывает как текущее состояние. Если восстанавливаете старый pipeline из кода, ориентируйтесь на историческую схему в git и на **docs/pipeline-runtime-flow.md** (stub → архив **`legacy-pipeline-runtime-flow-stages-and-models.md`**).
 
 ---
 

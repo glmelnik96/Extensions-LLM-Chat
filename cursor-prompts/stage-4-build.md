@@ -1,6 +1,6 @@
 # Промпт этапа 4: Knowledge Base и role-specific prompt system
 
-**Назначение**: Задать контекст и задачи для подключения локальной knowledge base (Adobe Help Center + docsforadobe) и трёх проекций знаний для generator, validator и repair. Использовать вместе с shared-project-context.md и docs/archive/plans/staged-implementation-plan.md (этап 4).
+**Назначение**: Задать контекст и задачи для подключения локальной knowledge base (Adobe Help Center + docsforadobe) и трёх проекций знаний для generator, validator и repair. Использовать вместе с shared-project-context.md и docs/legacy-archive-on-user-request-only/planning/plan-staged-implementation-stages-2-through-4.md (этап 4).
 
 ---
 

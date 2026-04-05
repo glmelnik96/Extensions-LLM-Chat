@@ -2,7 +2,7 @@
 
 This document is the **durable product and technical brief** for evolving **Extensions LLM Chat** into a motion-design–aware assistant. It records decisions from planning so **new chat sessions or contributors** can implement work without relying on conversation history.
 
-**Current shipped behavior** is the **AE Motion Agent** (tool loop, Cloud.ru + optional Ollama): [capabilities-and-roadmap.md](capabilities-and-roadmap.md), [final-architecture.md](final-architecture.md), root [README.md](../README.md). The multi-pass expression pipeline is **legacy** (see [pipeline-runtime-flow.md](pipeline-runtime-flow.md)). This file describes **target direction** and **planned phases** for vision and workflow.
+**Current shipped behavior** is the **AE Motion Agent** (tool loop, Cloud.ru + optional Ollama): [capabilities-and-roadmap.md](capabilities-and-roadmap.md), [final-architecture.md](final-architecture.md), root [README.md](../README.md). The multi-pass expression pipeline is **legacy** (stub: [pipeline-runtime-flow.md](pipeline-runtime-flow.md) → archived flow doc). This file describes **target direction** and **planned phases** for vision and workflow.
 
 ---
 
@@ -95,7 +95,7 @@ Use this as a **checklist**; order matters within each phase.
 
 ### Phase 6 — QA & polish
 
-- [x] `docs/qa-test-plan.md` — section 9: Ollama, capture, frame export, grounding, debug timing.
+- [x] `docs/qa-test-plan.md` — short agent smoke; legacy Ollama/capture section 9: [legacy-archive-on-user-request-only/qa-testing/qa-legacy-full-test-plan-copilot-pipeline-ui.md](legacy-archive-on-user-request-only/qa-testing/qa-legacy-full-test-plan-copilot-pipeline-ui.md).
 - [x] `README.md` — Ollama / analysis / host state summary.
 
 ### Phase 7 — Agent mode (later)

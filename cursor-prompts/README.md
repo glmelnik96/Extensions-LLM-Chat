@@ -1,26 +1,21 @@
 # Cursor Prompts — Библиотека промптов по этапам
 
-**Scope:** Developer-only. These are Cursor (or similar) workflow prompts for implementing stages 2–4. They are **not** the runtime prompt source: runtime prompts are in **prompt-library/** and **systemPrompt.js**. Do not confuse this folder with the extension’s prompt library.
+**Scope:** Developer-only. These are Cursor (or similar) workflow prompts for implementing **historical stages 2–4** (multi-pass pipeline + KB). They are **not** the runtime prompt source: runtime agent prompts are in **agentSystemPrompt.js** / **toolRegistry.js**; legacy Copilot prompts in **prompt-library/**. Исторические планы и отчёты перенесены в **`docs/legacy-archive-on-user-request-only/`** — открывайте эту папку только при явной работе с legacy.
 
-Эта папка содержит каркас промптов для поэтапной сборки multi-pass pipeline и knowledge base в проекте Extensions LLM Chat. Промпты предназначены для использования в Cursor (или аналоге) при выполнении этапов 2–4 из docs/archive/plans/staged-implementation-plan.md.
+Эта папка содержит каркас промптов для поэтапной сборки multi-pass pipeline и knowledge base. Промпты предназначены для использования в Cursor при выполнении этапов 2–4 из **[docs/legacy-archive-on-user-request-only/planning/plan-staged-implementation-stages-2-through-4.md](../docs/legacy-archive-on-user-request-only/planning/plan-staged-implementation-stages-2-through-4.md)**.
 
 ---
 
 ## Содержимое
 
-- **shared-project-context.md** — общий контекст проекта: репозиторий, инварианты, ключевые файлы и ограничения. Подключать к любому этапу.
-- **stage-2-build.md** — промпт для этапа 2: инфраструктурный рефакторинг и каркас pipeline без смены поведения.
-- **stage-3-build.md** — промпт для этапа 3: внедрение multi-pass (generate → validate-1 → validate-2 → repair), UI status по стадиям, финальный результат в чат.
-- **stage-4-build.md** — промпт для этапа 4: подключение локальной knowledge base и трёх проекций (generator / validator / repair).
+- **shared-project-context.md** — общий контекст проекта (устаревающий; в репозитории сейчас **AE Motion Agent** — см. **docs/capabilities-and-roadmap.md**).
+- **stage-2-build.md**, **stage-3-build.md**, **stage-4-build.md** — промпты этапов 2–4.
 
-На текущем шаге (этап 1) **окончательные production-промпты для этапов 2–4 не заполнены** — только структура и назначение каждого файла. Общий контекст в shared-project-context.md заполнен по факту репозитория.
-
-В этапе 2 в репозитории добавлены каркасы **prompt-library/** (generator, validator, repair) и **knowledge-base/** — см. их README и docs/archive/reports/stage-2-refactor-report.md.
+В этапе 2 в репозитории добавлены каркасы **prompt-library/** и **knowledge-base/** — см. **[docs/legacy-archive-on-user-request-only/implementation-reports/report-stage-02-infrastructure-refactor.md](../docs/legacy-archive-on-user-request-only/implementation-reports/report-stage-02-infrastructure-refactor.md)**.
 
 ---
 
-## Как использовать
+## Как использовать (legacy workflow)
 
-1. Перед началом этапа 2 (или 3, 4) прочитать docs/archive/analysis/current-repo-analysis.md, docs/final-target-architecture.md, docs/archive/plans/staged-implementation-plan.md и docs/archive/analysis/risk-register.md.
-2. В диалог Cursor подставить содержимое shared-project-context.md и соответствующего stage-*-build.md.
-3. Дополнить stage-*-build.md конкретными задачами и acceptance criteria при необходимости; затем выполнять изменения по плану этапа, не нарушая инвариантов из shared-project-context.md.
+1. Прочитать **[docs/legacy-archive-on-user-request-only/analysis-notes/analysis-repo-snapshot-pre-multipass.md](../docs/legacy-archive-on-user-request-only/analysis-notes/analysis-repo-snapshot-pre-multipass.md)**, **docs/final-target-architecture.md** (stub), план этапов и **[analysis-risk-register-pipeline-implementation.md](../docs/legacy-archive-on-user-request-only/analysis-notes/analysis-risk-register-pipeline-implementation.md)**.
+2. В диалог Cursor подставить **shared-project-context.md** и соответствующий **stage-*-build.md**.

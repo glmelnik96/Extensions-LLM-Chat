@@ -1,4 +1,10 @@
-# Archived documentation
+# Superseded: old `docs/archive/README.md`
+
+**Use instead:** [README.md](README.md) in this folder (`legacy-archive-on-user-request-only/`). Структура и имена файлов изменены; ссылки ниже **битые** и оставлены только как исторический снимок.
+
+---
+
+# Archived documentation (obsolete index)
 
 Historical implementation reports, planning artifacts, and one-off analysis. Preserved for context; **not** the source of truth for current behavior.
 

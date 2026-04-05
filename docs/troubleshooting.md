@@ -1,6 +1,8 @@
 # Troubleshooting
 
-Common issues and where to look when the panel or pipeline misbehaves.
+Common issues when the **AE Motion Agent** panel misbehaves. Sections below still mention the **legacy multi-pass Copilot** pipeline (`latestExtractedExpression`, Apply, validator stages) where useful for old builds or diagnostics strings — full policy text is in **`docs/legacy-archive-on-user-request-only/`** (open only when you need history).
+
+**Current product:** [capabilities-and-roadmap.md](capabilities-and-roadmap.md), [final-architecture.md](final-architecture.md).
 
 ---
 
@@ -37,33 +39,31 @@ Internal details are in the browser console (diagnostics layer); user-facing tex
 
 ---
 
-## Pipeline "Failed / blocked" or system message only
+## Agent run failed or tool errors
 
-- **Rules block**: Expression failed deterministic checks (empty, leftover markers, sanitization, or target context). Rephrase or simplify the request.
-- **Validation fail**: Validator reported fail and repair did not produce an acceptable result. Try a clearer prompt or a different target.
-- **Runtime failure**: Network/HTTP/malformed response; see "Error contacting cloud model" above.
-
-Blocked outcomes never set `latestExtractedExpression`, so Apply stays disabled by design.
-
-**Finding where it failed:** Enable debug logging in the CEP console: `window.EXTENSIONS_LLM_CHAT_DIAGNOSTICS.setDebug(true)`, then send again. Check the console for `[pipeline]` messages: **stage=generate exit blocked** = generator produced no valid expression; **stage=rules exit blocked** = deterministic rules failed; **validator parse failed** = validator response was not parseable (e.g. JSON in code fences); **repair extraction failed** = repair response had no extractable expression; **flow failed** = pipeline threw (message sample follows). See docs/runtime-diagnostics.md for the full log reference.
+- **Cloud / Ollama**: Same as "Error contacting cloud model" above; check key, base URL, and model id.
+- **Tool / host error**: Read the **tool call** card in the chat (args + result). For expression errors, fix the prompt or layer index; see [capabilities-and-roadmap.md](capabilities-and-roadmap.md) (limitations).
+- **Debug**: `window.EXTENSIONS_LLM_CHAT_DIAGNOSTICS.setDebug(true)` in the CEP console — see [runtime-diagnostics.md](runtime-diagnostics.md).
 
 ---
 
-## Apply button stays disabled
+## Legacy: pipeline "Failed / blocked" (multi-pass Copilot)
 
-- Apply is enabled only when:
-  - There is an active session,
-  - `latestExtractedExpression` is set (disposition **acceptable** only),
-  - No request in flight.
-- **Warned draft** and **blocked** do not set `latestExtractedExpression`, so Apply correctly stays disabled. See docs/manual-apply-policy.md and docs/final-result-policy.md.
+If you maintain an old build with generator → validate → repair:
+
+- **Rules / validation / repair** failures and **latestExtractedExpression** rules are documented only in the archive — stubs: [final-result-policy.md](final-result-policy.md), [final-disposition-policy.md](final-disposition-policy.md). Console `[pipeline]` stage hints apply to that flow.
 
 ---
 
-## Apply clicked but host reports error
+## Legacy: Apply button stays disabled
 
-- **Invalid target**: Layer or property was removed or changed in AE after generation. Refresh target (@) and re-select, or generate again.
-- **Unsupported property**: Some properties cannot receive expressions from the host script; see host/index.jsx and docs/host-bridge-notes.md.
-- **Host script missing**: Ensure host/index.jsx is loaded by the CEP host; check ExtendScript console for errors.
+The shipping **AE Motion Agent** UI has no separate **Apply Expression** button; expressions are applied via the **apply_expression** tool when the model chooses it. For historical Apply + `latestExtractedExpression` behavior see [manual-apply-policy.md](manual-apply-policy.md) and [final-result-policy.md](final-result-policy.md) (stubs → archive).
+
+---
+
+## Legacy: Apply clicked but host reports error
+
+Applies to old UI with manual Apply: invalid target, unsupported property, host script — see [host-bridge-notes.md](host-bridge-notes.md) and **host/index.jsx**.
 
 ---
 
