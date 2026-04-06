@@ -52,7 +52,7 @@ Used internally for logging and for mapping to user-facing text (e.g. "Configura
 - blocked  
 - runtime_failure  
 
-Legacy multi-pass: disposition alignment was documented in **docs/final-disposition-policy.md** (stub → archived legacy file). The agent path surfaces errors in chat / tool cards instead.
+Legacy multi-pass: disposition alignment is documented in **legacy-final-disposition-and-apply-policy.md** ([archive link](legacy-archive-on-user-request-only/multi-pass-copilot-legacy/legacy-final-disposition-and-apply-policy.md)). The agent path surfaces errors in chat / tool cards instead.
 
 ---
 

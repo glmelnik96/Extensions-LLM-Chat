@@ -5,7 +5,7 @@
 ### Agent Tool System
 The extension works as an AI agent that can inspect, create, and modify After Effects compositions through tool calls. The LLM plans a sequence of actions, executes them one by one via ExtendScript, and reports results.
 
-**Supported tools (27):**
+**Supported tools (30):**
 
 #### Read (inspection)
 | Tool | Description |
@@ -38,6 +38,9 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 | `set_property_value` | Set a static value on any property |
 | `apply_expression` | Apply an AE expression to any expressable property. Returns expression errors for agent self-correction. |
 | `apply_expression_batch` | Apply expressions to multiple layer properties in one tool call with per-target success/error details. |
+| `apply_fade_preset` | Deterministic fade preset with fixed keyframe/easing recipe (`duration`, `delay`, `direction`) |
+| `apply_pop_preset` | Deterministic pop preset with fixed keyframe/easing recipe (`duration`, `delay`, `direction`, `intensity`) |
+| `apply_slide_preset` | Deterministic slide preset with fixed keyframe/easing recipe (`duration`, `delay`, `direction`, `amplitude`) |
 
 #### Effects
 | Tool | Description |
@@ -62,10 +65,12 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 - Chat interface with tool-call visualization (collapsible cards showing args + results)
 - **Markdown rendering** in agent responses (headers, bold, italic, code blocks, lists)
 - Session management (create, rename, clear, switch between sessions)
-- Model selector: Cloud.ru models + local Ollama models (when enabled)
+- Model selector: Cloud.ru models (local Ollama chat UI is intentionally disabled)
+- **Active composition note** under transcript: `Active composition: "<name>". Changes are applied to this composition.`
+- **Preset toolbar**: deterministic preset dropdown (`fade`/`pop`/`slide`) + parameter fields (`duration`, `delay`, `intensity/amplitude`) + `Apply preset` for selected layers
 - **Undo button** — reverts ALL agent actions from last request (counts mutating tool calls and batch-undoes them via N × Cmd+Z)
 - **Stop button** — cancel a running agent mid-execution
-- **Step progress indicator** — shows `Step 2/15` and tool call count during execution
+- **Step progress indicator** — shows `Step N/maxSteps` and tool call count during execution
 - **Token usage display** — shows total tokens after each request
 - **Tooltips** on all buttons explaining their function
 - Thinking indicator during agent execution with tool call counter
@@ -79,7 +84,7 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 
 ### API Providers
 - **Cloud.ru Foundation Models** — OpenAI-compatible chat/completions with tool calling
-- **Ollama (local)** — for both vision analysis and full chat (when `ollamaChatEnabled: true`)
+- **Ollama (local)** — available for legacy/vision-related modules; not exposed as a selectable chat provider in the current UI flow
 
 ---
 
@@ -220,7 +225,7 @@ agentSystemPrompt.js  — Agent persona, workflow rules, expression guidance, fe
 agentToolLoop.js      — LLM ↔ tool execution cycle with abort support and usage tracking
 chatProvider.js       — Cloud.ru + Ollama unified API with retry on 429/5xx
 hostBridge.js         — Tool name → ExtendScript mapping (single-load host script)
-toolRegistry.js       — 26 OpenAI-compatible tool definitions
+toolRegistry.js       — 30 OpenAI-compatible tool definitions
 host/index.jsx        — ExtendScript functions (AE operations, expression error detection)
 main.js               — UI, sessions, markdown rendering, pruning, cancel, batch-undo
 ```

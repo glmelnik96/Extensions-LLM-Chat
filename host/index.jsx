@@ -221,6 +221,62 @@ function extensionsLlmChat_resolveActiveComp () {
   return ctx;
 }
 
+/**
+ * Return a robust, UI-friendly active composition note payload.
+ * Unlike strict tool operations, this is best-effort and falls back to the first
+ * composition in the project when focus context is ambiguous.
+ */
+function extensionsLlmChat_getActiveCompNote () {
+  var result = {
+    ok: false,
+    compName: '',
+    source: '',
+    message: ''
+  };
+  try {
+    if (!app || !app.project) {
+      result.message = 'No active project in After Effects.';
+      return resultToJson(result);
+    }
+
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (ctx && ctx.ok && ctx.comp) {
+      result.ok = true;
+      result.compName = ctx.comp.name || '';
+      result.source = ctx.statusCode || 'resolved';
+      result.message = 'Active composition resolved.';
+      return resultToJson(result);
+    }
+
+    // Defensive fallback for UI: first composition in project.
+    var numItems = 0;
+    try { numItems = app.project.numItems || 0; } catch (eNum) { numItems = 0; }
+    for (var i = 1; i <= numItems; i++) {
+      var it = null;
+      try { it = app.project.item(i); } catch (eItem) { it = null; }
+      if (!it) continue;
+      var isComp = false;
+      try {
+        isComp = (it instanceof CompItem) ||
+          (typeof it.numLayers === 'number' && typeof it.layer === 'function');
+      } catch (eType) { isComp = false; }
+      if (isComp) {
+        result.ok = true;
+        result.compName = it.name || '';
+        result.source = 'project_fallback';
+        result.message = 'Using first composition from project list.';
+        return resultToJson(result);
+      }
+    }
+
+    result.message = (ctx && ctx.message) ? ctx.message : 'No composition found.';
+    return resultToJson(result);
+  } catch (e) {
+    result.message = 'getActiveCompNote error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
 function extensionsLlmChat_applyExpression (expressionText) {
   var result = {
     ok: false,
@@ -857,6 +913,357 @@ function extensionsLlmChat_applyExpressionBatch (targets) {
     } catch (ignored) {}
     result.ok = false;
     result.message = 'Unexpected error in batch apply: ' + eOuter.toString();
+    return resultToJson(result);
+  }
+}
+
+// ============================================================================
+// Deterministic motion preset tools
+// ============================================================================
+
+var _MOTION_PRESET_RECIPES = {
+  fade: {
+    defaults: { duration: 0.45, delay: 0, direction: 'in' },
+    limits: { minDuration: 0.05, maxDuration: 5, minDelay: 0, maxDelay: 10 },
+    easing: { startOutInfluence: 72, endInInfluence: 72 }
+  },
+  pop: {
+    defaults: { duration: 0.42, delay: 0, direction: 'in', intensity: 1 },
+    limits: { minDuration: 0.08, maxDuration: 5, minDelay: 0, maxDelay: 10, minIntensity: 0.2, maxIntensity: 1.5 },
+    timing: { midRatio: 0.58 },
+    factors: {
+      inStartBase: 0.22,
+      inOvershootBase: 0.16,
+      outOvershootBase: 0.10,
+      outEndShrinkBase: 0.20
+    },
+    easing: { firstOutInfluence: 70, midInInfluence: 72, midOutInfluence: 66, endInInfluence: 78 }
+  },
+  slide: {
+    defaults: { duration: 0.50, delay: 0, direction: 'left', amplitude: 120 },
+    limits: { minDuration: 0.08, maxDuration: 6, minDelay: 0, maxDelay: 10, minAmplitude: 8, maxAmplitude: 2000 },
+    easing: { startOutInfluence: 74, endInInfluence: 74 }
+  }
+};
+
+function _toFiniteNumber (raw) {
+  if (typeof raw === 'number' && isFinite(raw)) return raw;
+  if (typeof raw === 'string' && raw.length > 0) {
+    var parsed = parseFloat(raw);
+    if (isFinite(parsed)) return parsed;
+  }
+  return null;
+}
+
+function _readPresetNumber (opts, key, fallbackValue, minValue, maxValue, label) {
+  var out = { ok: false, value: fallbackValue, message: '' };
+  var raw = null;
+  if (opts && typeof opts === 'object' && opts.hasOwnProperty(key)) raw = opts[key];
+  if (raw === null || raw === undefined || raw === '') {
+    out.ok = true;
+    return out;
+  }
+  var n = _toFiniteNumber(raw);
+  if (n === null) {
+    out.message = label + ' must be a finite number.';
+    return out;
+  }
+  if (n < minValue || n > maxValue) {
+    out.message = label + ' must be in range [' + minValue + '..' + maxValue + '].';
+    return out;
+  }
+  out.ok = true;
+  out.value = n;
+  return out;
+}
+
+function _readPresetEnum (opts, key, fallbackValue, allowedValues, label) {
+  var out = { ok: false, value: fallbackValue, message: '' };
+  var raw = null;
+  if (opts && typeof opts === 'object' && opts.hasOwnProperty(key)) raw = opts[key];
+  if (raw === null || raw === undefined || raw === '') {
+    out.ok = true;
+    return out;
+  }
+  var v = String(raw).toLowerCase();
+  for (var i = 0; i < allowedValues.length; i++) {
+    if (v === allowedValues[i]) {
+      out.ok = true;
+      out.value = v;
+      return out;
+    }
+  }
+  out.message = label + ' must be one of: ' + allowedValues.join(', ') + '.';
+  return out;
+}
+
+function _setKeyAtTimeAndGetIndex (prop, time, value) {
+  try { prop.setValueAtTime(time, value); } catch (e) { return -1; }
+  try {
+    var idx = prop.nearestKeyIndex(time);
+    if (idx > 0 && Math.abs(prop.keyTime(idx) - time) < 0.0005) return idx;
+  } catch (e2) {}
+  return -1;
+}
+
+function _setKeyEaseBezier (prop, keyIndex, inInfluence, outInfluence) {
+  if (!(keyIndex >= 1)) return;
+  try {
+    prop.setInterpolationTypeAtKey(keyIndex, KeyframeInterpolationType.BEZIER, KeyframeInterpolationType.BEZIER);
+  } catch (eInterp) {}
+  try {
+    var inInf = (typeof inInfluence === 'number') ? inInfluence : 33.33;
+    var outInf = (typeof outInfluence === 'number') ? outInfluence : 33.33;
+    var dims = 1;
+    try {
+      if (prop.value instanceof Array && prop.value.length > 0) dims = prop.value.length;
+    } catch (eDim) {}
+    var easeIn = [];
+    var easeOut = [];
+    for (var d = 0; d < dims; d++) {
+      easeIn.push(new KeyframeEase(0, inInf));
+      easeOut.push(new KeyframeEase(0, outInf));
+    }
+    prop.setTemporalEaseAtKey(keyIndex, easeIn, easeOut);
+  } catch (eEase) {}
+}
+
+function _copyArrayValue (val) {
+  if (!(val instanceof Array)) return val;
+  var out = [];
+  for (var i = 0; i < val.length; i++) out.push(val[i]);
+  return out;
+}
+
+function _scaleValueByFactor (baseValue, factor) {
+  if (baseValue instanceof Array) {
+    var arr = [];
+    for (var i = 0; i < baseValue.length; i++) arr.push(baseValue[i] * factor);
+    return arr;
+  }
+  return baseValue * factor;
+}
+
+function _offsetPositionByDirection (basePosition, direction, amplitude) {
+  var p = _copyArrayValue(basePosition);
+  if (!(p instanceof Array) || p.length < 2) return null;
+  if (direction === 'left') p[0] = p[0] - amplitude;
+  else if (direction === 'right') p[0] = p[0] + amplitude;
+  else if (direction === 'up') p[1] = p[1] - amplitude;
+  else if (direction === 'down') p[1] = p[1] + amplitude;
+  return p;
+}
+
+function extensionsLlmChat_applyFadePreset (layerIndex, layerId, options) {
+  var result = {
+    ok: false,
+    message: '',
+    preset: 'fade',
+    layerName: '',
+    startTime: null,
+    endTime: null
+  };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message || 'No active composition.'; return resultToJson(result); }
+    var comp = ctx.comp;
+    var layer = _resolveLayer(comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found by layer_id/layer_index.'; return resultToJson(result); }
+
+    var recipe = _MOTION_PRESET_RECIPES.fade;
+    var durationRes = _readPresetNumber(options, 'duration', recipe.defaults.duration, recipe.limits.minDuration, recipe.limits.maxDuration, 'duration');
+    if (!durationRes.ok) { result.message = durationRes.message; return resultToJson(result); }
+    var delayRes = _readPresetNumber(options, 'delay', recipe.defaults.delay, recipe.limits.minDelay, recipe.limits.maxDelay, 'delay');
+    if (!delayRes.ok) { result.message = delayRes.message; return resultToJson(result); }
+    var directionRes = _readPresetEnum(options, 'direction', recipe.defaults.direction, ['in', 'out'], 'direction');
+    if (!directionRes.ok) { result.message = directionRes.message; return resultToJson(result); }
+
+    var opacityProp = _resolveProperty(layer, 'Transform>Opacity');
+    if (!(opacityProp instanceof Property)) {
+      result.message = 'Layer does not expose Transform>Opacity.';
+      return resultToJson(result);
+    }
+
+    var t0 = comp.time + delayRes.value;
+    var t1 = t0 + durationRes.value;
+    var startOpacity = (directionRes.value === 'in') ? 0 : 100;
+    var endOpacity = (directionRes.value === 'in') ? 100 : 0;
+
+    _beginToolUndo('Agent: Apply Fade Preset');
+    var k0 = _setKeyAtTimeAndGetIndex(opacityProp, t0, startOpacity);
+    var k1 = _setKeyAtTimeAndGetIndex(opacityProp, t1, endOpacity);
+    _setKeyEaseBezier(opacityProp, k0, 33.33, recipe.easing.startOutInfluence);
+    _setKeyEaseBezier(opacityProp, k1, recipe.easing.endInInfluence, 33.33);
+    _endToolUndo();
+
+    result.ok = true;
+    result.layerName = layer.name;
+    result.startTime = t0;
+    result.endTime = t1;
+    result.message =
+      'Applied fade ' + directionRes.value + ' preset to "' + layer.name + '" (duration=' + durationRes.value + 's, delay=' + delayRes.value + 's).';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'applyFadePreset error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+function extensionsLlmChat_applyPopPreset (layerIndex, layerId, options) {
+  var result = {
+    ok: false,
+    message: '',
+    preset: 'pop',
+    layerName: '',
+    startTime: null,
+    midTime: null,
+    endTime: null
+  };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message || 'No active composition.'; return resultToJson(result); }
+    var comp = ctx.comp;
+    var layer = _resolveLayer(comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found by layer_id/layer_index.'; return resultToJson(result); }
+
+    var recipe = _MOTION_PRESET_RECIPES.pop;
+    var durationRes = _readPresetNumber(options, 'duration', recipe.defaults.duration, recipe.limits.minDuration, recipe.limits.maxDuration, 'duration');
+    if (!durationRes.ok) { result.message = durationRes.message; return resultToJson(result); }
+    var delayRes = _readPresetNumber(options, 'delay', recipe.defaults.delay, recipe.limits.minDelay, recipe.limits.maxDelay, 'delay');
+    if (!delayRes.ok) { result.message = delayRes.message; return resultToJson(result); }
+    var directionRes = _readPresetEnum(options, 'direction', recipe.defaults.direction, ['in', 'out'], 'direction');
+    if (!directionRes.ok) { result.message = directionRes.message; return resultToJson(result); }
+    var intensityRes = _readPresetNumber(options, 'intensity', recipe.defaults.intensity, recipe.limits.minIntensity, recipe.limits.maxIntensity, 'intensity');
+    if (!intensityRes.ok) { result.message = intensityRes.message; return resultToJson(result); }
+
+    var scaleProp = _resolveProperty(layer, 'Transform>Scale');
+    var opacityProp = _resolveProperty(layer, 'Transform>Opacity');
+    if (!(scaleProp instanceof Property)) { result.message = 'Layer does not expose Transform>Scale.'; return resultToJson(result); }
+    if (!(opacityProp instanceof Property)) { result.message = 'Layer does not expose Transform>Opacity.'; return resultToJson(result); }
+
+    var baseScale = _copyArrayValue(scaleProp.value);
+    var t0 = comp.time + delayRes.value;
+    var tMid = t0 + (durationRes.value * recipe.timing.midRatio);
+    var t1 = t0 + durationRes.value;
+    var intensity = intensityRes.value;
+    var startScale = null;
+    var midScale = null;
+    var endScale = null;
+    var o0 = 100;
+    var oMid = 100;
+    var o1 = 100;
+
+    if (directionRes.value === 'in') {
+      startScale = _scaleValueByFactor(baseScale, 1 - (recipe.factors.inStartBase * intensity));
+      midScale = _scaleValueByFactor(baseScale, 1 + (recipe.factors.inOvershootBase * intensity));
+      endScale = _copyArrayValue(baseScale);
+      o0 = 0;
+      oMid = 100;
+      o1 = 100;
+    } else {
+      startScale = _copyArrayValue(baseScale);
+      midScale = _scaleValueByFactor(baseScale, 1 + (recipe.factors.outOvershootBase * intensity));
+      endScale = _scaleValueByFactor(baseScale, 1 - (recipe.factors.outEndShrinkBase * intensity));
+      o0 = 100;
+      oMid = 100;
+      o1 = 0;
+    }
+
+    _beginToolUndo('Agent: Apply Pop Preset');
+    var s0 = _setKeyAtTimeAndGetIndex(scaleProp, t0, startScale);
+    var sMid = _setKeyAtTimeAndGetIndex(scaleProp, tMid, midScale);
+    var s1 = _setKeyAtTimeAndGetIndex(scaleProp, t1, endScale);
+    _setKeyEaseBezier(scaleProp, s0, 33.33, recipe.easing.firstOutInfluence);
+    _setKeyEaseBezier(scaleProp, sMid, recipe.easing.midInInfluence, recipe.easing.midOutInfluence);
+    _setKeyEaseBezier(scaleProp, s1, recipe.easing.endInInfluence, 33.33);
+
+    var oKey0 = _setKeyAtTimeAndGetIndex(opacityProp, t0, o0);
+    var oKeyMid = _setKeyAtTimeAndGetIndex(opacityProp, tMid, oMid);
+    var oKey1 = _setKeyAtTimeAndGetIndex(opacityProp, t1, o1);
+    _setKeyEaseBezier(opacityProp, oKey0, 33.33, recipe.easing.firstOutInfluence);
+    _setKeyEaseBezier(opacityProp, oKeyMid, recipe.easing.midInInfluence, recipe.easing.midOutInfluence);
+    _setKeyEaseBezier(opacityProp, oKey1, recipe.easing.endInInfluence, 33.33);
+    _endToolUndo();
+
+    result.ok = true;
+    result.layerName = layer.name;
+    result.startTime = t0;
+    result.midTime = tMid;
+    result.endTime = t1;
+    result.message =
+      'Applied pop ' + directionRes.value + ' preset to "' + layer.name + '" (duration=' + durationRes.value + 's, delay=' + delayRes.value + 's, intensity=' + intensity + ').';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'applyPopPreset error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+function extensionsLlmChat_applySlidePreset (layerIndex, layerId, options) {
+  var result = {
+    ok: false,
+    message: '',
+    preset: 'slide',
+    layerName: '',
+    startTime: null,
+    endTime: null
+  };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message || 'No active composition.'; return resultToJson(result); }
+    var comp = ctx.comp;
+    var layer = _resolveLayer(comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found by layer_id/layer_index.'; return resultToJson(result); }
+
+    var recipe = _MOTION_PRESET_RECIPES.slide;
+    var durationRes = _readPresetNumber(options, 'duration', recipe.defaults.duration, recipe.limits.minDuration, recipe.limits.maxDuration, 'duration');
+    if (!durationRes.ok) { result.message = durationRes.message; return resultToJson(result); }
+    var delayRes = _readPresetNumber(options, 'delay', recipe.defaults.delay, recipe.limits.minDelay, recipe.limits.maxDelay, 'delay');
+    if (!delayRes.ok) { result.message = delayRes.message; return resultToJson(result); }
+    var directionRes = _readPresetEnum(options, 'direction', recipe.defaults.direction, ['left', 'right', 'up', 'down'], 'direction');
+    if (!directionRes.ok) { result.message = directionRes.message; return resultToJson(result); }
+    var ampRes = _readPresetNumber(options, 'amplitude', recipe.defaults.amplitude, recipe.limits.minAmplitude, recipe.limits.maxAmplitude, 'amplitude');
+    if (!ampRes.ok) { result.message = ampRes.message; return resultToJson(result); }
+
+    var positionProp = _resolveProperty(layer, 'Transform>Position');
+    var opacityProp = _resolveProperty(layer, 'Transform>Opacity');
+    if (!(positionProp instanceof Property)) { result.message = 'Layer does not expose Transform>Position.'; return resultToJson(result); }
+    if (!(opacityProp instanceof Property)) { result.message = 'Layer does not expose Transform>Opacity.'; return resultToJson(result); }
+
+    var endPos = _copyArrayValue(positionProp.value);
+    var startPos = _offsetPositionByDirection(endPos, directionRes.value, ampRes.value);
+    if (!startPos) {
+      result.message = 'Transform>Position must be at least 2D for slide preset.';
+      return resultToJson(result);
+    }
+
+    var t0 = comp.time + delayRes.value;
+    var t1 = t0 + durationRes.value;
+
+    _beginToolUndo('Agent: Apply Slide Preset');
+    var p0 = _setKeyAtTimeAndGetIndex(positionProp, t0, startPos);
+    var p1 = _setKeyAtTimeAndGetIndex(positionProp, t1, endPos);
+    _setKeyEaseBezier(positionProp, p0, 33.33, recipe.easing.startOutInfluence);
+    _setKeyEaseBezier(positionProp, p1, recipe.easing.endInInfluence, 33.33);
+
+    var o0 = _setKeyAtTimeAndGetIndex(opacityProp, t0, 0);
+    var o1 = _setKeyAtTimeAndGetIndex(opacityProp, t1, 100);
+    _setKeyEaseBezier(opacityProp, o0, 33.33, recipe.easing.startOutInfluence);
+    _setKeyEaseBezier(opacityProp, o1, recipe.easing.endInInfluence, 33.33);
+    _endToolUndo();
+
+    result.ok = true;
+    result.layerName = layer.name;
+    result.startTime = t0;
+    result.endTime = t1;
+    result.message =
+      'Applied slide preset to "' + layer.name + '" from ' + directionRes.value + ' (duration=' + durationRes.value + 's, delay=' + delayRes.value + 's, amplitude=' + ampRes.value + ').';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'applySlidePreset error: ' + e.toString();
     return resultToJson(result);
   }
 }

@@ -26,4 +26,4 @@ All three are derived from the same corpus, filtered by role:
 
 ## Usage
 
-The extension loads `knowledge-base/index/corpusIndex.js` and uses it to get grounding snippets per projection. See **docs/local-knowledge-base.md** and **docs/grounding-policy-by-stage.md** (stub → archived pipeline-stage grounding).
+The extension loads `knowledge-base/index/corpusIndex.js` and uses it to get grounding snippets per projection. See **docs/local-knowledge-base.md** and archived stage-grounding policy **docs/legacy-archive-on-user-request-only/multi-pass-copilot-legacy/legacy-grounding-policy-by-pipeline-stage.md**.

@@ -34,6 +34,8 @@
     activeSessionId: null,
     nextSessionIndex: 1,
     isRequestInFlight: false,
+    isPresetInFlight: false,
+    selectedPresetKey: 'fade_in',
     currentAbortHandle: null,
     lastMutatingToolCount: 0,
     lastModelStatus: { status: 'unknown', label: 'model: unknown' }
@@ -49,13 +51,241 @@
     els.clearSessionBtn = document.getElementById('clear-session-btn')
     els.clearAllBtn = document.getElementById('clear-all-btn')
     els.chatTranscript = document.getElementById('chat-transcript')
+    els.activeCompNote = document.getElementById('active-comp-note')
     els.userInput = document.getElementById('user-input')
     els.modelSelect = document.getElementById('model-select')
     els.sendBtn = document.getElementById('send-btn')
     els.undoBtn = document.getElementById('undo-btn')
     els.cancelBtn = document.getElementById('cancel-btn')
+    els.presetDropdownBtn = document.getElementById('preset-dropdown-btn')
+    els.presetDropdownMenu = document.getElementById('preset-dropdown-menu')
+    els.presetDuration = document.getElementById('preset-duration')
+    els.presetDelay = document.getElementById('preset-delay')
+    els.presetStrength = document.getElementById('preset-strength')
+    els.presetStrengthLabel = document.getElementById('preset-strength-label')
+    els.applyPresetBtn = document.getElementById('apply-preset-btn')
     els.statusText = document.getElementById('status-text')
     els.modelStatus = document.getElementById('model-status')
+  }
+
+  var PRESET_LABELS = {
+    fade_in: 'Fade In',
+    fade_out: 'Fade Out',
+    pop_in: 'Pop In',
+    pop_out: 'Pop Out',
+    slide_left: 'Slide Left',
+    slide_right: 'Slide Right',
+    slide_up: 'Slide Up',
+    slide_down: 'Slide Down'
+  }
+
+  function closePresetDropdown () {
+    if (els.presetDropdownMenu) els.presetDropdownMenu.style.display = 'none'
+  }
+
+  function openPresetDropdown () {
+    if (els.presetDropdownMenu) els.presetDropdownMenu.style.display = ''
+  }
+
+  function togglePresetDropdown () {
+    if (!els.presetDropdownMenu) return
+    if (els.presetDropdownMenu.style.display === 'none') openPresetDropdown()
+    else closePresetDropdown()
+  }
+
+  function updatePresetDropdownUi () {
+    if (els.presetDropdownBtn) {
+      els.presetDropdownBtn.textContent = PRESET_LABELS[state.selectedPresetKey] || 'Preset'
+    }
+    if (els.presetDropdownMenu) {
+      var options = els.presetDropdownMenu.querySelectorAll('.preset-option-btn')
+      for (var i = 0; i < options.length; i++) {
+        var key = options[i].getAttribute('data-preset') || ''
+        if (key === state.selectedPresetKey) options[i].classList.add('active')
+        else options[i].classList.remove('active')
+      }
+    }
+  }
+
+  function updatePresetStrengthUi () {
+    if (!els.presetStrength) return
+    var key = String(state.selectedPresetKey || '')
+    var isFade = key.indexOf('fade_') === 0
+    var isPop = key.indexOf('pop_') === 0
+    var isSlide = key.indexOf('slide_') === 0
+    if (isFade) {
+      els.presetStrength.disabled = true
+      els.presetStrength.value = ''
+      els.presetStrength.title = 'Not used for fade preset'
+      if (els.presetStrengthLabel) els.presetStrengthLabel.textContent = 'Strength'
+      return
+    }
+    els.presetStrength.disabled = false
+    if (isPop) {
+      if (!els.presetStrength.value) els.presetStrength.value = '1'
+      els.presetStrength.title = 'Intensity (0.2..1.5) for pop preset'
+      if (els.presetStrengthLabel) els.presetStrengthLabel.textContent = 'Intensity'
+      return
+    }
+    if (isSlide) {
+      if (!els.presetStrength.value) els.presetStrength.value = '120'
+      els.presetStrength.title = 'Amplitude in px (8..2000) for slide preset'
+      if (els.presetStrengthLabel) els.presetStrengthLabel.textContent = 'Amplitude (px)'
+    }
+  }
+
+  function setPresetUiBusy (busy) {
+    state.isPresetInFlight = !!busy
+    if (busy) closePresetDropdown()
+    if (els.applyPresetBtn) els.applyPresetBtn.disabled = !!busy
+    if (els.presetDropdownBtn) els.presetDropdownBtn.disabled = !!busy
+    if (els.presetDuration) els.presetDuration.disabled = !!busy
+    if (els.presetDelay) els.presetDelay.disabled = !!busy
+    if (els.presetStrength && !els.presetStrength.disabled) els.presetStrength.disabled = !!busy
+    if (!busy) updatePresetStrengthUi()
+  }
+
+  function parsePresetNumberInput (el) {
+    if (!el) return null
+    var raw = String(el.value || '').trim()
+    if (!raw.length) return null
+    var n = parseFloat(raw)
+    if (!isFinite(n)) return null
+    return n
+  }
+
+  function buildPresetCallFromUi () {
+    var key = String(state.selectedPresetKey || '')
+    var duration = parsePresetNumberInput(els.presetDuration)
+    var delay = parsePresetNumberInput(els.presetDelay)
+    var strength = parsePresetNumberInput(els.presetStrength)
+    var payload = {}
+    if (duration !== null) payload.duration = duration
+    if (delay !== null) payload.delay = delay
+
+    if (key === 'fade_in') {
+      payload.direction = 'in'
+      return { toolName: 'apply_fade_preset', args: payload }
+    }
+    if (key === 'fade_out') {
+      payload.direction = 'out'
+      return { toolName: 'apply_fade_preset', args: payload }
+    }
+    if (key === 'pop_in') {
+      payload.direction = 'in'
+      if (strength !== null) payload.intensity = strength
+      return { toolName: 'apply_pop_preset', args: payload }
+    }
+    if (key === 'pop_out') {
+      payload.direction = 'out'
+      if (strength !== null) payload.intensity = strength
+      return { toolName: 'apply_pop_preset', args: payload }
+    }
+    if (key === 'slide_left') {
+      payload.direction = 'left'
+      if (strength !== null) payload.amplitude = strength
+      return { toolName: 'apply_slide_preset', args: payload }
+    }
+    if (key === 'slide_right') {
+      payload.direction = 'right'
+      if (strength !== null) payload.amplitude = strength
+      return { toolName: 'apply_slide_preset', args: payload }
+    }
+    if (key === 'slide_up') {
+      payload.direction = 'up'
+      if (strength !== null) payload.amplitude = strength
+      return { toolName: 'apply_slide_preset', args: payload }
+    }
+    if (key === 'slide_down') {
+      payload.direction = 'down'
+      if (strength !== null) payload.amplitude = strength
+      return { toolName: 'apply_slide_preset', args: payload }
+    }
+    return null
+  }
+
+  function pushSystemMessageToActiveSession (text) {
+    var session = getActiveSession()
+    if (!session) return
+    session.messages.push({ role: 'system', text: text })
+    session.updatedAt = Date.now()
+    renderTranscript()
+    persistState()
+  }
+
+  function handleApplyPresetFromUi () {
+    if (state.isRequestInFlight || state.isPresetInFlight) {
+      setStatus('Busy: wait for current operation to finish')
+      return
+    }
+    if (!window.HOST_BRIDGE || typeof window.HOST_BRIDGE.executeToolCall !== 'function') {
+      setStatus('Preset apply unavailable: host bridge not ready')
+      return
+    }
+
+    var presetCall = buildPresetCallFromUi()
+    if (!presetCall) {
+      setStatus('Preset apply unavailable: invalid preset selection')
+      return
+    }
+
+    setPresetUiBusy(true)
+    setStatus('Applying preset...')
+
+    window.HOST_BRIDGE.executeToolCall('get_host_context', {})
+      .then(function (ctx) {
+        var selected = (ctx && ctx.selectedLayers && ctx.selectedLayers.length) ? ctx.selectedLayers : []
+        if (selected.length === 0) {
+          throw new Error('Select at least one layer in the active composition.')
+        }
+
+        var applyQueue = Promise.resolve()
+        var okCount = 0
+        var errCount = 0
+        var firstErr = null
+        for (var i = 0; i < selected.length; i++) {
+          (function (layerInfo) {
+            applyQueue = applyQueue.then(function () {
+              var args = {}
+              for (var k in presetCall.args) args[k] = presetCall.args[k]
+              if (typeof layerInfo.id === 'number') args.layer_id = layerInfo.id
+              else args.layer_index = layerInfo.index
+              return window.HOST_BRIDGE.executeToolCall(presetCall.toolName, args)
+                .then(function (res) {
+                  if (res && res.ok) okCount++
+                  else {
+                    errCount++
+                    if (!firstErr) firstErr = (res && res.message) ? res.message : 'Unknown host error'
+                  }
+                })
+                .catch(function (err) {
+                  errCount++
+                  if (!firstErr) firstErr = err.message || String(err)
+                })
+            })
+          })(selected[i])
+        }
+
+        return applyQueue.then(function () {
+          state.lastMutatingToolCount = okCount
+          if (errCount === 0) {
+            setStatus('Preset applied to ' + okCount + ' layer(s)')
+            pushSystemMessageToActiveSession('Preset "' + presetCall.toolName + '" applied to ' + okCount + ' selected layer(s).')
+          } else {
+            setStatus('Preset applied with errors: ' + okCount + ' ok, ' + errCount + ' failed')
+            pushSystemMessageToActiveSession('Preset "' + presetCall.toolName + '" finished: ' + okCount + ' ok, ' + errCount + ' failed. ' + (firstErr || ''))
+          }
+          return refreshActiveCompNote(true)
+        })
+      })
+      .catch(function (err) {
+        var msg = err && err.message ? err.message : String(err)
+        setStatus('Preset apply failed: ' + msg)
+        pushSystemMessageToActiveSession('Preset apply failed: ' + msg)
+      })
+      .then(function () {
+        setPresetUiBusy(false)
+      })
   }
 
   function normalizeModelId (modelId) {
@@ -643,6 +873,7 @@
       state.currentAbortHandle = null
       if (els.sendBtn) els.sendBtn.disabled = false
       if (els.cancelBtn) els.cancelBtn.style.display = 'none'
+      refreshActiveCompNote(true)
     })
   }
 
@@ -706,6 +937,28 @@
     renderSessions()
   }
 
+  function refreshActiveCompNote (silent) {
+    if (!els.activeCompNote) return
+    if (!window.HOST_BRIDGE || typeof window.HOST_BRIDGE.evalHostFunction !== 'function') {
+      els.activeCompNote.textContent = 'Active comp: unavailable.'
+      return
+    }
+    return window.HOST_BRIDGE.evalHostFunction('extensionsLlmChat_getActiveCompNote()')
+      .then(function (ctx) {
+        if (ctx && ctx.ok && ctx.compName) {
+          els.activeCompNote.textContent =
+            'Active composition: "' + ctx.compName + '". Changes are applied to this composition.'
+          return
+        }
+        var msg = (ctx && ctx.message) ? ctx.message : 'No active composition.'
+        els.activeCompNote.textContent = 'Active composition: unavailable. ' + msg
+      })
+      .catch(function (err) {
+        els.activeCompNote.textContent = 'Active composition: unavailable.'
+        if (!silent) setStatus('Active comp note unavailable: ' + (err.message || String(err)))
+      })
+  }
+
   // ── Event binding ──────────────────────────────────────────────────────
   function bindEvents () {
     if (els.newSessionBtn) els.newSessionBtn.addEventListener('click', createSession)
@@ -724,6 +977,35 @@
       }
     })
     if (els.modelSelect) els.modelSelect.addEventListener('change', handleModelChange)
+    if (els.presetDropdownBtn) {
+      els.presetDropdownBtn.addEventListener('click', function (e) {
+        e.preventDefault()
+        e.stopPropagation()
+        if (!state.isPresetInFlight) togglePresetDropdown()
+      })
+    }
+    if (els.presetDropdownMenu) {
+      var optionButtons = els.presetDropdownMenu.querySelectorAll('.preset-option-btn')
+      for (var pi = 0; pi < optionButtons.length; pi++) {
+        optionButtons[pi].addEventListener('click', function (e) {
+          e.preventDefault()
+          e.stopPropagation()
+          var key = this.getAttribute('data-preset') || ''
+          if (!key) return
+          state.selectedPresetKey = key
+          updatePresetDropdownUi()
+          updatePresetStrengthUi()
+          closePresetDropdown()
+        })
+      }
+    }
+    document.addEventListener('click', function (e) {
+      if (!els.presetDropdownMenu || !els.presetDropdownBtn) return
+      var menu = els.presetDropdownMenu
+      var btn = els.presetDropdownBtn
+      if (!menu.contains(e.target) && !btn.contains(e.target)) closePresetDropdown()
+    })
+    if (els.applyPresetBtn) els.applyPresetBtn.addEventListener('click', handleApplyPresetFromUi)
 
     // Enter to send (Shift+Enter for newline).
     if (els.userInput) {
@@ -738,6 +1020,7 @@
     // Persist on page unload.
     window.addEventListener('beforeunload', persistState)
     window.addEventListener('pagehide', persistState)
+    window.addEventListener('focus', function () { refreshActiveCompNote(true) })
   }
 
   // ── Init ───────────────────────────────────────────────────────────────
@@ -766,7 +1049,10 @@
     }
 
     bindEvents()
+    updatePresetDropdownUi()
+    updatePresetStrengthUi()
     setStatus('Ready')
+    refreshActiveCompNote(true)
 
     // Check Cloud.ru connectivity.
     var secrets = (window.EXTENSIONS_LLM_CHAT_SECRETS) || {}

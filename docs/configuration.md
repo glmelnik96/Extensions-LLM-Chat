@@ -32,7 +32,7 @@ The panel uses a single config object exposed as `window.EXTENSIONS_LLM_CHAT_CON
 - If the config script fails to load or `EXTENSIONS_LLM_CHAT_CONFIG` is missing, the panel uses built-in defaults (empty apiKey, same URLs/models). Status will indicate that configuration is missing.
 - If `apiKey` is empty, the panel does not send requests and shows a clear message directing the user to config (see **config/README.md**).
 - Sessions, target selection, and UI remain usable when config is missing; only Send and model calls are blocked.
-- **Screen capture** depends on CEP Node (`manifest.xml`) and macOS **Screen Recording** for After Effects, not on `apiKey`. If Node is unavailable, capture stays disabled with a tooltip. Preview capture may also need **Automation** for System Events. See [dev-artifacts/engineering-notes.md](dev-artifacts/engineering-notes.md).
+- **Screen capture** depends on CEP Node (`manifest.xml`) and macOS **Screen Recording** for After Effects, not on `apiKey`. If Node is unavailable, capture stays disabled with a tooltip. Preview capture may also need **Automation** for System Events. Runtime behavior and limits are documented in [capabilities-and-roadmap.md](capabilities-and-roadmap.md) and [final-architecture.md](final-architecture.md).
 
 ## CEP deployment
 

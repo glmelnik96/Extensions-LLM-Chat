@@ -36,7 +36,7 @@ Summary of production hardening, diagnostics, safety cleanup, QA readiness, and 
 - **docs/troubleshooting.md** — Common issues and fixes.
 - **docs/release-checklist.md** — Pre-release and deployment checklist.
 - **docs/final-disposition-policy.md** — When latestExtractedExpression and Apply are set; blocked vs runtime failure.
-- **docs/chat-publication-policy.md** — Final-only chat output.
+- Chat publication behavior for the shipping agent is documented in **docs/final-architecture.md** (single assistant result with tool cards).
 - **docs/host-bridge-notes.md** — Where Apply enters the host; conditions for Apply.
 - **docs/final-architecture.md** — Config, model roles, knowledge-base, prompt-library, multi-pass, final-only output, manual Apply, diagnostics, repo validation.
 - **docs/runtime-diagnostics.md** — Diagnostics API and error categories.

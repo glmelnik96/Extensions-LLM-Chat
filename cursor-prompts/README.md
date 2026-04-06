@@ -17,5 +17,5 @@
 
 ## Как использовать (legacy workflow)
 
-1. Прочитать **[docs/legacy-archive-on-user-request-only/analysis-notes/analysis-repo-snapshot-pre-multipass.md](../docs/legacy-archive-on-user-request-only/analysis-notes/analysis-repo-snapshot-pre-multipass.md)**, **docs/final-target-architecture.md** (stub), план этапов и **[analysis-risk-register-pipeline-implementation.md](../docs/legacy-archive-on-user-request-only/analysis-notes/analysis-risk-register-pipeline-implementation.md)**.
+1. Прочитать **[docs/legacy-archive-on-user-request-only/analysis-notes/analysis-repo-snapshot-pre-multipass.md](../docs/legacy-archive-on-user-request-only/analysis-notes/analysis-repo-snapshot-pre-multipass.md)**, **[legacy-multi-pass-target-architecture.md](../docs/legacy-archive-on-user-request-only/multi-pass-copilot-legacy/legacy-multi-pass-target-architecture.md)**, план этапов и **[analysis-risk-register-pipeline-implementation.md](../docs/legacy-archive-on-user-request-only/analysis-notes/analysis-risk-register-pipeline-implementation.md)**.
 2. В диалог Cursor подставить **shared-project-context.md** и соответствующий **stage-*-build.md**.

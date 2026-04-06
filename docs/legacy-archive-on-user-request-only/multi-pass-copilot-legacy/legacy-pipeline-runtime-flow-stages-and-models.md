@@ -33,7 +33,7 @@ flowchart TD
   G -.->|HTTP fail| G
 ```
 
-**Grounding** (before **generate**): system prompt → optional **`[AE_HOST_STATE]`** → docs KB context → optional **`[FRAME_ANALYSIS]`** (session) → optional **`[UI_ANALYSIS]`** (if checkbox) → target line → conversation. See **[../../vision-grounding.md](../../vision-grounding.md)**.
+**Grounding** (before **generate**): system prompt → optional **`[AE_HOST_STATE]`** → docs KB context → optional **`[FRAME_ANALYSIS]`** (session) → optional **`[UI_ANALYSIS]`** (if checkbox) → target line → conversation. For current runtime references, see **[../../final-architecture.md](../../final-architecture.md)** and **[../../capabilities-and-roadmap.md](../../capabilities-and-roadmap.md)**.
 
 ---
 

@@ -23,7 +23,7 @@ Earlier versions documented:
 - **Apply Expression** → **handleApplyExpression** → **latestExtractedExpression** → **extensionsLlmChat_applyExpressionToTarget** (or similar).
 - **@** target refresh for layer/property dropdowns.
 
-That flow is **not** present in the current **main.js**. ExtendScript in **host/index.jsx** may still contain helpers used only by specific tools (e.g. **apply_expression** as a named agent tool). If you reintroduce manual Apply, see **docs/manual-apply-policy.md** (stub → archived **legacy-manual-apply-expression-policy.md**) and wire UI accordingly.
+That flow is **not** present in the current **main.js**. ExtendScript in **host/index.jsx** may still contain helpers used only by specific tools (e.g. **apply_expression** as a named agent tool). If you reintroduce manual Apply, see **[legacy-manual-apply-expression-policy.md](legacy-archive-on-user-request-only/multi-pass-copilot-legacy/legacy-manual-apply-expression-policy.md)** and wire UI accordingly.
 
 ---
 

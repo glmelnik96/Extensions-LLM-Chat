@@ -41,7 +41,7 @@ Internal details are in the browser console (diagnostics layer); user-facing tex
 
 ## Agent run failed or tool errors
 
-- **Cloud / Ollama**: Same as "Error contacting cloud model" above; check key, base URL, and model id.
+- **Cloud**: Same as "Error contacting cloud model" above; check key, base URL, and model id.
 - **Tool / host error**: Read the **tool call** card in the chat (args + result). For expression errors, fix the prompt or layer index; see [capabilities-and-roadmap.md](capabilities-and-roadmap.md) (limitations).
 - **Debug**: `window.EXTENSIONS_LLM_CHAT_DIAGNOSTICS.setDebug(true)` in the CEP console — see [runtime-diagnostics.md](runtime-diagnostics.md).
 
@@ -51,19 +51,27 @@ Internal details are in the browser console (diagnostics layer); user-facing tex
 
 If you maintain an old build with generator → validate → repair:
 
-- **Rules / validation / repair** failures and **latestExtractedExpression** rules are documented only in the archive — stubs: [final-result-policy.md](final-result-policy.md), [final-disposition-policy.md](final-disposition-policy.md). Console `[pipeline]` stage hints apply to that flow.
+- **Rules / validation / repair** failures and **latestExtractedExpression** rules are documented only in the archive: [legacy-final-result-publication-policy.md](legacy-archive-on-user-request-only/multi-pass-copilot-legacy/legacy-final-result-publication-policy.md), [legacy-final-disposition-and-apply-policy.md](legacy-archive-on-user-request-only/multi-pass-copilot-legacy/legacy-final-disposition-and-apply-policy.md). Console `[pipeline]` stage hints apply to that flow.
 
 ---
 
 ## Legacy: Apply button stays disabled
 
-The shipping **AE Motion Agent** UI has no separate **Apply Expression** button; expressions are applied via the **apply_expression** tool when the model chooses it. For historical Apply + `latestExtractedExpression` behavior see [manual-apply-policy.md](manual-apply-policy.md) and [final-result-policy.md](final-result-policy.md) (stubs → archive).
+The shipping **AE Motion Agent** UI has no separate **Apply Expression** button; expressions are applied via the **apply_expression** tool when the model chooses it. For historical Apply + `latestExtractedExpression` behavior see [legacy-manual-apply-expression-policy.md](legacy-archive-on-user-request-only/multi-pass-copilot-legacy/legacy-manual-apply-expression-policy.md) and [legacy-final-result-publication-policy.md](legacy-archive-on-user-request-only/multi-pass-copilot-legacy/legacy-final-result-publication-policy.md).
 
 ---
 
 ## Legacy: Apply clicked but host reports error
 
 Applies to old UI with manual Apply: invalid target, unsupported property, host script — see [host-bridge-notes.md](host-bridge-notes.md) and **host/index.jsx**.
+
+---
+
+## Preset dropdown does not open / Apply preset fails
+
+- **Dropdown UI**: The preset list is a custom panel dropdown. If clicks do nothing, reload the CEP panel and verify no runtime errors in DevTools.
+- **No selected layers**: `Apply preset` requires at least one selected layer in the active composition.
+- **Range errors**: Duration, delay, intensity/amplitude are validated in host tools. If out of range, host returns `ok:false` with a range message.
 
 ---
 

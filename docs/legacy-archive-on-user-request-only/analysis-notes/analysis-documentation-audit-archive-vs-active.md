@@ -17,7 +17,7 @@
 | docs/pipeline-runtime-flow.md | ACTIVE | Pipeline stages and models. | final-result-policy, manual-apply-policy |
 | docs/final-disposition-policy.md | ACTIVE | Disposition and Apply. | manual-apply-policy, chat-publication-policy, final-result-policy |
 | docs/final-result-policy.md | ACTIVE | Result publication. | pipeline-runtime-flow |
-| docs/chat-publication-policy.md | ACTIVE | Final-only chat. | final-disposition-policy, manual-apply-policy |
+| docs/final-architecture.md | ACTIVE | Current chat publication behavior in agent loop. | runtime-state-schema |
 | docs/prompt-library-architecture.md | ACTIVE | Prompt library runtime. | None |
 | docs/local-knowledge-base.md | ACTIVE | KB structure. | grounding-policy-by-stage |
 | docs/grounding-policy-by-stage.md | ACTIVE | Stage grounding. | None |
@@ -54,7 +54,7 @@ docs/
   pipeline-runtime-flow.md
   final-disposition-policy.md
   final-result-policy.md
-  chat-publication-policy.md
+  final-architecture.md
   prompt-library-architecture.md
   local-knowledge-base.md
   grounding-policy-by-stage.md

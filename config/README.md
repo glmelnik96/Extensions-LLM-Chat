@@ -32,4 +32,4 @@ Do not commit `secrets.local.js` or `runtime-config.js` if they contain secrets 
 
 Fields are documented in `example.config.js` and **docs/configuration.md**.
 
-**CEP Node:** Screen capture needs Node in the manifest and Screen Recording for After Effects. See **docs/north-star-vision-agent.md**.
+**CEP Node:** Screen capture needs Node in the manifest and Screen Recording for After Effects. See **docs/dev-artifacts/engineering-notes.md**.

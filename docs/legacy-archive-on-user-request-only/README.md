@@ -15,6 +15,7 @@
 | [planning/](planning/) | Staged implementation plan, pipeline prep notes, deployment/packaging notes. |
 | [analysis-notes/](analysis-notes/) | Audits, risk register, gap reports, consolidation plans. |
 | [qa-testing/](qa-testing/) | Full Copilot-era test plan, motion-agent manual checklist v2, compact pass/fail matrix. |
+| [meta/](meta/) | Archive maintenance notes (for example, removed active redirects and mapping history). |
 
 ---
 
@@ -29,4 +30,4 @@
 
 ## Superseded index
 
-The old `docs/archive/README.md` was moved to [superseded-old-archive-index.md](superseded-old-archive-index.md) for historical reference; use this README as the canonical archive map.
+Older archive indices with broken links were removed during cleanup. Use this README as the canonical archive map.

@@ -282,6 +282,38 @@
         }
         call = 'extensionsLlmChat_applyExpressionBatch(' + toESLiteral(batchTargets) + ')'
         break
+      case 'apply_fade_preset':
+        call = 'extensionsLlmChat_applyFadePreset(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral({
+            duration: args.duration,
+            delay: args.delay,
+            direction: args.direction
+          }) + ')'
+        break
+      case 'apply_pop_preset':
+        call = 'extensionsLlmChat_applyPopPreset(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral({
+            duration: args.duration,
+            delay: args.delay,
+            direction: args.direction,
+            intensity: args.intensity
+          }) + ')'
+        break
+      case 'apply_slide_preset':
+        call = 'extensionsLlmChat_applySlidePreset(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral({
+            duration: args.duration,
+            delay: args.delay,
+            direction: args.direction,
+            amplitude: args.amplitude
+          }) + ')'
+        break
 
       // Effect tools
       case 'add_effect':

@@ -34,7 +34,7 @@
 
 ## Целевая архитектура (после этапов 2–4)
 
-- Оркестрация в main.js; один последовательный async pipeline: generate → validate-1 → validate-2 → при необходимости repair. gpt-oss-120b — generator + validators; Qwen — repair. Пользователь видит только финальный результат в чате; стадии — в UI status. Apply только manual. Локальная knowledge base с тремя проекциями (generator / validator / repair). См. **docs/final-target-architecture.md** (stub) и **docs/legacy-archive-on-user-request-only/planning/plan-staged-implementation-stages-2-through-4.md**.
+- Исторический контекст multi-pass pipeline (generate → validate → repair) см. в архиве: **docs/legacy-archive-on-user-request-only/multi-pass-copilot-legacy/legacy-multi-pass-target-architecture.md** и **docs/legacy-archive-on-user-request-only/planning/plan-staged-implementation-stages-2-through-4.md**. Текущая shipping-архитектура агента описана в `docs/final-architecture.md`.
 
 ---
 

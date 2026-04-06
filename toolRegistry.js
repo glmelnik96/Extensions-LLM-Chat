@@ -76,7 +76,7 @@
             layer_index: { type: 'number', description: '1-based layer index' },
             layer_id: { type: 'number', description: 'Persistent layer ID' }
           },
-          required: ['layer_index']
+          required: []
         }
       }
     },
@@ -131,7 +131,7 @@
             layer_index: { type: 'number', description: '1-based layer index' },
             layer_id: { type: 'number', description: 'Persistent layer ID' }
           },
-          required: ['layer_index']
+          required: []
         }
       }
     },
@@ -146,7 +146,7 @@
             layer_index: { type: 'number', description: '1-based layer index' },
             layer_id: { type: 'number', description: 'Persistent layer ID' }
           },
-          required: ['layer_index']
+          required: []
         }
       }
     },
@@ -373,6 +373,62 @@
             }
           },
           required: ['targets']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'apply_fade_preset',
+        description: 'Apply deterministic fade motion preset on layer Opacity with fixed keyframe/easing recipe.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID (preferred over index)' },
+            duration: { type: 'number', description: 'Fade duration in seconds. Allowed range: 0.05..5.' },
+            delay: { type: 'number', description: 'Start delay in seconds from current comp time. Allowed range: 0..10.' },
+            direction: { type: 'string', enum: ['in', 'out'], description: 'Fade direction. in: 0→100 opacity, out: 100→0 opacity.' }
+          },
+          required: ['layer_index']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'apply_pop_preset',
+        description: 'Apply deterministic pop motion preset on Scale + Opacity with fixed keyframe/easing recipe.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID (preferred over index)' },
+            duration: { type: 'number', description: 'Pop duration in seconds. Allowed range: 0.08..5.' },
+            delay: { type: 'number', description: 'Start delay in seconds from current comp time. Allowed range: 0..10.' },
+            direction: { type: 'string', enum: ['in', 'out'], description: 'Pop direction. in: reveal, out: exit.' },
+            intensity: { type: 'number', description: 'Pop intensity multiplier. Allowed range: 0.2..1.5.' }
+          },
+          required: ['layer_index']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'apply_slide_preset',
+        description: 'Apply deterministic slide motion preset on Position + Opacity with fixed keyframe/easing recipe.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID (preferred over index)' },
+            duration: { type: 'number', description: 'Slide duration in seconds. Allowed range: 0.08..6.' },
+            delay: { type: 'number', description: 'Start delay in seconds from current comp time. Allowed range: 0..10.' },
+            direction: { type: 'string', enum: ['left', 'right', 'up', 'down'], description: 'Slide source direction.' },
+            amplitude: { type: 'number', description: 'Slide distance in pixels. Allowed range: 8..2000.' }
+          },
+          required: ['layer_index']
         }
       }
     },

@@ -15,7 +15,8 @@ Extensions LLM Chat — это CEP-панель для Adobe After Effects с **
 - Подключается к **Cloud.ru Foundation Models** (OpenAI-совместимый chat completions с tool calling) и при настройке — к **Ollama (локально)** для чата и сценариев с анализом изображений.
 - Сохраняет **сессии** чата, показывает **карточки вызовов инструментов** (аргументы и результаты), **markdown-рендеринг** ответов, **прогресс выполнения** (Step 2/15), кнопки **Undo** (batch-откат всех мутирующих действий агента) и **Stop** (отмена агента).
 
-Дополнительные детали архитектуры конфигурации, knowledge base, диагностики и политик ответов — в [docs/README.md](docs/README.md), [docs/final-architecture.md](docs/final-architecture.md) и связанных файлах.
+Быстрый вход в документацию: [docs/README.md](docs/README.md).  
+Дополнительные детали архитектуры, конфигурации, knowledge base и диагностики — в [docs/README.md](docs/README.md), [docs/final-architecture.md](docs/final-architecture.md) и связанных файлах.
 
 ---
 
@@ -81,10 +82,10 @@ Extensions LLM Chat — это CEP-панель для Adobe After Effects с **
 - `CSXS/manifest.xml` — манифест CEP для After Effects.
 - `index.html`, `styles.css` — разметка и стили панели.
 - `lib/CSInterface.js` — Adobe CSInterface (**нужно установить вручную**, см. ниже).
-- `lib/captureMacOS.js`, `lib/ollamaVision.js` — захват и локальный анализ изображений (macOS / Ollama), см. [docs/vision-grounding.md](docs/vision-grounding.md).
+- `lib/captureMacOS.js`, `lib/ollamaVision.js` — захват и локальный анализ изображений (macOS / Ollama), см. [docs/dev-artifacts/engineering-notes.md](docs/dev-artifacts/engineering-notes.md).
 - `config/` — ключи и runtime-конфиг ([config/README.md](config/README.md)).
 - `knowledge-base/`, `prompt-library/` — база знаний и промпты ([docs/local-knowledge-base.md](docs/local-knowledge-base.md), [docs/prompt-library-architecture.md](docs/prompt-library-architecture.md)).
-- `pipelineAssembly.js`, `systemPrompt.js` и др. — вспомогательные части legacy-пайплайна и контекста; детали в [docs/final-architecture.md](docs/final-architecture.md), [docs/pipeline-runtime-flow.md](docs/pipeline-runtime-flow.md).
+- `pipelineAssembly.js`, `systemPrompt.js` и др. — вспомогательные части legacy-пайплайна и контекста; детали в [docs/final-architecture.md](docs/final-architecture.md) и архиве [docs/legacy-archive-on-user-request-only/multi-pass-copilot-legacy/legacy-pipeline-runtime-flow-stages-and-models.md](docs/legacy-archive-on-user-request-only/multi-pass-copilot-legacy/legacy-pipeline-runtime-flow-stages-and-models.md).
 
 **Индекс документации:** [docs/README.md](docs/README.md).
 
@@ -158,10 +159,10 @@ Extensions LLM Chat — это CEP-панель для Adobe After Effects с **
 
 - **Capture full screen** и **Capture comp area** используют `screencapture` через **Node.js внутри CEP** (`CSXS/manifest.xml`: `--enable-nodejs`, `--mixed-context`). Для **comp area** может понадобиться доступ **Автоматизация** для System Events.
 - Нужно разрешение **Screen Recording** для **After Effects** (Системные настройки → Конфиденциальность и безопасность).
-- **Analyze UI (Ollama)** / **Analyze frame (Ollama):** локальное описание захвата или кадра композиции; текст может подмешиваться в контекст запроса. Подробности: [docs/vision-grounding.md](docs/vision-grounding.md).
+- **Analyze UI (Ollama)** / **Analyze frame (Ollama):** локальное описание захвата или кадра композиции; текст может подмешиваться в контекст запроса. Контекст и ограничения описаны в [docs/dev-artifacts/engineering-notes.md](docs/dev-artifacts/engineering-notes.md).
 - По [docs/capabilities-and-roadmap.md](docs/capabilities-and-roadmap.md): vision-сценарии пока **не интегрированы в основной цикл агента**; в roadmap запланировано переподключение (раздел *Vision-informed animation*).
 
-Дополнительно о направлении «vision + автоматизация»: [docs/north-star-vision-agent.md](docs/north-star-vision-agent.md).
+Дополнительно о направлении «vision + автоматизация»: [docs/dev-artifacts/engineering-notes.md](docs/dev-artifacts/engineering-notes.md).
 
 ---
 

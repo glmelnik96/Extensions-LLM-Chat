@@ -26,4 +26,4 @@ The extension uses a **local**, repository-resident knowledge base. No remote do
 
 ## Usage
 
-The panel loads `knowledge-base/index/corpusIndex.js` via a script tag. It does not fetch markdown files at runtime; the index embeds the text so the extension works without a build step. Maintainers can edit the .md files and sync content into `corpusIndex.js`, or edit `corpusIndex.js` directly. See **docs/grounding-policy-by-stage.md** (stub → archived **legacy-grounding-policy-by-pipeline-stage.md**) for how each **legacy pipeline** stage used the projections.
+The panel loads `knowledge-base/index/corpusIndex.js` via a script tag. It does not fetch markdown files at runtime; the index embeds the text so the extension works without a build step. Maintainers can edit the .md files and sync content into `corpusIndex.js`, or edit `corpusIndex.js` directly. For the legacy per-stage grounding strategy, see **[legacy-grounding-policy-by-pipeline-stage.md](legacy-archive-on-user-request-only/multi-pass-copilot-legacy/legacy-grounding-policy-by-pipeline-stage.md)**.

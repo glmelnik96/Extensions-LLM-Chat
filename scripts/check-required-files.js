@@ -27,8 +27,8 @@ const CONFIG_FILES = [
 const DOCS_FILES = [
   'docs/configuration.md',
   'docs/secret-handling.md',
-  'docs/manual-apply-policy.md',
-  'docs/final-result-policy.md',
+  'docs/final-architecture.md',
+  'docs/capabilities-and-roadmap.md',
 ]
 
 function check (label, list) {

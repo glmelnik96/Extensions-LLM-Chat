@@ -20,6 +20,7 @@
       </aside>
       <main class="chat-area">
         <div id="chat-transcript" class="chat-transcript"></div>
+        <div id="active-comp-note" class="active-comp-note">Active composition: loading...</div>
         <div id="status-line" class="status-line">
           <span id="status-text">Ready</span>
           <span id="model-status" class="model-status model-status-unknown">model: unknown</span>
@@ -32,6 +33,34 @@
             </optgroup>
           </select>
           <button id="undo-btn" class="btn btn-warning" title="Undo ALL agent actions from last request">Undo</button>
+        </div>
+        <div class="preset-bar">
+          <div class="preset-dropdown">
+            <button id="preset-dropdown-btn" class="btn preset-dropdown-btn" type="button" title="Deterministic motion preset">Fade In</button>
+            <div id="preset-dropdown-menu" class="preset-dropdown-menu" style="display:none">
+              <button type="button" class="preset-option-btn" data-preset="fade_in">Fade In</button>
+              <button type="button" class="preset-option-btn" data-preset="fade_out">Fade Out</button>
+              <button type="button" class="preset-option-btn" data-preset="pop_in">Pop In</button>
+              <button type="button" class="preset-option-btn" data-preset="pop_out">Pop Out</button>
+              <button type="button" class="preset-option-btn" data-preset="slide_left">Slide Left</button>
+              <button type="button" class="preset-option-btn" data-preset="slide_right">Slide Right</button>
+              <button type="button" class="preset-option-btn" data-preset="slide_up">Slide Up</button>
+              <button type="button" class="preset-option-btn" data-preset="slide_down">Slide Down</button>
+            </div>
+          </div>
+          <div class="preset-field">
+            <label class="preset-field-label" for="preset-duration">Duration (s)</label>
+            <input id="preset-duration" class="preset-input" type="number" step="0.01" min="0.05" value="0.45" title="Duration (seconds)" />
+          </div>
+          <div class="preset-field">
+            <label class="preset-field-label" for="preset-delay">Delay (s)</label>
+            <input id="preset-delay" class="preset-input" type="number" step="0.01" min="0" value="0" title="Delay (seconds)" />
+          </div>
+          <div class="preset-field">
+            <label id="preset-strength-label" class="preset-field-label" for="preset-strength">Strength</label>
+            <input id="preset-strength" class="preset-input" type="number" step="0.01" value="" title="Intensity for pop / amplitude(px) for slide" />
+          </div>
+          <button id="apply-preset-btn" class="btn btn-secondary" title="Apply selected preset to selected layers">Apply preset</button>
         </div>
         <div class="chat-input-container">
           <textarea

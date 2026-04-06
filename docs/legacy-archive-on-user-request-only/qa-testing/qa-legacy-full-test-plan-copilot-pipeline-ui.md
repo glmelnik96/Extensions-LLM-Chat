@@ -162,7 +162,7 @@ Step-by-step manual test plan for the CEP extension. Run in Adobe After Effects 
 
 31. **Grounding in cloud Send**
     - Set **lastFrameAnalysis** and/or UI analysis + **Include UI capture**; Send a prompt.
-    - **Expected**: Cloud request includes grounding blocks per **docs/vision-grounding.md** (verify via debug logs only — do not log API key).
+    - **Expected**: Cloud request includes grounding blocks consistent with current runtime documentation in **docs/final-architecture.md** (verify via debug logs only — do not log API key).
 
 32. **Diagnostics timing (optional)**
     - In CEP devtools: `EXTENSIONS_LLM_CHAT_DIAGNOSTICS.setDebug(true)`; run capture and Analyze UI/frame.

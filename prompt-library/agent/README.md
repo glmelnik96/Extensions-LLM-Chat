@@ -1,6 +1,6 @@
-# Agent prompts (Phase 7 — planned)
+# Agent prompts (reserved namespace)
 
-This folder is reserved for **future** agent-mode prompts when the panel implements a **tool loop** (see **docs/north-star-vision-agent.md** Phase 7 and **docs/final-architecture.md** “Copilot vs Agent”).
+This folder is reserved for a dedicated **agent prompt namespace**. The panel already uses a tool loop, but these prompts are not wired into the shipped runtime path yet (see **docs/final-architecture.md**).
 
 ## Not used today
 

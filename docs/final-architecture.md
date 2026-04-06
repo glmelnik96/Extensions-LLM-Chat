@@ -7,10 +7,10 @@ Practical overview of the extension as implemented today. **Authoritative list o
 ## Stack
 
 - **Panel**: HTML/CSS/JS CEP panel; **index.html**; runtime **main.js** (AE Motion Agent).
-- **Agent loop**: **agentToolLoop.js** (`runAgentLoop`), **agentSystemPrompt.js**, **toolRegistry.js** (27 OpenAI-style tools), **chatProvider.js** (Cloud.ru + Ollama), **hostBridge.js** (promise wrapper around **CSInterface.evalScript** + host script inlining).
+- **Agent loop**: **agentToolLoop.js** (`runAgentLoop`), **agentSystemPrompt.js**, **toolRegistry.js** (30 OpenAI-style tools, including deterministic motion presets for fade/pop/slide), **chatProvider.js** (Cloud.ru provider in active Send flow; Ollama path retained for compatibility modules), **hostBridge.js** (promise wrapper around **CSInterface.evalScript** + host script inlining).
 - **Host**: After Effects ExtendScript in **host/index.jsx** — invoked per tool call (not a single “apply only” entry).
 - **Cloud**: Configurable **baseUrl** (default Cloud.ru Foundation Models), **chat/completions** with **tool calling**.
-- **Local optional**: **Ollama** chat when `ollamaChatEnabled` is true in config (model id prefix `ollama/…` in the selector).
+- **Local optional**: **Ollama** integrations exist in code for vision/legacy compatibility, but Ollama chat is not exposed in the current model selector UI.
 - **Still loaded (non–Send-path)**: **pipelineAssembly.js**, **systemPrompt.js**, **aeDocsIndex.js**, **aeDocsRetrieval.js**, **aePromptContext.js**, **aeResponseValidation.js**, **lib/captureMacOS.js**, **lib/ollamaVision.js** — kept for compatibility or future wiring; the active **Send** path does not run the multi-pass expression pipeline or inject vision grounding into the agent loop (see **capabilities-and-roadmap.md**, *Vision-informed animation*).
 
 ---
@@ -29,6 +29,7 @@ Practical overview of the extension as implemented today. **Authoritative list o
 3. Each tool call is executed via **hostBridge** → ExtendScript in **host/index.jsx**; results are sent back to the model as **tool** messages.
 4. On success, **main.js** appends one **assistant** message with **text** and **toolCalls** (name, args, result, status) for the UI cards.
 5. **Undo** triggers After Effects undo (last host operations are grouped in ExtendScript as appropriate).
+6. **Preset toolbar** in **main.js** can directly call deterministic tools (`apply_fade_preset`, `apply_pop_preset`, `apply_slide_preset`) for selected layers.
 
 Session persistence (**localStorage** key **ae-motion-agent-state**): see **docs/runtime-state-schema.md**.
 
