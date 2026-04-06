@@ -349,6 +349,33 @@
         }
       }
     },
+    {
+      type: 'function',
+      function: {
+        name: 'apply_expression_batch',
+        description: 'Apply expressions to multiple properties in one host call. Use for multi-layer expression setup to reduce round trips. Returns per-target success/error details.',
+        parameters: {
+          type: 'object',
+          properties: {
+            targets: {
+              type: 'array',
+              description: 'Batch targets. Each item applies one expression to one property.',
+              items: {
+                type: 'object',
+                properties: {
+                  layer_index: { type: 'number', description: '1-based layer index' },
+                  layer_id: { type: 'number', description: 'Persistent layer ID (preferred when available)' },
+                  property_path: { type: 'string', description: 'Property path like "Transform>Position"' },
+                  expression: { type: 'string', description: 'Expression code to apply' }
+                },
+                required: ['property_path', 'expression']
+              }
+            }
+          },
+          required: ['targets']
+        }
+      }
+    },
 
     // ── Effect tools ───────────────────────────────────────────────────
     {

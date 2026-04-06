@@ -268,6 +268,20 @@
           toESLiteral(args.property_path) + ',' +
           toESLiteral(args.expression) + ')'
         break
+      case 'apply_expression_batch':
+        var batchTargets = []
+        var srcTargets = args.targets || []
+        for (var bi = 0; bi < srcTargets.length; bi++) {
+          var bt = srcTargets[bi] || {}
+          batchTargets.push({
+            layerIndex: bt.layer_index,
+            layerId: bt.layer_id || null,
+            propertyPath: bt.property_path,
+            expressionText: bt.expression
+          })
+        }
+        call = 'extensionsLlmChat_applyExpressionBatch(' + toESLiteral(batchTargets) + ')'
+        break
 
       // Effect tools
       case 'add_effect':

@@ -9,6 +9,8 @@
       /** Overridden by config/secrets.local.js when apiKey is set there. */
       apiKey: '',
       baseUrl: 'https://foundation-models.api.cloud.ru/v1',
+      /** Timeout for Cloud.ru chat requests (ms). */
+      cloudChatTimeoutMs: 120000,
       defaultModel: 'openai/gpt-oss-120b',
       fallbackModel: 'Qwen/Qwen3-Coder-Next',
 
@@ -52,7 +54,7 @@
       defaultProvider: 'cloudru',
 
       /** Maximum tool-call rounds per agent request. */
-      agentMaxSteps: 15,
+      agentMaxSteps: 150,
 
       /** Temperature for agent tool-use calls (lower = more precise tool usage). */
       agentTemperature: 0.3,

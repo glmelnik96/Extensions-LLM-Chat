@@ -5,7 +5,7 @@
 ### Agent Tool System
 The extension works as an AI agent that can inspect, create, and modify After Effects compositions through tool calls. The LLM plans a sequence of actions, executes them one by one via ExtendScript, and reports results.
 
-**Supported tools (26):**
+**Supported tools (27):**
 
 #### Read (inspection)
 | Tool | Description |
@@ -37,6 +37,7 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 | `set_keyframe_easing` | Change interpolation and easing on existing keyframes |
 | `set_property_value` | Set a static value on any property |
 | `apply_expression` | Apply an AE expression to any expressable property. Returns expression errors for agent self-correction. |
+| `apply_expression_batch` | Apply expressions to multiple layer properties in one tool call with per-target success/error details. |
 
 #### Effects
 | Tool | Description |

@@ -7,7 +7,7 @@ Practical overview of the extension as implemented today. **Authoritative list o
 ## Stack
 
 - **Panel**: HTML/CSS/JS CEP panel; **index.html**; runtime **main.js** (AE Motion Agent).
-- **Agent loop**: **agentToolLoop.js** (`runAgentLoop`), **agentSystemPrompt.js**, **toolRegistry.js** (~25 OpenAI-style tools), **chatProvider.js** (Cloud.ru + Ollama), **hostBridge.js** (promise wrapper around **CSInterface.evalScript** + host script inlining).
+- **Agent loop**: **agentToolLoop.js** (`runAgentLoop`), **agentSystemPrompt.js**, **toolRegistry.js** (27 OpenAI-style tools), **chatProvider.js** (Cloud.ru + Ollama), **hostBridge.js** (promise wrapper around **CSInterface.evalScript** + host script inlining).
 - **Host**: After Effects ExtendScript in **host/index.jsx** — invoked per tool call (not a single “apply only” entry).
 - **Cloud**: Configurable **baseUrl** (default Cloud.ru Foundation Models), **chat/completions** with **tool calling**.
 - **Local optional**: **Ollama** chat when `ollamaChatEnabled` is true in config (model id prefix `ollama/…` in the selector).
@@ -38,11 +38,12 @@ Session persistence (**localStorage** key **ae-motion-agent-state**): see **docs
 
 The repo still contains documentation and scripts for a historical **multi-pass expression pipeline** (prepare → generate → validate → rules → repair → finalize, **manual Apply Expression**, **latestExtractedExpression**). That pipeline is **not** invoked from the current **main.js** **Send** handler.
 
-| Topic | Legacy doc (full text under `legacy-archive-on-user-request-only/multi-pass-copilot-legacy/`) |
+| Topic | Legacy doc (full text under `legacy-archive-on-user-request-only/`) |
 |-------|------------|
-| Stage sequence | **docs/pipeline-runtime-flow.md** (stub → `legacy-pipeline-runtime-flow-stages-and-models.md`) |
-| Chat output rules | **docs/chat-publication-policy.md** (stub → `legacy-chat-publication-final-only-policy.md`) |
-| Disposition / Apply | **docs/final-disposition-policy.md**, **docs/manual-apply-policy.md** (stubs → legacy files there) |
+| Stage sequence | `multi-pass-copilot-legacy/legacy-pipeline-runtime-flow-stages-and-models.md` |
+| Chat output rules | `multi-pass-copilot-legacy/legacy-chat-publication-final-only-policy.md` |
+| Disposition / Apply | `multi-pass-copilot-legacy/legacy-final-disposition-and-apply-policy.md`, `multi-pass-copilot-legacy/legacy-manual-apply-expression-policy.md` |
+| Stage grounding policy | `multi-pass-copilot-legacy/legacy-grounding-policy-by-pipeline-stage.md` |
 | Target + Apply bridge | **docs/host-bridge-notes.md** (current agent path; legacy Apply note inside) |
 
 Use these when maintaining or restoring the old flow, not when describing the shipping agent UX.

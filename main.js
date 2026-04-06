@@ -26,6 +26,7 @@
   // ── Constants ──────────────────────────────────────────────────────────
   var STORAGE_KEY = 'ae-motion-agent-state'
   var DEFAULT_MODEL = 'cloudru/Qwen/Qwen3-Coder-Next'
+  var DEFAULT_AGENT_MAX_STEPS = 150
 
   // ── State ──────────────────────────────────────────────────────────────
   var state = {
@@ -55,7 +56,21 @@
     els.cancelBtn = document.getElementById('cancel-btn')
     els.statusText = document.getElementById('status-text')
     els.modelStatus = document.getElementById('model-status')
-    els.ollamaOptgroup = document.getElementById('ollama-optgroup')
+  }
+
+  function normalizeModelId (modelId) {
+    if (!modelId || typeof modelId !== 'string') return DEFAULT_MODEL
+    // Local Ollama chat is intentionally disabled in this runtime.
+    if (modelId.indexOf('ollama/') === 0) return DEFAULT_MODEL
+    return modelId
+  }
+
+  function getAgentMaxSteps (cfg) {
+    var raw = cfg && cfg.agentMaxSteps
+    if (typeof raw !== 'number' || !isFinite(raw)) return DEFAULT_AGENT_MAX_STEPS
+    var steps = Math.floor(raw)
+    if (steps < 1) return 1
+    return steps
   }
 
   // ── Persistence ────────────────────────────────────────────────────────
@@ -87,7 +102,12 @@
       if (!raw) return
       var data = JSON.parse(raw)
       if (data.sessions && data.sessions.length) {
-        state.sessions = data.sessions
+        state.sessions = data.sessions.map(function (s) {
+          var copy = {}
+          for (var k in s) copy[k] = s[k]
+          copy.model = normalizeModelId(copy.model)
+          return copy
+        })
         state.activeSessionId = data.activeSessionId || data.sessions[0].id
         state.nextSessionIndex = data.nextSessionIndex || data.sessions.length + 1
       }
@@ -104,7 +124,7 @@
       title: 'Chat ' + state.nextSessionIndex,
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      model: (els.modelSelect && els.modelSelect.value) || DEFAULT_MODEL,
+      model: normalizeModelId((els.modelSelect && els.modelSelect.value) || DEFAULT_MODEL),
       messages: []
     }
     state.nextSessionIndex++
@@ -130,13 +150,20 @@
     state.activeSessionId = id
     var session = getActiveSession()
     if (session && els.modelSelect) {
+      session.model = normalizeModelId(session.model)
       // Try to set the model select to the session's model.
       var opts = els.modelSelect.options
+      var matched = false
       for (var i = 0; i < opts.length; i++) {
         if (opts[i].value === session.model) {
           els.modelSelect.selectedIndex = i
+          matched = true
           break
         }
+      }
+      if (!matched && opts.length > 0) {
+        els.modelSelect.selectedIndex = 0
+        session.model = normalizeModelId(opts[0].value)
       }
     }
     renderSessions()
@@ -161,8 +188,7 @@
 
       var badge = document.createElement('span')
       badge.className = 'session-model-badge'
-      var parsed = window.CHAT_PROVIDER ? window.CHAT_PROVIDER.parseModelId(s.model) : { provider: '?', model: s.model }
-      badge.textContent = parsed.provider === 'ollama' ? 'local' : 'cloud'
+      badge.textContent = 'cloud'
       li.appendChild(badge)
 
       ;(function (sessionId) {
@@ -360,28 +386,6 @@
     state.lastModelStatus = { status: status, label: label }
   }
 
-  // ── Ollama model discovery ─────────────────────────────────────────────
-  function refreshOllamaModels () {
-    var cfg = (window.EXTENSIONS_LLM_CHAT_CONFIG) || {}
-    if (!cfg.ollamaChatEnabled) return
-
-    if (!window.CHAT_PROVIDER || !window.CHAT_PROVIDER.listOllamaModels) return
-    window.CHAT_PROVIDER.listOllamaModels().then(function (models) {
-      if (!els.ollamaOptgroup || !models.length) return
-      els.ollamaOptgroup.style.display = ''
-      els.ollamaOptgroup.innerHTML = ''
-      for (var i = 0; i < models.length; i++) {
-        var opt = document.createElement('option')
-        opt.value = 'ollama/' + models[i]
-        opt.textContent = models[i] + ' (local)'
-        els.ollamaOptgroup.appendChild(opt)
-      }
-    }).catch(function () {
-      // Ollama not available — hide the optgroup.
-      if (els.ollamaOptgroup) els.ollamaOptgroup.style.display = 'none'
-    })
-  }
-
   // ── Minimal markdown → HTML ─────────────────────────────────────────────
   /**
    * Convert a subset of markdown to HTML for rendering agent responses.
@@ -480,6 +484,7 @@
 
     var session = getActiveSession()
     if (!session) session = createSession()
+    session.model = normalizeModelId(session.model)
 
     // Push user message.
     session.messages.push({ role: 'user', text: text })
@@ -560,6 +565,7 @@
     // and reserve the rest for conversation. Default context budget: 12000 tokens for messages.
     var agentCfg = window.EXTENSIONS_LLM_CHAT_CONFIG || {}
     var maxConversationTokens = agentCfg.maxConversationTokens || 12000
+    var maxSteps = getAgentMaxSteps(agentCfg)
     apiMessages = pruneConversation(apiMessages, maxConversationTokens)
 
     var toolCallLog = []
@@ -569,15 +575,14 @@
       systemPrompt: window.AGENT_SYSTEM_PROMPT || '',
       messages: apiMessages,
       tools: (window.AGENT_TOOL_REGISTRY && window.AGENT_TOOL_REGISTRY.tools) || [],
-      maxSteps: agentCfg.agentMaxSteps || 15,
+      maxSteps: maxSteps,
       temperature: agentCfg.agentTemperature || 0.3,
       abortHandle: state.currentAbortHandle,
       onToolCall: function (tc) {
         updateThinkingWithToolCall(tc)
       },
       onStepComplete: function (stepIdx, results) {
-        var maxS = agentCfg.agentMaxSteps || 15
-        setStatus('Step ' + (stepIdx + 1) + '/' + maxS + ' (' + results.length + ' tool calls)')
+        setStatus('Step ' + (stepIdx + 1) + '/' + maxSteps + ' (' + results.length + ' tool calls)')
       }
     }).then(function (result) {
       removeThinking()
@@ -695,7 +700,7 @@
   function handleModelChange () {
     var session = getActiveSession()
     if (!session) return
-    session.model = els.modelSelect.value
+    session.model = normalizeModelId(els.modelSelect.value)
     session.updatedAt = Date.now()
     persistState()
     renderSessions()
@@ -712,6 +717,9 @@
     if (els.cancelBtn) els.cancelBtn.addEventListener('click', function () {
       if (state.currentAbortHandle) {
         state.currentAbortHandle.aborted = true
+        if (typeof state.currentAbortHandle.abort === 'function') {
+          try { state.currentAbortHandle.abort() } catch (_) {}
+        }
         setStatus('Cancelling...')
       }
     })
@@ -759,9 +767,6 @@
 
     bindEvents()
     setStatus('Ready')
-
-    // Discover Ollama models if enabled.
-    refreshOllamaModels()
 
     // Check Cloud.ru connectivity.
     var secrets = (window.EXTENSIONS_LLM_CHAT_SECRETS) || {}

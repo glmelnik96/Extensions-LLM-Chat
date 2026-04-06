@@ -785,35 +785,18 @@ function extensionsLlmChat_applyExpressionBatch (targets) {
         var layerId = typeof t.layerId === 'number' ? t.layerId : null;
         var layerIndex =
           typeof t.layerIndex === 'number' ? t.layerIndex : parseInt(t.layerIndex, 10);
+        if (!(layerIndex >= 1)) layerIndex = null;
 
-        if (!expressionText.length || !propertyPath.length || !(layerIndex >= 1)) {
-          itemResult.message = 'Target item is missing layer/property/expression.';
+        if (!expressionText.length || !propertyPath.length || (layerId === null && layerIndex === null)) {
+          itemResult.message = 'Target item is missing layer_id/layer_index, property_path, or expression.';
           result.failedCount++;
           result.results.push(itemResult);
           continue;
         }
 
-        var layer = null;
-        if (layerId !== null) {
-          for (var li = 1; li <= comp.numLayers; li++) {
-            var candidate = comp.layer(li);
-            if (candidate && candidate.id === layerId) {
-              layer = candidate;
-              break;
-            }
-          }
-        }
+        var layer = _resolveLayer(comp, layerIndex, layerId);
         if (!layer) {
-          if (layerIndex < 1 || layerIndex > comp.numLayers) {
-            itemResult.message = 'Layer index out of range.';
-            result.failedCount++;
-            result.results.push(itemResult);
-            continue;
-          }
-          layer = comp.layer(layerIndex);
-        }
-        if (!layer) {
-          itemResult.message = 'Layer not found.';
+          itemResult.message = 'Layer not found by layer_id/layer_index.';
           result.failedCount++;
           result.results.push(itemResult);
           continue;

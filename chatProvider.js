@@ -15,6 +15,31 @@
     return secrets.apiKey || cfg.apiKey || ''
   }
 
+  function ensureAbortHandleApi (abortHandle) {
+    if (!abortHandle) return null
+    if (!Array.isArray(abortHandle._listeners)) abortHandle._listeners = []
+    if (typeof abortHandle.onAbort !== 'function') {
+      abortHandle.onAbort = function (fn) {
+        if (typeof fn !== 'function') return function () {}
+        abortHandle._listeners.push(fn)
+        return function () {
+          var idx = abortHandle._listeners.indexOf(fn)
+          if (idx !== -1) abortHandle._listeners.splice(idx, 1)
+        }
+      }
+    }
+    if (typeof abortHandle.abort !== 'function') {
+      abortHandle.abort = function () {
+        abortHandle.aborted = true
+        var listeners = abortHandle._listeners.slice()
+        for (var i = 0; i < listeners.length; i++) {
+          try { listeners[i]() } catch (_) {}
+        }
+      }
+    }
+    return abortHandle
+  }
+
   /**
    * Parse a model string like "cloudru/Qwen/Qwen3-Coder-Next" or "ollama/qwen2.5:14b".
    * Returns { provider: 'cloudru'|'ollama', model: 'Qwen/Qwen3-Coder-Next' }
@@ -40,6 +65,8 @@
     var baseUrl = cfg.baseUrl || 'https://foundation-models.api.cloud.ru/v1'
     var url = baseUrl + '/chat/completions'
     var apiKey = getApiKey()
+    var timeoutMs = (cfg.cloudChatTimeoutMs) || 120000
+    var abortHandle = ensureAbortHandleApi(options && options.abortHandle)
 
     var body = {
       model: model,
@@ -55,26 +82,67 @@
       body.tool_choice = (options && options.tool_choice) || 'auto'
     }
 
-    return fetch(url, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        'Authorization': 'Bearer ' + apiKey
-      },
-      body: JSON.stringify(body)
-    }).then(function (res) {
-      if (!res.ok) {
-        return res.text().then(function (txt) {
-          throw new Error('Cloud.ru HTTP ' + res.status + ': ' + txt.substring(0, 500))
+    return new Promise(function (resolve, reject) {
+      var controller = new AbortController()
+      var didTimeout = false
+      var didUserAbort = false
+      var unsubscribeAbort = function () {}
+      var timer = setTimeout(function () {
+        didTimeout = true
+        controller.abort()
+      }, timeoutMs)
+
+      if (abortHandle) {
+        if (abortHandle.aborted) {
+          didUserAbort = true
+          clearTimeout(timer)
+          reject(new Error('Request cancelled by user.'))
+          return
+        }
+        unsubscribeAbort = abortHandle.onAbort(function () {
+          didUserAbort = true
+          controller.abort()
         })
       }
-      return res.json()
-    }).then(function (data) {
-      // Already in OpenAI format.
-      if (!data.choices || !data.choices.length) {
-        throw new Error('Cloud.ru: empty choices in response')
-      }
-      return data
+
+      fetch(url, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Authorization': 'Bearer ' + apiKey
+        },
+        body: JSON.stringify(body),
+        signal: controller.signal
+      }).then(function (res) {
+        if (!res.ok) {
+          return res.text().then(function (txt) {
+            throw new Error('Cloud.ru HTTP ' + res.status + ': ' + txt.substring(0, 500))
+          })
+        }
+        return res.json()
+      }).then(function (data) {
+        // Already in OpenAI format.
+        if (!data.choices || !data.choices.length) {
+          throw new Error('Cloud.ru: empty choices in response')
+        }
+        resolve(data)
+      }).catch(function (err) {
+        if (didTimeout) {
+          reject(new Error('Cloud.ru chat timeout after ' + timeoutMs + 'ms'))
+          return
+        }
+        if (didUserAbort || (abortHandle && abortHandle.aborted)) {
+          reject(new Error('Request cancelled by user.'))
+          return
+        }
+        reject(err)
+      }).then(function () {
+        clearTimeout(timer)
+        unsubscribeAbort()
+      }, function () {
+        clearTimeout(timer)
+        unsubscribeAbort()
+      })
     })
   }
 
@@ -84,6 +152,7 @@
     var cfg = getConfig()
     var baseUrl = cfg.ollamaBaseUrl || 'http://127.0.0.1:11434'
     var url = baseUrl + '/api/chat'
+    var abortHandle = ensureAbortHandleApi(options && options.abortHandle)
 
     var body = {
       model: model,
@@ -103,10 +172,25 @@
 
     return new Promise(function (resolve, reject) {
       var controller = new AbortController()
+      var didTimeout = false
+      var didUserAbort = false
+      var unsubscribeAbort = function () {}
       var timer = setTimeout(function () {
+        didTimeout = true
         controller.abort()
-        reject(new Error('Ollama chat timeout after ' + timeoutMs + 'ms'))
       }, timeoutMs)
+
+      if (abortHandle) {
+        if (abortHandle.aborted) {
+          clearTimeout(timer)
+          reject(new Error('Request cancelled by user.'))
+          return
+        }
+        unsubscribeAbort = abortHandle.onAbort(function () {
+          didUserAbort = true
+          controller.abort()
+        })
+      }
 
       fetch(url, {
         method: 'POST',
@@ -114,7 +198,6 @@
         body: JSON.stringify(body),
         signal: controller.signal
       }).then(function (res) {
-        clearTimeout(timer)
         if (!res.ok) {
           return res.text().then(function (txt) {
             throw new Error('Ollama HTTP ' + res.status + ': ' + txt.substring(0, 500))
@@ -126,8 +209,21 @@
         var normalized = normalizeOllamaResponse(data)
         resolve(normalized)
       }).catch(function (err) {
-        clearTimeout(timer)
+        if (didTimeout) {
+          reject(new Error('Ollama chat timeout after ' + timeoutMs + 'ms'))
+          return
+        }
+        if (didUserAbort || (abortHandle && abortHandle.aborted)) {
+          reject(new Error('Request cancelled by user.'))
+          return
+        }
         reject(err)
+      }).then(function () {
+        clearTimeout(timer)
+        unsubscribeAbort()
+      }, function () {
+        clearTimeout(timer)
+        unsubscribeAbort()
       })
     })
   }
@@ -207,7 +303,7 @@
    * Automatically retries on 429/5xx errors with exponential backoff.
    * @param {string} modelId  "cloudru/..." or "ollama/..." or legacy model name
    * @param {Array}  messages Chat messages array
-   * @param {object} options  { tools?, tool_choice?, max_tokens?, temperature? }
+   * @param {object} options  { tools?, tool_choice?, max_tokens?, temperature?, abortHandle? }
    * @returns {Promise<object>} OpenAI-compatible response
    */
   function invoke (modelId, messages, options) {

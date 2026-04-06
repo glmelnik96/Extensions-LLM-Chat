@@ -10,7 +10,7 @@
 (function () {
   'use strict'
 
-  var DEFAULT_MAX_STEPS = 15
+  var DEFAULT_MAX_STEPS = 150
   var DEFAULT_TEMPERATURE = 0.3
 
   /**
@@ -21,7 +21,7 @@
    *   - systemPrompt: string — system prompt text
    *   - messages:     Array — conversation history (user/assistant messages)
    *   - tools:        Array — OpenAI-compatible tool definitions (default: all from registry)
-   *   - maxSteps:     number — max tool-call rounds (default 15)
+   *   - maxSteps:     number — max tool-call rounds (default 150)
    *   - temperature:  number — (default 0.3)
    *   - onToolCall:   function(toolCall) — callback for UI updates per tool call
    *   - onStepComplete: function(stepIndex, toolResults) — callback after each step
@@ -81,7 +81,8 @@
         tools: tools.length > 0 ? tools : undefined,
         tool_choice: tools.length > 0 ? 'auto' : undefined,
         max_tokens: 4096,
-        temperature: temperature
+        temperature: temperature,
+        abortHandle: abortHandle
       }
 
       return window.CHAT_PROVIDER.invoke(modelId, messages, invokeOptions)
