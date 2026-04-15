@@ -34,6 +34,7 @@
     isRequestInFlight: false,
     isPresetInFlight: false,
     selectedPresetKey: 'fade_in',
+    selectedBrandPresetKey: 'logo_reveal',
     currentAbortHandle: null,
     lastMutatingToolCount: 0,
     lastModelStatus: { status: 'unknown', label: 'model: unknown' },
@@ -66,6 +67,16 @@
     els.statusText = document.getElementById('status-text')
     els.modelStatus = document.getElementById('model-status')
     els.toolLog = document.getElementById('tool-log')
+    els.brandDropdownBtn = document.getElementById('brand-dropdown-btn')
+    els.brandDropdownMenu = document.getElementById('brand-dropdown-menu')
+    els.brandField1 = document.getElementById('brand-field1')
+    els.brandField1Label = document.getElementById('brand-field1-label')
+    els.brandField1Wrap = document.getElementById('brand-field1-wrap')
+    els.brandField2 = document.getElementById('brand-field2')
+    els.brandField2Label = document.getElementById('brand-field2-label')
+    els.brandField2Wrap = document.getElementById('brand-field2-wrap')
+    els.brandDuration = document.getElementById('brand-duration')
+    els.applyBrandBtn = document.getElementById('apply-brand-btn')
   }
 
   var PRESET_LABELS = {
@@ -143,6 +154,140 @@
     if (els.presetDelay) els.presetDelay.disabled = !!busy
     if (els.presetStrength && !els.presetStrength.disabled) els.presetStrength.disabled = !!busy
     if (!busy) updatePresetStrengthUi()
+  }
+
+  // ── Brand preset UI ──────────────────────────────────────────────────
+
+  var BRAND_PRESET_LABELS = (window.BRAND_PRESETS_CONFIG && window.BRAND_PRESETS_CONFIG.labels) || {
+    logo_reveal: 'Logo Reveal',
+    lower_third: 'Lower Third',
+    text_card: 'Text Card'
+  }
+
+  function closeBrandDropdown () {
+    if (els.brandDropdownMenu) els.brandDropdownMenu.style.display = 'none'
+  }
+
+  function toggleBrandDropdown () {
+    if (!els.brandDropdownMenu) return
+    if (els.brandDropdownMenu.style.display === 'none') els.brandDropdownMenu.style.display = ''
+    else closeBrandDropdown()
+  }
+
+  function updateBrandDropdownUi () {
+    if (els.brandDropdownBtn) {
+      els.brandDropdownBtn.textContent = BRAND_PRESET_LABELS[state.selectedBrandPresetKey] || 'Brand Preset'
+    }
+    if (els.brandDropdownMenu) {
+      var opts = els.brandDropdownMenu.querySelectorAll('.preset-option-btn')
+      for (var i = 0; i < opts.length; i++) {
+        var key = opts[i].getAttribute('data-brand-preset') || ''
+        if (key === state.selectedBrandPresetKey) opts[i].classList.add('active')
+        else opts[i].classList.remove('active')
+      }
+    }
+  }
+
+  function updateBrandFieldsUi () {
+    var key = state.selectedBrandPresetKey
+    if (!els.brandField1) return
+
+    if (key === 'logo_reveal') {
+      els.brandField1Wrap.classList.add('hidden')
+      els.brandField2Wrap.classList.remove('hidden')
+      els.brandField2Label.textContent = 'Subline'
+      els.brandField2.placeholder = 'optional subline'
+      els.brandField2.value = ''
+      els.brandDuration.value = '2.2'
+    } else if (key === 'lower_third') {
+      els.brandField1Wrap.classList.remove('hidden')
+      els.brandField2Wrap.classList.remove('hidden')
+      els.brandField1Label.textContent = 'Name'
+      els.brandField1.placeholder = 'Speaker Name'
+      els.brandField1.value = ''
+      els.brandField2Label.textContent = 'Title'
+      els.brandField2.placeholder = 'Job Title'
+      els.brandField2.value = ''
+      els.brandDuration.value = '5'
+    } else if (key === 'text_card') {
+      els.brandField1Wrap.classList.remove('hidden')
+      els.brandField2Wrap.classList.remove('hidden')
+      els.brandField1Label.textContent = 'Line 1'
+      els.brandField1.placeholder = 'First line'
+      els.brandField1.value = ''
+      els.brandField2Label.textContent = 'Line 2'
+      els.brandField2.placeholder = 'Second line'
+      els.brandField2.value = ''
+      els.brandDuration.value = '7'
+    }
+  }
+
+  function buildBrandPresetCall () {
+    var key = state.selectedBrandPresetKey
+    var dur = parseFloat(els.brandDuration ? els.brandDuration.value : '5')
+    if (!isFinite(dur)) dur = 5
+    var f1 = (els.brandField1 && els.brandField1.value) ? els.brandField1.value.trim() : ''
+    var f2 = (els.brandField2 && els.brandField2.value) ? els.brandField2.value.trim() : ''
+
+    if (key === 'logo_reveal') {
+      var args = { duration: dur }
+      if (f2) { args.with_subline = true; args.subline_text = f2 }
+      return { toolName: 'apply_brand_logo_reveal', args: args }
+    }
+    if (key === 'lower_third') {
+      return {
+        toolName: 'apply_brand_lower_third',
+        args: { name_text: f1 || 'Speaker Name', title_text: f2 || 'Job Title', display_duration: dur }
+      }
+    }
+    if (key === 'text_card') {
+      return {
+        toolName: 'apply_brand_text_card',
+        args: { line1: f1 || 'Line 1', line2: f2 || 'Line 2', display_duration: dur }
+      }
+    }
+    return null
+  }
+
+  function handleApplyBrandPreset () {
+    if (state.isRequestInFlight || state.isPresetInFlight) {
+      setStatus('Busy: wait for current operation to finish')
+      return
+    }
+    if (!window.HOST_BRIDGE || typeof window.HOST_BRIDGE.executeToolCall !== 'function') {
+      setStatus('Brand preset unavailable: host bridge not ready')
+      return
+    }
+    var call = buildBrandPresetCall()
+    if (!call) { setStatus('Invalid brand preset selection'); return }
+
+    state.isPresetInFlight = true
+    if (els.applyBrandBtn) els.applyBrandBtn.disabled = true
+    setStatus('Creating brand preset...')
+
+    window.HOST_BRIDGE.executeToolCall(call.toolName, call.args)
+      .then(function (res) {
+        if (res && res.ok) {
+          setStatus('Brand preset created: ' + (res.layers ? res.layers.length : '?') + ' layers')
+          addToolLogEntry(call.toolName, 'ok', res.message || '')
+          pushSystemMessage(res.message || 'Brand preset applied.')
+          state.lastMutatingToolCount = (res.layers && res.layers.length) || 1
+        } else {
+          var errMsg = (res && res.message) ? res.message : 'Unknown error'
+          setStatus('Brand preset error: ' + errMsg)
+          addToolLogEntry(call.toolName, 'error', errMsg)
+        }
+        return refreshActiveCompNote(true)
+      })
+      .catch(function (err) {
+        var msg = err && err.message ? err.message : String(err)
+        setStatus('Brand preset failed: ' + msg)
+        addToolLogEntry(call.toolName, 'error', msg)
+      })
+      .then(function () {
+        state.isPresetInFlight = false
+        if (els.applyBrandBtn) els.applyBrandBtn.disabled = false
+      })
   }
 
   function parsePresetNumberInput (el) {
@@ -1342,6 +1487,35 @@
     })
     if (els.applyPresetBtn) els.applyPresetBtn.addEventListener('click', handleApplyPresetFromUi)
 
+    // Brand preset dropdown
+    if (els.brandDropdownBtn) {
+      els.brandDropdownBtn.addEventListener('click', function (e) {
+        e.preventDefault()
+        e.stopPropagation()
+        if (!state.isPresetInFlight) toggleBrandDropdown()
+      })
+    }
+    if (els.brandDropdownMenu) {
+      var brandOpts = els.brandDropdownMenu.querySelectorAll('.preset-option-btn')
+      for (var bi = 0; bi < brandOpts.length; bi++) {
+        brandOpts[bi].addEventListener('click', function (e) {
+          e.preventDefault()
+          e.stopPropagation()
+          var key = this.getAttribute('data-brand-preset') || ''
+          if (!key) return
+          state.selectedBrandPresetKey = key
+          updateBrandDropdownUi()
+          updateBrandFieldsUi()
+          closeBrandDropdown()
+        })
+      }
+    }
+    document.addEventListener('click', function (e) {
+      if (!els.brandDropdownMenu || !els.brandDropdownBtn) return
+      if (!els.brandDropdownMenu.contains(e.target) && !els.brandDropdownBtn.contains(e.target)) closeBrandDropdown()
+    })
+    if (els.applyBrandBtn) els.applyBrandBtn.addEventListener('click', handleApplyBrandPreset)
+
     // Enter to send (Shift+Enter for newline) + auto-resize.
     if (els.userInput) {
       els.userInput.addEventListener('keydown', function (e) {
@@ -1398,6 +1572,8 @@
     bindEvents()
     updatePresetDropdownUi()
     updatePresetStrengthUi()
+    updateBrandDropdownUi()
+    updateBrandFieldsUi()
     setStatus('Ready')
     refreshActiveCompNote(true)
 

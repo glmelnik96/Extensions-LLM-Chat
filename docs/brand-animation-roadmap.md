@@ -379,76 +379,147 @@ brand_multiformat({
 
 ---
 
-## 6. Технические рекомендации
+## 6. Архитектура (решение принято)
 
-### Архитектура пресетов
+### Гибридный подход (Вариант C)
 
-Пресеты стоит реализовать как **составные tool chains** — не один огромный инструмент, а оркестрированная последовательность существующих:
+**Простые пресеты** (logo_reveal, lower_third, text_card, transition_wipe) → **детерминированные ExtendScript функции** в `host/index.jsx`. Фиксированные keyframes, не требуют LLM, быстро и предсказуемо.
+
+**Сложные шаблоны** (webinar_intro, course_cover, speaker_card) → **prompt-driven через агента**. Нажатие "Apply" отправляет промпт-шаблон с параметрами → агент вызывает существующие tools.
+
+### Два пути вызова brand presets
+
+1. **Вкладка Presets** — dropdown с brand presets, поля параметров, кнопка Apply
+2. **Чат по ключевым словам** — агент распознаёт запрос и вызывает нужный preset tool
+
+Ключевые слова для агента (в `agentSystemPrompt.js`):
+- "логошот", "logo shot", "logo reveal" → `apply_brand_logo_reveal`
+- "lower third", "подпись спикера", "плашка с текстом" → `apply_brand_lower_third`
+- "текстовый блок", "text card", "title card" → `apply_brand_text_card`
+- "переход", "transition", "wipe" → `apply_brand_transition`
+
+### Файловая структура
 
 ```
-brand_logo_reveal → агент выполняет:
-  1. create_composition(...)
-  2. create_layer(shape, "Logo BG")
-  3. add_shape_rectangle(...)
-  4. add_effect("ADBE Fill", ...)
-  5. create_layer(text, "Subline")
-  6. set_text_document(...)
-  7. add_keyframes("Transform>Scale", [...])
-  8. add_keyframes("Transform>Opacity", [...])
+brandPresets.js          — конфиг: метаданные, параметры, UI labels, ключевые слова
+host/index.jsx           — детерминированные ExtendScript функции (apply_brand_*)
+hostBridge.js            — mapping tool name → ExtendScript
+toolRegistry.js          — OpenAI tool definitions для brand presets
+agentSystemPrompt.js     — ключевые слова + workflow guidance
+index.html               — UI: brand preset section во вкладке Presets
+main.js                  — buildBrandPresetCallFromUi(), brand preset dropdown logic
 ```
 
-Это лучше, чем один монолитный инструмент, потому что:
-- Агент может адаптировать каждый шаг под запрос пользователя
-- Ошибки на конкретном шаге легко отлаживать
-- Инструменты переиспользуются
-
-### Как хранить brand presets
-
-Рекомендация: отдельный файл `brandPresets.js` с JSON-описанием шагов каждого пресета. Агент читает описание и выполняет шаги:
+### Конфиг brand presets (`brandPresets.js`)
 
 ```js
 window.BRAND_PRESETS = {
   logo_reveal: {
     label: "Logo Reveal",
+    category: "deterministic",    // → ExtendScript
+    keywords: ["логошот", "logo shot", "logo reveal"],
     params: [
-      { name: "duration", type: "number", default: 2, min: 0.5, max: 5 },
-      { name: "with_subline", type: "boolean", default: true },
-      { name: "subline_text", type: "string", default: "Cloud.ru" },
-      { name: "format", type: "enum", values: ["16:9", "9:16", "1:1"] }
+      { name: "duration", type: "number", default: 2, min: 0.5, max: 5, label: "Duration (s)" },
+      { name: "with_subline", type: "boolean", default: true, label: "With subline" },
+      { name: "subline_text", type: "string", default: "Умное облако", label: "Subline text" },
+      { name: "format", type: "enum", values: ["16:9", "9:16"], default: "16:9", label: "Format" }
+    ]
+  },
+  lower_third: {
+    label: "Lower Third",
+    category: "deterministic",
+    keywords: ["lower third", "подпись спикера", "подпись", "speaker title"],
+    params: [
+      { name: "name", type: "string", default: "", label: "Name" },
+      { name: "title", type: "string", default: "", label: "Title/Position" },
+      { name: "duration", type: "number", default: 4, min: 1, max: 10, label: "Duration (s)" },
+      { name: "style", type: "enum", values: ["minimal", "with_bar"], default: "with_bar", label: "Style" }
+    ]
+  },
+  text_card: {
+    label: "Text Card",
+    category: "deterministic",
+    keywords: ["текстовый блок", "text card", "title card", "плашка"],
+    params: [
+      { name: "text", type: "string", default: "", label: "Text" },
+      { name: "with_shape_bg", type: "boolean", default: true, label: "Shape background" },
+      { name: "position", type: "enum", values: ["center", "top", "bottom"], default: "center", label: "Position" },
+      { name: "duration", type: "number", default: 3, min: 0.5, max: 10, label: "Duration (s)" }
+    ]
+  },
+  webinar_intro: {
+    label: "Webinar Intro",
+    category: "agent",            // → prompt-driven
+    keywords: ["вебинар", "webinar", "заставка вебинара"],
+    params: [
+      { name: "speaker_name", type: "string", default: "", label: "Speaker" },
+      { name: "speaker_title", type: "string", default: "", label: "Speaker title" },
+      { name: "topic", type: "string", default: "", label: "Topic" },
+      { name: "format", type: "enum", values: ["16:9", "9:16", "1:1"], default: "16:9", label: "Format" }
     ],
-    steps: "... prompt template with {{param}} placeholders ..."
+    promptTemplate: "Create a webinar intro: speaker {{speaker_name}} ({{speaker_title}}), topic '{{topic}}', format {{format}}. Use Cloud.ru brand style: SB Sans Display font, brand colors. Create pattern background, logo block, speaker text block with staggered animation."
   }
 }
 ```
 
-### Цветовая палитра Cloud.ru (из проектов)
+### Цветовая палитра Cloud.ru
 
-Из анализа проектов выявлены основные цвета:
-- **Gray** (transition_gray): используется для переходов
-- **Green** (transition_green): акцентный цвет бренда
-- **White** (transition_white): светлые варианты
-- **Black Mono** (Cloud.ru_BlackMono): монохромный логотип
+> **TODO:** Заполнить из Figma
 
-Эти цвета стоит внести как константы в brand preset config.
+```js
+window.BRAND_COLORS = {
+  green:     [0, 0, 0],    // TODO: из Figma
+  gray:      [0, 0, 0],    // TODO: из Figma
+  white:     [1, 1, 1],
+  black:     [0, 0, 0],
+  text:      [0, 0, 0],    // TODO: из Figma
+  textAlt:   [0, 0, 0]     // TODO: из Figma
+}
+```
+
+### Шрифты (из проектов)
+
+| Шрифт | Стиль | Использование |
+|-------|-------|---------------|
+| SB Sans Display | Semibold | Заголовки, логошоты |
+| SB Sans Display | Regular | Основной текст |
+| SB Sans Text | Regular | Подписи спикеров |
 
 ---
 
-## 7. Зависимости от текущего состояния панели
+## 7. MVP Scope (решение принято)
 
-### Блокирующие (Phase 1)
+### MVP: Logo Reveal + Text Blocks
 
-1. **`create_composition`** — без этого инструмента невозможно создавать шаблоны с нуля. Сейчас все инструменты работают только с **активной** композицией.
+| Preset | Тип | Приоритет |
+|--------|-----|-----------|
+| `brand_logo_reveal` | Детерминированный | P0 |
+| `brand_lower_third` | Детерминированный | P0 |
+| `brand_text_card` | Детерминированный | P1 |
+| `brand_transition_wipe` | Детерминированный | P2 |
+| `brand_webinar_intro` | Agent-driven | P3 |
 
-2. **`duplicate_layer`** — необходим для создания нескольких однотипных элементов (паттерн, multiple text blocks).
+### Блокеры MVP
 
-3. **`set_blend_mode`** — оверлеи и transitions требуют Add/Screen/Multiply.
+| Что нужно | Статус | Как получить |
+|-----------|--------|-------------|
+| Точные keyframes из проектов | ❌ | Открыть AEP → extraction guide → Export JSON |
+| Логотип Cloud.ru (shape data) | ❌ | Figma → SVG → vertices |
+| Цветовая палитра RGB | ❌ | Figma |
 
-### Желательные (Phase 2+)
+### Не блокеры (нужны позже для P2+)
 
-4. **`set_track_matte`** — для text reveal через alpha matte.
-5. **`precompose_layers`** — для организации сложных шаблонов.
-6. **`set_layer_timing`** — для точного управления in/out points.
+| Инструмент | Зачем | Когда |
+|-----------|-------|-------|
+| `set_blend_mode` | Оверлеи, transitions (Add/Multiply/Screen) | Phase 3+ |
 
-### Уже готовые
+### Уже готовые инструменты
 
-Все остальные инструменты (47 штук) покрывают базовые потребности: shape creation, text, keyframes, expressions, effects, masks, markers, 3D, import.
+Из 47 tools — все базовые покрывают MVP:
+- `create_layer`, `create_comp`, `duplicate_layer`, `precompose_layers`, `set_layer_timing` — есть
+- `add_shape_*`, `set_text_document`, `add_keyframes`, `add_mask` — есть
+- `add_effect("ADBE Fill")`, `add_effect("ADBE Slider Control")` — есть
+
+### Extraction Guide
+
+Подробная инструкция: [brand-extraction-guide.md](brand-extraction-guide.md)
