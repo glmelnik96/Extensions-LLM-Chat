@@ -48,3 +48,4 @@
 | Large Comp & Compact (compact mode, layer filter) | ✅ |
 | Presets (Slide/Fade/Pop, multi-layer apply, tool log scope) | ✅ |
 | UI (2-tab layout, model selector, footer, migration, tab switching) | ✅ |
+| Brand Presets (logo reveal, lower third, text card) | ⏳ |
