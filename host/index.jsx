@@ -1449,26 +1449,25 @@ function extensionsLlmChat_applyBrandLogoReveal (options) {
     // Center icon: anchor at shape center
     iconLayer.property('Transform').property('Anchor Point').setValue([_BRAND_LOGO_W / 2, _BRAND_LOGO_H / 2]);
 
-    // Position: elastic overshoot (spec: slide right → overshoot → bounce → settle)
-    var iconFinalX = withSubline ? -50 : 50;  // relative to parent null at comp center
-    var posOff1 = comp.width * 0.10;
-    var posOff2 = comp.width * 0.14;
-    var posOff3 = comp.width * 0.03;
+    // Position: elastic overshoot (spec: slide right → overshoot → bounce → settle at center)
+    // Ref values for 1920px: [1161,540]→[1241,540]→[1019,540]→[964,540] i.e. +10.5%W → +14.6%W → +3.1%W → ~0
+    var iconFinalX = withSubline ? -comp.width * 0.05 : 0;
     var posProp = iconLayer.property('Transform').property('Position');
-    var kp0 = _setKeyAtTimeAndGetIndex(posProp, t0, [iconFinalX + posOff1, 0]);
-    var kp1 = _setKeyAtTimeAndGetIndex(posProp, tP1, [iconFinalX + posOff2, 0]);
-    var kp2 = _setKeyAtTimeAndGetIndex(posProp, tP2, [iconFinalX + posOff3, 0]);
+    var kp0 = _setKeyAtTimeAndGetIndex(posProp, t0, [iconFinalX + comp.width * 0.105, 0]);
+    var kp1 = _setKeyAtTimeAndGetIndex(posProp, tP1, [iconFinalX + comp.width * 0.146, 0]);
+    var kp2 = _setKeyAtTimeAndGetIndex(posProp, tP2, [iconFinalX + comp.width * 0.031, 0]);
     var kp3 = _setKeyAtTimeAndGetIndex(posProp, tEnd, [iconFinalX, 0]);
     _setKeyEaseBezier(posProp, kp0, 16.7, 16.7);
     _setKeyEaseBezier(posProp, kp1, 16.7, 16.7);
     _setKeyEaseBezier(posProp, kp2, 16.7, 16.7);
     _setKeyEaseBezier(posProp, kp3, 16.7, 16.7);
 
-    // Scale: elastic overshoot 0 → 130 → 90 → 100
+    // Scale: zoom overshoot (spec ratios: 250→350→221→189, normalized to final=100%)
+    // Icon fades in during first phase so starts visible-but-growing, not popping from zero
     var scaleProp = iconLayer.property('Transform').property('Scale');
-    var ks0 = _setKeyAtTimeAndGetIndex(scaleProp, t0, [0, 0]);
-    var ks1 = _setKeyAtTimeAndGetIndex(scaleProp, tP1, [130, 130]);
-    var ks2 = _setKeyAtTimeAndGetIndex(scaleProp, tP2, [90, 90]);
+    var ks0 = _setKeyAtTimeAndGetIndex(scaleProp, t0, [132, 132]);
+    var ks1 = _setKeyAtTimeAndGetIndex(scaleProp, tP1, [185, 185]);
+    var ks2 = _setKeyAtTimeAndGetIndex(scaleProp, tP2, [117, 117]);
     var ks3 = _setKeyAtTimeAndGetIndex(scaleProp, tEnd, [100, 100]);
     _setKeyEaseBezier(scaleProp, ks0, 33.3, 33.3);
     _setKeyEaseBezier(scaleProp, ks1, 68, 51);
@@ -1599,7 +1598,7 @@ function extensionsLlmChat_applyBrandLowerThird (options) {
     var b1k3 = _setKeyAtTimeAndGetIndex(b1Scale, tClose, [0, 100]);
     _setKeyEaseBezier(b1Scale, b1k0, 33, 33);
     _setKeyEaseBezier(b1Scale, b1k1, 100, 33);
-    _setKeyEaseBezier(b1Scale, b1k2, 33, 33);
+    _setKeyEaseBezier(b1Scale, b1k2, 100, 33);
     _setKeyEaseBezier(b1Scale, b1k3, 33, 33);
     result.layers.push({ name: 'LT Bar 1', index: bar1.index });
 
@@ -1612,7 +1611,7 @@ function extensionsLlmChat_applyBrandLowerThird (options) {
     var b2k3 = _setKeyAtTimeAndGetIndex(b2Scale, tClose - stagger, [0, 100]);
     _setKeyEaseBezier(b2Scale, b2k0, 33, 33);
     _setKeyEaseBezier(b2Scale, b2k1, 100, 33);
-    _setKeyEaseBezier(b2Scale, b2k2, 33, 33);
+    _setKeyEaseBezier(b2Scale, b2k2, 100, 33);
     _setKeyEaseBezier(b2Scale, b2k3, 33, 33);
     result.layers.push({ name: 'LT Bar 2', index: bar2.index });
 
@@ -1755,7 +1754,7 @@ function extensionsLlmChat_applyBrandTextCard (options) {
       var bk3 = _setKeyAtTimeAndGetIndex(bScale, tExitEnd, [0, 100]);
       _setKeyEaseBezier(bScale, bk0, 33, 33);
       _setKeyEaseBezier(bScale, bk1, 100, 33);
-      _setKeyEaseBezier(bScale, bk2, 33, 33);
+      _setKeyEaseBezier(bScale, bk2, 100, 33);
       _setKeyEaseBezier(bScale, bk3, 33, 33);
 
       result.layers.push({ name: barLayer.name, index: barLayer.index });
