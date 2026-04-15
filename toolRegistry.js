@@ -884,6 +884,77 @@
           required: ['layer_index']
         }
       }
+    },
+
+    // ── Brand presets (Cloud.ru) ────────────────────────────────────────
+    {
+      type: 'function',
+      function: {
+        name: 'apply_brand_logo_reveal',
+        description: 'Create Cloud.ru brand logo reveal animation: animated icon shape + "Cloud.ru" text with elastic overshoot. Optionally adds subline and background bar.',
+        parameters: {
+          type: 'object',
+          properties: {
+            duration: { type: 'number', description: 'Total animation duration in seconds (default 2.2, range 0.5..10).' },
+            with_subline: { type: 'boolean', description: 'Add subline text below logo (default false).' },
+            subline_text: { type: 'string', description: 'Subline text content (default "Умное облако с ИИ-помощником").' },
+            with_background: { type: 'boolean', description: 'Add dark bar behind subline (default false, requires with_subline).' }
+          },
+          required: []
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'apply_brand_lower_third',
+        description: 'Create Cloud.ru brand lower third: animated dark bars with white flash, speaker name and title text. Bars wipe in with overshoot, hold, then wipe out.',
+        parameters: {
+          type: 'object',
+          properties: {
+            name_text: { type: 'string', description: 'Speaker name (default "Speaker Name").' },
+            title_text: { type: 'string', description: 'Speaker job title (default "Job Title").' },
+            display_duration: { type: 'number', description: 'Total display duration in seconds including enter/exit (default 5, range 3..30).' }
+          },
+          required: []
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'apply_brand_text_card',
+        description: 'Create Cloud.ru brand text card: 2-4 text lines on animated dark bars. Bars wipe in with stagger, hold, then wipe out.',
+        parameters: {
+          type: 'object',
+          properties: {
+            line1: { type: 'string', description: 'First text line (required).' },
+            line2: { type: 'string', description: 'Second text line (required).' },
+            line3: { type: 'string', description: 'Third text line (optional).' },
+            line4: { type: 'string', description: 'Fourth text line (optional).' },
+            display_duration: { type: 'number', description: 'Total display duration in seconds (default 7, range 3..30).' }
+          },
+          required: ['line1', 'line2']
+        }
+      }
+    },
+
+    // ── Blend mode ────────────────────────────────────────────────────────
+    {
+      type: 'function',
+      function: {
+        name: 'set_blend_mode',
+        description: 'Set the blending mode of a layer (normal, add, multiply, screen, overlay, etc.)',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: 'Layer index (1-based)' },
+            layer_id: { type: 'number', description: 'Layer ID (alternative to index)' },
+            blend_mode: { type: 'string', description: 'Blend mode: normal, add, multiply, screen, overlay, soft_light, hard_light, difference, color_dodge, color_burn, linear_dodge, linear_burn, darken, lighten, dissolve, stencil_alpha, silhouette_alpha, alpha_add, luminescent_premul' }
+          },
+          required: ['blend_mode']
+        }
+      }
     }
   ]
 

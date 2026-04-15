@@ -548,6 +548,42 @@
           toESLiteral(args.layer_id || null) + ')'
         break
 
+      case 'set_blend_mode':
+        call = 'extensionsLlmChat_setBlendMode(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral(args.blend_mode) + ')'
+        break
+
+      // Brand presets (Cloud.ru)
+      case 'apply_brand_logo_reveal':
+        call = 'extensionsLlmChat_applyBrandLogoReveal(' +
+          toESLiteral({
+            duration: args.duration,
+            with_subline: args.with_subline,
+            subline_text: args.subline_text,
+            with_background: args.with_background
+          }) + ')'
+        break
+      case 'apply_brand_lower_third':
+        call = 'extensionsLlmChat_applyBrandLowerThird(' +
+          toESLiteral({
+            name_text: args.name_text,
+            title_text: args.title_text,
+            display_duration: args.display_duration
+          }) + ')'
+        break
+      case 'apply_brand_text_card':
+        call = 'extensionsLlmChat_applyBrandTextCard(' +
+          toESLiteral({
+            line1: args.line1,
+            line2: args.line2,
+            line3: args.line3,
+            line4: args.line4,
+            display_duration: args.display_duration
+          }) + ')'
+        break
+
       default:
         return Promise.reject(new Error('Unknown tool: ' + toolName))
     }

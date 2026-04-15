@@ -77,6 +77,32 @@
             <button id="apply-preset-btn" class="btn btn-secondary" title="Apply selected preset to selected layers">Apply preset</button>
           </div>
 
+          <!-- Brand presets -->
+          <div class="section-label" style="margin-top:8px">Brand Presets (Cloud.ru)</div>
+          <div class="preset-bar brand-preset-bar">
+            <div class="preset-dropdown">
+              <button id="brand-dropdown-btn" class="btn preset-dropdown-btn" type="button" title="Cloud.ru brand preset">Logo Reveal</button>
+              <div id="brand-dropdown-menu" class="preset-dropdown-menu" style="display:none">
+                <button type="button" class="preset-option-btn" data-brand-preset="logo_reveal">Logo Reveal</button>
+                <button type="button" class="preset-option-btn" data-brand-preset="lower_third">Lower Third</button>
+                <button type="button" class="preset-option-btn" data-brand-preset="text_card">Text Card</button>
+              </div>
+            </div>
+            <div class="preset-field brand-text-field" id="brand-field1-wrap">
+              <label id="brand-field1-label" class="preset-field-label" for="brand-field1">Name</label>
+              <input id="brand-field1" class="preset-input brand-text-input" type="text" value="" placeholder="Speaker Name" />
+            </div>
+            <div class="preset-field brand-text-field" id="brand-field2-wrap">
+              <label id="brand-field2-label" class="preset-field-label" for="brand-field2">Title</label>
+              <input id="brand-field2" class="preset-input brand-text-input" type="text" value="" placeholder="Job Title" />
+            </div>
+            <div class="preset-field">
+              <label class="preset-field-label" for="brand-duration">Duration (s)</label>
+              <input id="brand-duration" class="preset-input" type="number" step="0.1" min="0.5" value="5" />
+            </div>
+            <button id="apply-brand-btn" class="btn btn-secondary" title="Create brand preset in active comp">Apply</button>
+          </div>
+
           <!-- Quick actions -->
           <div class="section-label" style="margin-top:8px">Quick Actions</div>
           <div class="quick-actions" id="quick-actions">
@@ -114,6 +140,7 @@
     <script src="./lib/CSInterface.js"></script>
 
     <!-- New agent modules -->
+    <script src="./brandPresets.js"></script>
     <script src="./toolRegistry.js"></script>
     <script src="./agentSystemPrompt.js"></script>
     <script src="./chatProvider.js"></script>

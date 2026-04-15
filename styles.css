@@ -458,6 +458,16 @@ body {
   border-color: #5679aa;
 }
 
+/* ── Brand presets ────────────────────────────────────────────────────── */
+
+.brand-text-input {
+  width: 120px;
+}
+
+.brand-text-field.hidden {
+  display: none;
+}
+
 /* ── Input ────────────────────────────────────────────────────────────── */
 
 .chat-input-container {

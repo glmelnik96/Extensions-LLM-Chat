@@ -1309,6 +1309,495 @@ function extensionsLlmChat_applySlidePreset (layerIndex, layerId, options) {
 }
 
 // ============================================================================
+// Brand preset tools (Cloud.ru)
+// ============================================================================
+
+var _BRAND_COLORS = {
+  green: [0.149, 0.816, 0.486],
+  dark: [0.133, 0.133, 0.133],
+  lightGreen: [0.812, 0.961, 0],
+  nearWhite: [0.969, 0.969, 0.969],
+  white: [1, 1, 1],
+  black: [0, 0, 0]
+};
+
+// Logo icon cube — 3 faces, SVG vertices scaled 5x (~189×198 px base)
+var _BRAND_LOGO_PATHS = [
+  { // right-bottom face
+    v: [[101.47,105.66],[189.09,105.66],[189.09,161.48],[101.46,198.39]],
+    c: true
+  },
+  { // right-top face
+    v: [[189.09,92.74],[189.09,36.92],[101.47,0],[101.47,92.69]],
+    c: true
+  },
+  { // left face
+    v: [[0,36.92],[0,161.50],[87.63,198.40],[87.63,0]],
+    c: true
+  }
+];
+var _BRAND_LOGO_W = 189.09;
+var _BRAND_LOGO_H = 198.40;
+
+/**
+ * Add a closed straight-line path to a shape group's Contents.
+ */
+function _addBrandPath (groupContents, vertices, closed) {
+  var pathGrp = groupContents.addProperty('ADBE Vector Shape - Group');
+  var shapeProp = pathGrp.property('ADBE Vector Shape');
+  var s = new Shape();
+  s.closed = closed !== false;
+  s.vertices = vertices;
+  var t = [];
+  for (var i = 0; i < vertices.length; i++) t.push([0, 0]);
+  s.inTangents = t;
+  s.outTangents = t;
+  shapeProp.setValue(s);
+  return pathGrp;
+}
+
+function _addBrandFill (groupContents, color) {
+  var fill = groupContents.addProperty('ADBE Vector Graphic - Fill');
+  fill.property('ADBE Vector Fill Color').setValue(color);
+  return fill;
+}
+
+function _addBrandRect (groupContents, w, h, fillColor, pos) {
+  var rect = groupContents.addProperty('ADBE Vector Shape - Rect');
+  rect.property('ADBE Vector Rect Size').setValue([w, h]);
+  if (pos) rect.property('ADBE Vector Rect Position').setValue(pos);
+  if (fillColor) _addBrandFill(groupContents, fillColor);
+  return rect;
+}
+
+/**
+ * Create a shape bar layer anchored at left edge for horizontal wipe animation.
+ * Rect is offset so left edge sits at layer origin → scaleX grows rightward.
+ */
+function _createBrandWipeBar (comp, name, w, h, fillColor, parentLayer, posY) {
+  var layer = comp.layers.addShape();
+  layer.name = name;
+  var root = layer.property('ADBE Root Vectors Group');
+  var grp = root.addProperty('ADBE Vector Group');
+  grp.name = 'Bar';
+  _addBrandRect(grp.property('ADBE Vectors Group'), w, h, fillColor, [w / 2, 0]);
+  if (parentLayer) layer.parent = parentLayer;
+  layer.property('Transform').property('Position').setValue([0, posY]);
+  return layer;
+}
+
+function _setTextDoc (textLayer, text, fontSize, fillColor, fontName, justify) {
+  var prop = textLayer.property('Source Text');
+  var doc = prop.value;
+  doc.resetCharStyle();
+  // doc.text requires AE 2019+; text is already set via addText(), so only
+  // assign when the caller needs to change it from the initial addText value.
+  try { doc.text = text; } catch (eText) {}
+  doc.fontSize = fontSize;
+  doc.fillColor = fillColor;
+  try { doc.font = fontName; } catch (ef) {}
+  if (typeof justify !== 'undefined') doc.justification = justify;
+  prop.setValue(doc);
+}
+
+// ── brand_logo_reveal ──────────────────────────────────────────────────
+
+function extensionsLlmChat_applyBrandLogoReveal (options) {
+  var result = { ok: false, message: '', preset: 'brand_logo_reveal', layers: [] };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message || 'No active composition.'; return resultToJson(result); }
+    var comp = ctx.comp;
+    var opts = options || {};
+
+    var duration = 2.2;
+    if (opts.duration != null && isFinite(Number(opts.duration))) duration = Math.max(0.5, Math.min(Number(opts.duration), 10));
+    var withSubline = !!opts.with_subline;
+    var sublineText = String(opts.subline_text || '\u0423\u043C\u043D\u043E\u0435 \u043E\u0431\u043B\u0430\u043A\u043E \u0441 \u0418\u0418-\u043F\u043E\u043C\u043E\u0449\u043D\u0438\u043A\u043E\u043C');
+    var withBg = !!opts.with_background;
+
+    var cx = comp.width / 2;
+    var cy = comp.height / 2;
+    var t0 = comp.time;
+    var tP1 = t0 + duration * 0.45;
+    var tP2 = t0 + duration * 0.80;
+    var tEnd = t0 + duration;
+
+    _beginToolUndo('Agent: Brand Logo Reveal');
+
+    // ── Parent null — controls scale/position of the whole logo group ──
+    var ctrlNull = comp.layers.addNull();
+    ctrlNull.name = 'Logo Reveal Ctrl';
+    ctrlNull.property('Transform').property('Position').setValue([cx, cy]);
+    ctrlNull.property('Transform').property('Opacity').setValue(0);
+
+    // ── Logo Icon shape layer ──
+    var iconLayer = comp.layers.addShape();
+    iconLayer.name = 'Logo Icon';
+    iconLayer.parent = ctrlNull;
+
+    var rootContents = iconLayer.property('ADBE Root Vectors Group');
+    var iconGrp = rootContents.addProperty('ADBE Vector Group');
+    iconGrp.name = 'Icon';
+    var iconContents = iconGrp.property('ADBE Vectors Group');
+
+    for (var pi = 0; pi < _BRAND_LOGO_PATHS.length; pi++) {
+      _addBrandPath(iconContents, _BRAND_LOGO_PATHS[pi].v, _BRAND_LOGO_PATHS[pi].c);
+    }
+    _addBrandFill(iconContents, _BRAND_COLORS.green);
+
+    // Center icon: anchor at shape center
+    iconLayer.property('Transform').property('Anchor Point').setValue([_BRAND_LOGO_W / 2, _BRAND_LOGO_H / 2]);
+
+    // Position: elastic overshoot (spec: slide right → overshoot → bounce → settle)
+    var iconFinalX = withSubline ? -50 : 50;  // relative to parent null at comp center
+    var posOff1 = comp.width * 0.10;
+    var posOff2 = comp.width * 0.14;
+    var posOff3 = comp.width * 0.03;
+    var posProp = iconLayer.property('Transform').property('Position');
+    var kp0 = _setKeyAtTimeAndGetIndex(posProp, t0, [iconFinalX + posOff1, 0]);
+    var kp1 = _setKeyAtTimeAndGetIndex(posProp, tP1, [iconFinalX + posOff2, 0]);
+    var kp2 = _setKeyAtTimeAndGetIndex(posProp, tP2, [iconFinalX + posOff3, 0]);
+    var kp3 = _setKeyAtTimeAndGetIndex(posProp, tEnd, [iconFinalX, 0]);
+    _setKeyEaseBezier(posProp, kp0, 16.7, 16.7);
+    _setKeyEaseBezier(posProp, kp1, 16.7, 16.7);
+    _setKeyEaseBezier(posProp, kp2, 16.7, 16.7);
+    _setKeyEaseBezier(posProp, kp3, 16.7, 16.7);
+
+    // Scale: elastic overshoot 0 → 130 → 90 → 100
+    var scaleProp = iconLayer.property('Transform').property('Scale');
+    var ks0 = _setKeyAtTimeAndGetIndex(scaleProp, t0, [0, 0]);
+    var ks1 = _setKeyAtTimeAndGetIndex(scaleProp, tP1, [130, 130]);
+    var ks2 = _setKeyAtTimeAndGetIndex(scaleProp, tP2, [90, 90]);
+    var ks3 = _setKeyAtTimeAndGetIndex(scaleProp, tEnd, [100, 100]);
+    _setKeyEaseBezier(scaleProp, ks0, 33.3, 33.3);
+    _setKeyEaseBezier(scaleProp, ks1, 68, 51);
+    _setKeyEaseBezier(scaleProp, ks2, 26, 31);
+    _setKeyEaseBezier(scaleProp, ks3, 38, 33.3);
+
+    // Opacity 0→100
+    var opProp = iconLayer.property('Transform').property('Opacity');
+    var ko0 = _setKeyAtTimeAndGetIndex(opProp, t0, 0);
+    var ko1 = _setKeyAtTimeAndGetIndex(opProp, tP1, 100);
+    _setKeyEaseBezier(opProp, ko0, 33.3, 33.3);
+    _setKeyEaseBezier(opProp, ko1, 68, 33.3);
+
+    result.layers.push({ name: 'Logo Reveal Ctrl', index: ctrlNull.index });
+    result.layers.push({ name: 'Logo Icon', index: iconLayer.index });
+
+    // ── "Cloud.ru" text layer — slide in from right (wipe-like reveal) ──
+    var textLayer = comp.layers.addText('Cloud.ru');
+    textLayer.name = 'Cloud.ru Text';
+    textLayer.parent = ctrlNull;
+    _setTextDoc(textLayer, 'Cloud.ru', 72, _BRAND_COLORS.nearWhite, 'SBSansDisplay-Semibold', ParagraphJustification.LEFT_JUSTIFY);
+
+    var textFinalX = iconFinalX + 130;
+    var textSlideOff = comp.width * 0.06;
+    var textPos = textLayer.property('Transform').property('Position');
+    var tp0 = _setKeyAtTimeAndGetIndex(textPos, tP1, [textFinalX + textSlideOff, 10]);
+    var tp1 = _setKeyAtTimeAndGetIndex(textPos, tP2, [textFinalX, 10]);
+    _setKeyEaseBezier(textPos, tp0, 33.3, 33.3);
+    _setKeyEaseBezier(textPos, tp1, 100, 33.3);
+
+    var tOp = textLayer.property('Transform').property('Opacity');
+    var tko0 = _setKeyAtTimeAndGetIndex(tOp, tP1, 0);
+    var tko1 = _setKeyAtTimeAndGetIndex(tOp, tP2, 100);
+    _setKeyEaseBezier(tOp, tko0, 33.3, 100);
+    _setKeyEaseBezier(tOp, tko1, 100, 33.3);
+
+    result.layers.push({ name: 'Cloud.ru Text', index: textLayer.index });
+
+    // ── Optional subline ──
+    if (withSubline) {
+      var subLayer = comp.layers.addText(sublineText);
+      subLayer.name = 'Subline';
+      subLayer.parent = ctrlNull;
+      _setTextDoc(subLayer, sublineText, 28, _BRAND_COLORS.dark, 'SBSansDisplay-Semibold', ParagraphJustification.LEFT_JUSTIFY);
+      var subPosX = textFinalX;
+      var subPosY = 55;
+
+      // Fade + slide in after logo settles
+      var sOp = subLayer.property('Transform').property('Opacity');
+      var soK0 = _setKeyAtTimeAndGetIndex(sOp, tP2, 0);
+      var soK1 = _setKeyAtTimeAndGetIndex(sOp, tEnd, 100);
+      _setKeyEaseBezier(sOp, soK0, 33.3, 100);
+      _setKeyEaseBezier(sOp, soK1, 100, 33.3);
+
+      var sPos = subLayer.property('Transform').property('Position');
+      var spK0 = _setKeyAtTimeAndGetIndex(sPos, tP2, [subPosX + 80, subPosY]);
+      var spK1 = _setKeyAtTimeAndGetIndex(sPos, tEnd, [subPosX, subPosY]);
+      _setKeyEaseBezier(sPos, spK0, 16.7, 16.7);
+      _setKeyEaseBezier(sPos, spK1, 16.7, 16.7);
+
+      result.layers.push({ name: 'Subline', index: subLayer.index });
+
+      // Optional dark bar behind subline (left-edge anchor for horizontal grow)
+      if (withBg) {
+        var bgLayer = _createBrandWipeBar(comp, 'Subline BG', 470, 50, _BRAND_COLORS.dark, ctrlNull, subPosY - 5);
+        bgLayer.property('Transform').property('Position').setValue([subPosX, subPosY - 5]);
+        var bgScale = bgLayer.property('Transform').property('Scale');
+        var bgK0 = _setKeyAtTimeAndGetIndex(bgScale, tP2, [0, 100]);
+        var bgK1 = _setKeyAtTimeAndGetIndex(bgScale, tEnd, [100, 100]);
+        _setKeyEaseBezier(bgScale, bgK0, 33.3, 33.3);
+        _setKeyEaseBezier(bgScale, bgK1, 100, 33.3);
+        bgLayer.moveAfter(subLayer);
+        result.layers.push({ name: 'Subline BG', index: bgLayer.index });
+      }
+    }
+
+    _endToolUndo();
+    result.ok = true;
+    result.message = 'Brand logo reveal created (' + result.layers.length + ' layers, duration=' + duration + 's).';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'brandLogoReveal error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+// ── brand_lower_third ──────────────────────────────────────────────────
+
+function extensionsLlmChat_applyBrandLowerThird (options) {
+  var result = { ok: false, message: '', preset: 'brand_lower_third', layers: [] };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message || 'No active composition.'; return resultToJson(result); }
+    var comp = ctx.comp;
+    var opts = options || {};
+
+    var nameText = String(opts.name_text || 'Speaker Name');
+    var titleText = String(opts.title_text || 'Job Title');
+    var displayDur = 5;
+    if (opts.display_duration != null && isFinite(Number(opts.display_duration))) displayDur = Math.max(3, Math.min(Number(opts.display_duration), 30));
+
+    // Timing (based on spec). Min 3s ensures bar2 stagger doesn't overlap hold phase.
+    var t0 = comp.time;
+    var tBarOpen = t0 + 0.8;
+    var tBarClose = t0 + displayDur - 0.8;
+    var tClose = t0 + displayDur;
+    var stagger = 0.24;
+
+    // Position: lower-left area
+    var baseX = comp.width * 0.08;
+    var baseY = comp.height * 0.78;
+
+    _beginToolUndo('Agent: Brand Lower Third');
+
+    // ── Null controller (invisible, controls position/scale of all children) ──
+    var nullLayer = comp.layers.addNull();
+    nullLayer.name = 'LT Controller';
+    nullLayer.property('Transform').property('Position').setValue([baseX, baseY]);
+    nullLayer.property('Transform').property('Opacity').setValue(0);
+
+    // ── Bar 1 (main dark bar, left-edge anchored) ──
+    var bar1 = _createBrandWipeBar(comp, 'LT Bar 1', 500, 52, _BRAND_COLORS.dark, nullLayer, 0);
+    var b1Scale = bar1.property('Transform').property('Scale');
+    var b1k0 = _setKeyAtTimeAndGetIndex(b1Scale, t0, [0, 100]);
+    var b1k1 = _setKeyAtTimeAndGetIndex(b1Scale, tBarOpen, [122.8, 100]);
+    var b1k2 = _setKeyAtTimeAndGetIndex(b1Scale, tBarClose, [122.8, 100]);
+    var b1k3 = _setKeyAtTimeAndGetIndex(b1Scale, tClose, [0, 100]);
+    _setKeyEaseBezier(b1Scale, b1k0, 33, 33);
+    _setKeyEaseBezier(b1Scale, b1k1, 100, 33);
+    _setKeyEaseBezier(b1Scale, b1k2, 33, 33);
+    _setKeyEaseBezier(b1Scale, b1k3, 33, 33);
+    result.layers.push({ name: 'LT Bar 1', index: bar1.index });
+
+    // ── Bar 2 (secondary dark bar, staggered 240ms, left-edge anchored) ──
+    var bar2 = _createBrandWipeBar(comp, 'LT Bar 2', 500, 52, _BRAND_COLORS.dark, nullLayer, 55);
+    var b2Scale = bar2.property('Transform').property('Scale');
+    var b2k0 = _setKeyAtTimeAndGetIndex(b2Scale, t0 + stagger, [0, 100]);
+    var b2k1 = _setKeyAtTimeAndGetIndex(b2Scale, tBarOpen + stagger, [91.5, 100]);
+    var b2k2 = _setKeyAtTimeAndGetIndex(b2Scale, tBarClose - stagger, [91.5, 100]);
+    var b2k3 = _setKeyAtTimeAndGetIndex(b2Scale, tClose - stagger, [0, 100]);
+    _setKeyEaseBezier(b2Scale, b2k0, 33, 33);
+    _setKeyEaseBezier(b2Scale, b2k1, 100, 33);
+    _setKeyEaseBezier(b2Scale, b2k2, 33, 33);
+    _setKeyEaseBezier(b2Scale, b2k3, 33, 33);
+    result.layers.push({ name: 'LT Bar 2', index: bar2.index });
+
+    // ── White flash bar 1 (bar 1 enter/exit flash, left-edge anchored) ──
+    var flash1 = _createBrandWipeBar(comp, 'LT Flash 1', 500, 52, _BRAND_COLORS.white, nullLayer, 0);
+    var f1Op = flash1.property('Transform').property('Opacity');
+    _setKeyAtTimeAndGetIndex(f1Op, t0, 80);
+    _setKeyAtTimeAndGetIndex(f1Op, tBarOpen, 0);
+    _setKeyAtTimeAndGetIndex(f1Op, tBarClose, 0);
+    _setKeyAtTimeAndGetIndex(f1Op, tClose, 80);
+    for (var fi = 1; fi <= f1Op.numKeys; fi++) _setKeyEaseBezier(f1Op, fi, 50, 50);
+    var f1Scale = flash1.property('Transform').property('Scale');
+    _setKeyAtTimeAndGetIndex(f1Scale, t0, [0, 100]);
+    _setKeyAtTimeAndGetIndex(f1Scale, tBarOpen, [122.8, 100]);
+    _setKeyAtTimeAndGetIndex(f1Scale, tBarClose, [122.8, 100]);
+    _setKeyAtTimeAndGetIndex(f1Scale, tClose, [0, 100]);
+    for (var fsi = 1; fsi <= f1Scale.numKeys; fsi++) _setKeyEaseBezier(f1Scale, fsi, 50, 50);
+    result.layers.push({ name: 'LT Flash 1', index: flash1.index });
+
+    // ── White flash bar 2 (bar 2 enter/exit flash, left-edge anchored) ──
+    var flash2 = _createBrandWipeBar(comp, 'LT Flash 2', 500, 52, _BRAND_COLORS.white, nullLayer, 55);
+    var f2Op = flash2.property('Transform').property('Opacity');
+    _setKeyAtTimeAndGetIndex(f2Op, t0 + stagger, 80);
+    _setKeyAtTimeAndGetIndex(f2Op, tBarOpen + stagger, 0);
+    _setKeyAtTimeAndGetIndex(f2Op, tBarClose - stagger, 0);
+    _setKeyAtTimeAndGetIndex(f2Op, tClose - stagger, 80);
+    for (var f2i = 1; f2i <= f2Op.numKeys; f2i++) _setKeyEaseBezier(f2Op, f2i, 50, 50);
+    var f2Scale = flash2.property('Transform').property('Scale');
+    _setKeyAtTimeAndGetIndex(f2Scale, t0 + stagger, [0, 100]);
+    _setKeyAtTimeAndGetIndex(f2Scale, tBarOpen + stagger, [91.5, 100]);
+    _setKeyAtTimeAndGetIndex(f2Scale, tBarClose - stagger, [91.5, 100]);
+    _setKeyAtTimeAndGetIndex(f2Scale, tClose - stagger, [0, 100]);
+    for (var f2si = 1; f2si <= f2Scale.numKeys; f2si++) _setKeyEaseBezier(f2Scale, f2si, 50, 50);
+    result.layers.push({ name: 'LT Flash 2', index: flash2.index });
+
+    // ── Name text ──
+    var nameLayer = comp.layers.addText(nameText);
+    nameLayer.name = 'LT Name';
+    _setTextDoc(nameLayer, nameText, 40, _BRAND_COLORS.white, 'SBSansText-Regular', ParagraphJustification.LEFT_JUSTIFY);
+    nameLayer.parent = nullLayer;
+    nameLayer.property('Transform').property('Position').setValue([20, -8]);
+    nameLayer.inPoint = t0 + stagger;
+    nameLayer.outPoint = tClose - stagger;
+    result.layers.push({ name: 'LT Name', index: nameLayer.index });
+
+    // ── Title text ──
+    var titleLayer = comp.layers.addText(titleText);
+    titleLayer.name = 'LT Title';
+    _setTextDoc(titleLayer, titleText, 22, _BRAND_COLORS.white, 'SBSansText-Regular', ParagraphJustification.LEFT_JUSTIFY);
+    titleLayer.parent = nullLayer;
+    titleLayer.property('Transform').property('Position').setValue([20, 46]);
+    titleLayer.inPoint = t0 + stagger * 2.33;
+    titleLayer.outPoint = tClose - stagger;
+    result.layers.push({ name: 'LT Title', index: titleLayer.index });
+
+    // Reorder: text on top, flashes, bars, null at bottom
+    try {
+      nameLayer.moveBefore(flash1);
+      titleLayer.moveAfter(nameLayer);
+    } catch (eOrder) {}
+
+    _endToolUndo();
+    result.ok = true;
+    result.message = 'Brand lower third created (' + result.layers.length + ' layers, "' + nameText + '" / "' + titleText + '", ' + displayDur + 's).';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'brandLowerThird error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+// ── brand_text_card ────────────────────────────────────────────────────
+
+function extensionsLlmChat_applyBrandTextCard (options) {
+  var result = { ok: false, message: '', preset: 'brand_text_card', layers: [] };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message || 'No active composition.'; return resultToJson(result); }
+    var comp = ctx.comp;
+    var opts = options || {};
+
+    var line1 = String(opts.line1 || 'Line 1');
+    var line2 = String(opts.line2 || 'Line 2');
+    var line3 = opts.line3 ? String(opts.line3) : null;
+    var line4 = opts.line4 ? String(opts.line4) : null;
+    var displayDur = 7;
+    if (opts.display_duration != null && isFinite(Number(opts.display_duration))) displayDur = Math.max(3, Math.min(Number(opts.display_duration), 30));
+
+    var allLines = [line1, line2];
+    if (line3) allLines.push(line3);
+    if (line4) allLines.push(line4);
+
+    var cx = comp.width / 2;
+    var cy = comp.height / 2;
+    var barW = Math.min(comp.width * 0.85, 1231);
+    var barH = 110;
+    var lineH = 55;
+    var stagger = 0.4;
+    var t0 = comp.time;
+
+    _beginToolUndo('Agent: Brand Text Card');
+
+    // ── Parent null (controls position/scale of entire card) ──
+    var ctrlNull = comp.layers.addNull();
+    ctrlNull.name = 'TC Controller';
+    ctrlNull.property('Transform').property('Position').setValue([cx, cy]);
+    ctrlNull.property('Transform').property('Opacity').setValue(0);
+
+    // Number of bar groups (1 bar per 2 text lines)
+    var barCount = Math.ceil(allLines.length / 2);
+    var totalH = barCount * barH + (barCount - 1) * 10;
+    var startY = -totalH / 2 + barH / 2;
+
+    // Create bars + text pairs (positions relative to null at comp center)
+    for (var bi = 0; bi < barCount; bi++) {
+      var barY = startY + bi * (barH + 10);
+      var barDelay = bi * stagger;
+      var tEnterStart = t0 + 0.4 + barDelay;
+      var tEnterEnd = tEnterStart + 0.88;
+      var tExitStart = t0 + displayDur - 0.8 - (barCount - 1 - bi) * stagger;
+      var tExitEnd = tExitStart + 0.8;
+      var barTarget = bi === 0 ? 102 : 80;
+
+      // ── Shape bar ──
+      var barLayer = comp.layers.addShape();
+      barLayer.name = 'TC Bar ' + (bi + 1);
+      var bRoot = barLayer.property('ADBE Root Vectors Group');
+      var bGrp = bRoot.addProperty('ADBE Vector Group');
+      bGrp.name = 'Bar';
+      _addBrandRect(bGrp.property('ADBE Vectors Group'), barW, barH, _BRAND_COLORS.dark);
+      barLayer.parent = ctrlNull;
+      barLayer.property('Transform').property('Position').setValue([0, barY]);
+
+      // ScaleX animation: 0→target→hold→0
+      var bScale = barLayer.property('Transform').property('Scale');
+      var bk0 = _setKeyAtTimeAndGetIndex(bScale, tEnterStart, [0, 100]);
+      var bk1 = _setKeyAtTimeAndGetIndex(bScale, tEnterEnd, [barTarget, 100]);
+      var bk2 = _setKeyAtTimeAndGetIndex(bScale, tExitStart, [barTarget, 100]);
+      var bk3 = _setKeyAtTimeAndGetIndex(bScale, tExitEnd, [0, 100]);
+      _setKeyEaseBezier(bScale, bk0, 33, 33);
+      _setKeyEaseBezier(bScale, bk1, 100, 33);
+      _setKeyEaseBezier(bScale, bk2, 33, 33);
+      _setKeyEaseBezier(bScale, bk3, 33, 33);
+
+      result.layers.push({ name: barLayer.name, index: barLayer.index });
+
+      // ── Text lines for this bar (up to 2) ──
+      for (var li = 0; li < 2; li++) {
+        var lineIdx = bi * 2 + li;
+        if (lineIdx >= allLines.length) break;
+
+        var lineText = allLines[lineIdx];
+        var textY = barY - lineH / 2 + li * lineH;
+        var lineLayer = comp.layers.addText(lineText);
+        lineLayer.name = 'TC Line ' + (lineIdx + 1);
+        _setTextDoc(lineLayer, lineText, 100, _BRAND_COLORS.lightGreen, 'SBSansDisplay-Semibold', ParagraphJustification.CENTER_JUSTIFY);
+        lineLayer.parent = ctrlNull;
+        lineLayer.property('Transform').property('Position').setValue([0, textY]);
+
+        // Visible only while bar is open
+        lineLayer.inPoint = tEnterEnd - 0.1;
+        lineLayer.outPoint = tExitStart + 0.1;
+
+        // Move text above bar in layer order
+        try { lineLayer.moveBefore(barLayer); } catch (eM) {}
+
+        result.layers.push({ name: lineLayer.name, index: lineLayer.index });
+      }
+    }
+
+    result.layers.push({ name: 'TC Controller', index: ctrlNull.index });
+
+    _endToolUndo();
+    result.ok = true;
+    result.message = 'Brand text card created (' + result.layers.length + ' layers, ' + allLines.length + ' lines, ' + displayDur + 's).';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'brandTextCard error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+// ============================================================================
 // Shared helpers
 // ============================================================================
 
@@ -1680,6 +2169,50 @@ function extensionsLlmChat_renameLayer (layerIndex, layerId, newName) {
   } catch (e) {
     try { _endToolUndo(); } catch (x) {}
     result.message = 'renameLayer error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+// ── Blend mode ──────────────────────────────────────────────────────────────
+
+function extensionsLlmChat_setBlendMode (layerIndex, layerId, blendMode) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+
+    var modeMap = {
+      'normal': BlendingMode.NORMAL, 'add': BlendingMode.ADD, 'multiply': BlendingMode.MULTIPLY,
+      'screen': BlendingMode.SCREEN, 'overlay': BlendingMode.OVERLAY, 'soft_light': BlendingMode.SOFT_LIGHT,
+      'hard_light': BlendingMode.HARD_LIGHT, 'difference': BlendingMode.DIFFERENCE,
+      'color_dodge': BlendingMode.COLOR_DODGE, 'color_burn': BlendingMode.COLOR_BURN,
+      'linear_dodge': BlendingMode.LINEAR_DODGE, 'linear_burn': BlendingMode.LINEAR_BURN,
+      'darken': BlendingMode.DARKEN, 'lighten': BlendingMode.LIGHTEN,
+      'dissolve': BlendingMode.DISSOLVE, 'classic_color_dodge': BlendingMode.CLASSIC_COLOR_DODGE,
+      'classic_color_burn': BlendingMode.CLASSIC_COLOR_BURN,
+      'stencil_alpha': BlendingMode.STENCIL_ALPHA, 'silhouette_alpha': BlendingMode.SILHOUETTE_ALPHA,
+      'alpha_add': BlendingMode.ALPHA_ADD, 'luminescent_premul': BlendingMode.LUMINESCENT_PREMUL
+    };
+    var modeKey = String(blendMode || 'normal').toLowerCase().replace(/[\s-]/g, '_');
+    var modeVal = modeMap[modeKey];
+    if (modeVal === undefined) {
+      var supported = 'normal, add, multiply, screen, overlay, soft_light, hard_light, difference, color_dodge, color_burn, linear_dodge, linear_burn, darken, lighten, dissolve, classic_color_dodge, classic_color_burn, stencil_alpha, silhouette_alpha, alpha_add, luminescent_premul';
+      result.message = 'Unknown blend mode: "' + blendMode + '". Supported: ' + supported;
+      return resultToJson(result);
+    }
+
+    _beginToolUndo('Agent: Set blend mode');
+    layer.blendMode = modeVal;
+    _endToolUndo();
+
+    result.ok = true;
+    result.message = 'Set blend mode on "' + layer.name + '" to "' + modeKey + '".';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'setBlendMode error: ' + e.toString();
     return resultToJson(result);
   }
 }
