@@ -62,7 +62,7 @@ Common issues with the AE Motion Agent panel.
 
 ## Streaming not working
 
-- SSE streaming requires Cloud.ru provider. Ollama provider does not use streaming.
+- SSE streaming requires Cloud.ru provider.
 - If text doesn't appear incrementally, the `onTextChunk` callback may not be firing — check DevTools console.
 
 ---
@@ -84,16 +84,7 @@ Common issues with the AE Motion Agent panel.
 
 ---
 
-## Ollama vision errors
-
-- Ensure Ollama is running (`ollama serve`) with vision models pulled.
-- **GPU OOM**: Reduce `ollamaVisionMaxEdgePx` in config (default 1024, try 768 or 512).
-- **Timeout**: Increase `ollamaVisionTimeoutMs` for slow hardware.
-- Vision modules are loaded but **not connected** to the agent loop — they work only via dedicated capture buttons.
-
----
-
-## Sessions lost after reload
+## Session lost after reload
 
 - Sessions are stored in `localStorage` key `ae-motion-agent-state`. Clearing browser data or changing the CEP origin loses them.
 - Use **Export** button to back up sessions before clearing.

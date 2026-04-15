@@ -30,26 +30,22 @@
 
   // ── State ──────────────────────────────────────────────────────────────
   var state = {
-    sessions: [],
-    activeSessionId: null,
-    nextSessionIndex: 1,
+    session: null,           // single session object
     isRequestInFlight: false,
     isPresetInFlight: false,
     selectedPresetKey: 'fade_in',
     currentAbortHandle: null,
     lastMutatingToolCount: 0,
-    lastModelStatus: { status: 'unknown', label: 'model: unknown' }
+    lastModelStatus: { status: 'unknown', label: 'model: unknown' },
+    activeTab: 'chat',
+    toolLog: []              // compact log entries for Presets & Logs tab
   }
 
   // ── DOM refs ───────────────────────────────────────────────────────────
   var els = {}
 
   function cacheDomRefs () {
-    els.sessionList = document.getElementById('session-list')
-    els.newSessionBtn = document.getElementById('new-session-btn')
-    els.renameSessionBtn = document.getElementById('rename-session-btn')
     els.clearSessionBtn = document.getElementById('clear-session-btn')
-    els.clearAllBtn = document.getElementById('clear-all-btn')
     els.exportSessionsBtn = document.getElementById('export-sessions-btn')
     els.exportErrorsBtn = document.getElementById('export-errors-btn')
     els.reportBtn = document.getElementById('report-btn')
@@ -69,6 +65,7 @@
     els.applyPresetBtn = document.getElementById('apply-preset-btn')
     els.statusText = document.getElementById('status-text')
     els.modelStatus = document.getElementById('model-status')
+    els.toolLog = document.getElementById('tool-log')
   }
 
   var PRESET_LABELS = {
@@ -207,9 +204,8 @@
     return null
   }
 
-  function pushSystemMessageToActiveSession (text) {
-    var session = getActiveSession()
-    if (!session) return
+  function pushSystemMessage (text) {
+    var session = ensureSession()
     session.messages.push({ role: 'system', text: text })
     session.updatedAt = Date.now()
     renderTranscript()
@@ -255,15 +251,21 @@
               else args.layer_index = layerInfo.index
               return window.HOST_BRIDGE.executeToolCall(presetCall.toolName, args)
                 .then(function (res) {
-                  if (res && res.ok) okCount++
-                  else {
+                  if (res && res.ok) {
+                    okCount++
+                    addToolLogEntry(presetCall.toolName, 'ok', res.message || '')
+                  } else {
                     errCount++
-                    if (!firstErr) firstErr = (res && res.message) ? res.message : 'Unknown host error'
+                    var errMsg = (res && res.message) ? res.message : 'Unknown host error'
+                    if (!firstErr) firstErr = errMsg
+                    addToolLogEntry(presetCall.toolName, 'error', errMsg)
                   }
                 })
                 .catch(function (err) {
                   errCount++
-                  if (!firstErr) firstErr = err.message || String(err)
+                  var errMsg = err.message || String(err)
+                  if (!firstErr) firstErr = errMsg
+                  addToolLogEntry(presetCall.toolName, 'error', errMsg)
                 })
             })
           })(selected[i])
@@ -273,10 +275,10 @@
           state.lastMutatingToolCount = okCount
           if (errCount === 0) {
             setStatus('Preset applied to ' + okCount + ' layer(s)')
-            pushSystemMessageToActiveSession('Preset "' + presetCall.toolName + '" applied to ' + okCount + ' selected layer(s).')
+            pushSystemMessage('Preset "' + presetCall.toolName + '" applied to ' + okCount + ' selected layer(s).')
           } else {
             setStatus('Preset applied with errors: ' + okCount + ' ok, ' + errCount + ' failed')
-            pushSystemMessageToActiveSession('Preset "' + presetCall.toolName + '" finished: ' + okCount + ' ok, ' + errCount + ' failed. ' + (firstErr || ''))
+            pushSystemMessage('Preset "' + presetCall.toolName + '" finished: ' + okCount + ' ok, ' + errCount + ' failed. ' + (firstErr || ''))
           }
           return refreshActiveCompNote(true)
         })
@@ -284,7 +286,7 @@
       .catch(function (err) {
         var msg = err && err.message ? err.message : String(err)
         setStatus('Preset apply failed: ' + msg)
-        pushSystemMessageToActiveSession('Preset apply failed: ' + msg)
+        pushSystemMessage('Preset apply failed: ' + msg)
       })
       .then(function () {
         setPresetUiBusy(false)
@@ -293,7 +295,6 @@
 
   function normalizeModelId (modelId) {
     if (!modelId || typeof modelId !== 'string') return DEFAULT_MODEL
-    // Local Ollama chat is intentionally disabled in this runtime.
     if (modelId.indexOf('ollama/') === 0) return DEFAULT_MODEL
     return modelId
   }
@@ -310,18 +311,14 @@
   function persistState () {
     try {
       var data = {
-        sessions: state.sessions.map(function (s) {
-          return {
-            id: s.id,
-            title: s.title,
-            createdAt: s.createdAt,
-            updatedAt: s.updatedAt,
-            model: s.model,
-            messages: s.messages
-          }
-        }),
-        activeSessionId: state.activeSessionId,
-        nextSessionIndex: state.nextSessionIndex
+        session: state.session ? {
+          id: state.session.id,
+          title: state.session.title,
+          createdAt: state.session.createdAt,
+          updatedAt: state.session.updatedAt,
+          model: state.session.model,
+          messages: state.session.messages
+        } : null
       }
       localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
     } catch (e) {
@@ -334,110 +331,101 @@
       var raw = localStorage.getItem(STORAGE_KEY)
       if (!raw) return
       var data = JSON.parse(raw)
-      if (data.sessions && data.sessions.length) {
-        state.sessions = data.sessions.map(function (s) {
-          var copy = {}
-          for (var k in s) copy[k] = s[k]
-          copy.model = normalizeModelId(copy.model)
-          return copy
-        })
-        state.activeSessionId = data.activeSessionId || data.sessions[0].id
-        state.nextSessionIndex = data.nextSessionIndex || data.sessions.length + 1
+      // Support old multi-session format: migrate to single session
+      if (data.sessions && data.sessions.length > 0) {
+        // Pick the active session or the first one
+        var active = null
+        if (data.activeSessionId) {
+          for (var i = 0; i < data.sessions.length; i++) {
+            if (data.sessions[i].id === data.activeSessionId) { active = data.sessions[i]; break }
+          }
+        }
+        if (!active) active = data.sessions[0]
+        state.session = active
+        state.session.model = normalizeModelId(state.session.model)
+        return
+      }
+      // New single-session format
+      if (data.session) {
+        state.session = data.session
+        state.session.model = normalizeModelId(state.session.model)
       }
     } catch (e) {
       console.warn('loadState error:', e)
     }
   }
 
-  // ── Session management ─────────────────────────────────────────────────
-  function createSession () {
+  // ── Session management (single session) ────────────────────────────────
+  function ensureSession () {
+    if (state.session) return state.session
     var id = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6)
-    var session = {
+    state.session = {
       id: id,
-      title: 'Chat ' + state.nextSessionIndex,
+      title: 'Session',
       createdAt: Date.now(),
       updatedAt: Date.now(),
       model: normalizeModelId((els.modelSelect && els.modelSelect.value) || DEFAULT_MODEL),
       messages: []
     }
-    state.nextSessionIndex++
-    state.sessions.unshift(session)
-    state.activeSessionId = id
     persistState()
-    renderSessions()
     renderTranscript()
-    return session
+    return state.session
   }
 
-  function getActiveSession () {
-    if (!state.activeSessionId && state.sessions.length) {
-      state.activeSessionId = state.sessions[0].id
+  // ── Tab switching ──────────────────────────────────────────────────────
+  function switchTab (tabName) {
+    state.activeTab = tabName
+    var tabs = document.querySelectorAll('.tab-btn')
+    var panels = document.querySelectorAll('.tab-panel')
+    for (var i = 0; i < tabs.length; i++) {
+      var t = tabs[i].getAttribute('data-tab')
+      if (t === tabName) tabs[i].classList.add('active')
+      else tabs[i].classList.remove('active')
     }
-    for (var i = 0; i < state.sessions.length; i++) {
-      if (state.sessions[i].id === state.activeSessionId) return state.sessions[i]
+    for (var j = 0; j < panels.length; j++) {
+      var p = panels[j].getAttribute('data-tab')
+      if (p === tabName) panels[j].classList.add('active')
+      else panels[j].classList.remove('active')
     }
-    return null
+    // When switching to chat, scroll to bottom
+    if (tabName === 'chat') scrollToBottom()
   }
 
-  function setActiveSession (id) {
-    state.activeSessionId = id
-    var session = getActiveSession()
-    if (session && els.modelSelect) {
-      session.model = normalizeModelId(session.model)
-      // Try to set the model select to the session's model.
-      var opts = els.modelSelect.options
-      var matched = false
-      for (var i = 0; i < opts.length; i++) {
-        if (opts[i].value === session.model) {
-          els.modelSelect.selectedIndex = i
-          matched = true
-          break
-        }
-      }
-      if (!matched && opts.length > 0) {
-        els.modelSelect.selectedIndex = 0
-        session.model = normalizeModelId(opts[0].value)
-      }
-    }
-    renderSessions()
-    renderTranscript()
-    persistState()
+  // ── Tool Log (compact log for Presets & Logs tab) ──────────────────────
+  function addToolLogEntry (name, status, msg) {
+    var now = new Date()
+    var timeStr = String(now.getHours()).padStart(2, '0') + ':' +
+                  String(now.getMinutes()).padStart(2, '0') + ':' +
+                  String(now.getSeconds()).padStart(2, '0')
+    state.toolLog.push({ time: timeStr, name: name, status: status, msg: msg || '' })
+    // Keep last 200 entries
+    if (state.toolLog.length > 200) state.toolLog = state.toolLog.slice(-200)
+    renderToolLog()
   }
 
-  // ── Render: sessions sidebar ───────────────────────────────────────────
-  function renderSessions () {
-    if (!els.sessionList) return
-    els.sessionList.innerHTML = ''
-    for (var i = 0; i < state.sessions.length; i++) {
-      var s = state.sessions[i]
-      var li = document.createElement('li')
-      li.className = 'session-item' + (s.id === state.activeSessionId ? ' active' : '')
-      li.setAttribute('data-id', s.id)
-
-      var titleSpan = document.createElement('span')
-      titleSpan.className = 'session-title'
-      titleSpan.textContent = s.title
-      li.appendChild(titleSpan)
-
-      var meta = document.createElement('div')
-      meta.className = 'session-meta'
-      var msgCount = s.messages ? s.messages.length : 0
-      meta.textContent = msgCount + ' msg' + (msgCount !== 1 ? 's' : '')
-      li.appendChild(meta)
-
-      ;(function (sessionId) {
-        li.addEventListener('click', function () { setActiveSession(sessionId) })
-      })(s.id)
-
-      els.sessionList.appendChild(li)
+  function renderToolLog () {
+    if (!els.toolLog) return
+    // Only render last 100 entries for performance
+    var entries = state.toolLog.slice(-100)
+    var html = ''
+    for (var i = 0; i < entries.length; i++) {
+      var e = entries[i]
+      html += '<div class="tool-log-entry">' +
+        '<span class="tool-log-time">' + e.time + '</span>' +
+        '<span class="tool-log-name">' + e.name + '</span>' +
+        '<span class="tool-log-status ' + e.status + '">' + e.status + '</span>' +
+        '<span class="tool-log-msg">' + (e.msg || '').replace(/</g, '&lt;').substring(0, 80) + '</span>' +
+        '</div>'
     }
+    els.toolLog.innerHTML = html
+    els.toolLog.scrollTop = els.toolLog.scrollHeight
   }
 
   // ── Render: chat transcript ────────────────────────────────────────────
   function renderTranscript () {
     if (!els.chatTranscript) return
     els.chatTranscript.innerHTML = ''
-    var session = getActiveSession()
+    var session = state.session
     if (!session) return
 
     for (var i = 0; i < session.messages.length; i++) {
@@ -557,7 +545,6 @@
       resultContent.className = 'tool-detail-content'
       try {
         var r = tc.result
-        // Show a concise version — message + key fields.
         if (r.message) {
           resultContent.textContent = r.message
         } else {
@@ -606,7 +593,6 @@
   function updateThinkingWithStreamText (chunk) {
     if (!thinkingEl) return
     streamingTextBuffer += chunk
-    // Show last 200 chars of streaming text
     var preview = streamingTextBuffer.length > 200 ? '...' + streamingTextBuffer.slice(-200) : streamingTextBuffer
     var streamDiv = thinkingEl.querySelector('.stream-preview')
     if (!streamDiv) {
@@ -639,47 +625,41 @@
   }
 
   // ── Minimal markdown → HTML ─────────────────────────────────────────────
-  /**
-   * Convert a subset of markdown to HTML for rendering agent responses.
-   * Supports: headers, bold, italic, inline code, code blocks, lists, paragraphs.
-   */
   function renderMarkdown (text) {
     if (!text) return ''
-    // Escape HTML entities.
     var s = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
 
-    // Images: ![alt](file:///path) or ![alt](/path)
+    // Images
     s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, function (_, alt, src) {
       var safeSrc = src.replace(/"/g, '&quot;')
       return '<img class="md-preview-img" src="' + safeSrc + '" alt="' + alt + '" />'
     })
 
-    // Code blocks (``` ... ```).
+    // Code blocks
     s = s.replace(/```(\w*)\n([\s\S]*?)```/g, function (_, lang, code) {
       return '<pre class="md-code-block"><code>' + code.replace(/\n$/, '') + '</code></pre>'
     })
 
-    // Inline code.
+    // Inline code
     s = s.replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>')
 
-    // Headers.
+    // Headers
     s = s.replace(/^### (.+)$/gm, '<strong class="md-h3">$1</strong>')
     s = s.replace(/^## (.+)$/gm, '<strong class="md-h2">$1</strong>')
     s = s.replace(/^# (.+)$/gm, '<strong class="md-h1">$1</strong>')
 
-    // Bold and italic.
+    // Bold and italic
     s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
     s = s.replace(/\*(.+?)\*/g, '<em>$1</em>')
 
-    // Unordered list items.
+    // Unordered list items
     s = s.replace(/^- (.+)$/gm, '<li>$1</li>')
-    // Wrap consecutive <li> in <ul>.
     s = s.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>')
 
-    // Numbered list items.
+    // Numbered list items
     s = s.replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
 
-    // Line breaks for remaining lines (but not inside pre/ul).
+    // Paragraphs
     s = s.replace(/\n\n/g, '</p><p>')
     s = s.replace(/\n/g, '<br>')
 
@@ -687,9 +667,6 @@
   }
 
   // ── Conversation pruning ────────────────────────────────────────────────
-  /**
-   * Estimate token count for a message array (~4 chars per token).
-   */
   function estimateTokens (messages) {
     var total = 0
     for (var i = 0; i < messages.length; i++) {
@@ -706,31 +683,18 @@
     return Math.ceil(total / 4)
   }
 
-  /**
-   * Prune old messages to fit within a token budget.
-   * Always keeps the last user message. Removes oldest messages first,
-   * but preserves message groups (assistant+tool pairs stay together).
-   */
   function pruneConversation (messages, maxTokens) {
     if (estimateTokens(messages) <= maxTokens) return messages
-
-    // Always keep at least the last 2 messages (last user + preceding context).
     var minKeep = 2
     var pruned = messages.slice()
-
     while (estimateTokens(pruned) > maxTokens && pruned.length > minKeep) {
-      // Remove from the front. If front is a tool message, keep removing
-      // until we clear the full assistant+tool group.
       var removed = pruned.shift()
-      // If we removed an assistant message with tool_calls, also remove
-      // the subsequent tool result messages.
       if (removed && removed.tool_calls && removed.tool_calls.length > 0) {
         while (pruned.length > minKeep && pruned[0] && pruned[0].role === 'tool') {
           pruned.shift()
         }
       }
     }
-
     return pruned
   }
 
@@ -771,10 +735,6 @@
   }
 
   // ── Expression Validation (Phase 10) ──────────────────────────────────
-  /**
-   * Quick static checks on expression text before sending to AE.
-   * Returns array of warning strings (empty if clean).
-   */
   function validateExpression (exprText) {
     var warnings = []
     if (!exprText || typeof exprText !== 'string') return warnings
@@ -785,7 +745,6 @@
     if (exprText.indexOf('\\n') >= 0 && exprText.indexOf('\\r') < 0 && exprText.toLowerCase().indexOf('sourcetext') >= 0) {
       warnings.push('WARN: Use "\\r" for line breaks in SourceText, not "\\n".')
     }
-    // Check unbalanced brackets
     var opens = 0; var closes = 0
     for (var i = 0; i < exprText.length; i++) {
       if (exprText[i] === '(') opens++
@@ -809,8 +768,7 @@
     var text = (els.userInput.value || '').trim()
     if (!text) return
 
-    var session = getActiveSession()
-    if (!session) session = createSession()
+    var session = ensureSession()
     session.model = normalizeModelId(session.model)
 
     // Push user message.
@@ -834,9 +792,9 @@
       }
     }
 
-    // Warn if no composition is open (non-blocking — agent will also get errors from tools).
+    // Warn if no composition is open.
     if (els.activeCompNote && els.activeCompNote.textContent.indexOf('unavailable') !== -1) {
-      session.messages.push({ role: 'system', text: '⚠ No active composition detected. Open a composition in After Effects before sending requests — most tools require an active comp.' })
+      session.messages.push({ role: 'system', text: '\u26A0 No active composition detected. Open a composition in After Effects before sending requests \u2014 most tools require an active comp.' })
       renderTranscript()
       persistState()
     }
@@ -849,18 +807,14 @@
     setStatus('Working...')
     showThinking()
 
-    // Build conversation messages for the API (convert our format to OpenAI format).
-    // Include tool call history so the agent remembers what it did in previous turns.
+    // Build conversation messages for the API.
     var apiMessages = []
     for (var i = 0; i < session.messages.length; i++) {
       var m = session.messages[i]
       if (m.role === 'user') {
         apiMessages.push({ role: 'user', content: m.text })
       } else if (m.role === 'assistant') {
-        // If this assistant message had tool calls, reconstruct the full
-        // assistant+tool message sequence so the model sees its prior actions.
         if (m.toolCalls && m.toolCalls.length > 0) {
-          // First: push the assistant message with tool_calls (as the API expects).
           var toolCallDefs = []
           for (var tc = 0; tc < m.toolCalls.length; tc++) {
             var call = m.toolCalls[tc]
@@ -877,7 +831,6 @@
           if (m.text) assistantApiMsg.content = m.text
           apiMessages.push(assistantApiMsg)
 
-          // Then: push each tool result message.
           for (var tr = 0; tr < m.toolCalls.length; tr++) {
             var tcResult = m.toolCalls[tr]
             apiMessages.push({
@@ -887,27 +840,19 @@
             })
           }
         } else if (m.text) {
-          // Plain text assistant response (no tool calls).
           apiMessages.push({ role: 'assistant', content: m.text })
         }
       }
-      // Skip system messages from our UI — the agent system prompt is injected separately.
     }
 
-    // Prune conversation to fit within token budget.
-    // Rough estimate: ~4 chars per token. Keep system prompt + tools budget (~2000 tokens)
-    // and reserve the rest for conversation. Default context budget: 12000 tokens for messages.
     var agentCfg = window.EXTENSIONS_LLM_CHAT_CONFIG || {}
     var maxConversationTokens = agentCfg.maxConversationTokens || 12000
     var maxSteps = getAgentMaxSteps(agentCfg)
     apiMessages = pruneConversation(apiMessages, maxConversationTokens)
 
-    // Phase 4: Inject knowledge base context for expression-related queries
     var kbContext = buildKnowledgeBaseContext(text)
     var systemPrompt = window.AGENT_SYSTEM_PROMPT || ''
     if (kbContext) systemPrompt += '\n\n## Expression Reference (from documentation)\n\n' + kbContext
-
-    var toolCallLog = []
 
     window.AGENT_TOOL_LOOP.runAgentLoop({
       modelId: session.model,
@@ -929,7 +874,6 @@
     }).then(function (result) {
       removeThinking()
 
-      // Count mutating tool calls for the Undo button.
       var READ_ONLY_TOOLS = {
         get_detailed_comp_summary: true, get_host_context: true,
         get_property_value: true, get_keyframes: true,
@@ -947,7 +891,6 @@
       }
       state.lastMutatingToolCount = mutatingCount
 
-      // Push assistant message with tool calls and final content.
       var assistantMsg = {
         role: 'assistant',
         text: result.content || '',
@@ -992,17 +935,11 @@
   }
 
   // ── Handle Undo ────────────────────────────────────────────────────────
-  /**
-   * Undo all mutating tool calls from the last agent request.
-   * Each tool call creates its own undo group in AE, so we call
-   * app.executeCommand(16) once per mutating tool call.
-   */
   function handleUndo () {
     if (!window.HOST_BRIDGE) return
     var count = state.lastMutatingToolCount || 1
     if (count < 1) count = 1
 
-    // Build a script that calls undo N times in a single evalScript.
     var script = '(function(){ for (var i = 0; i < ' + count + '; i++) { app.executeCommand(16); } return "' + count + '"; })()'
     window.HOST_BRIDGE.evalHostFunction(script)
       .then(function () { setStatus('Undo: ' + count + ' action' + (count > 1 ? 's' : '') + ' reverted') })
@@ -1011,35 +948,15 @@
   }
 
   // ── Session actions ────────────────────────────────────────────────────
-  function handleRenameSession () {
-    var session = getActiveSession()
-    if (!session) return
-    var name = prompt('Rename session:', session.title)
-    if (name && name.trim()) {
-      session.title = name.trim()
-      session.updatedAt = Date.now()
-      persistState()
-      renderSessions()
-    }
-  }
-
   function handleClearSession () {
-    var session = getActiveSession()
-    if (!session) return
-    if (!confirm('Clear all messages in "' + session.title + '"?')) return
-    session.messages = []
-    session.updatedAt = Date.now()
+    if (!state.session) return
+    if (!confirm('Clear all messages? This cannot be undone.')) return
+    state.session.messages = []
+    state.session.updatedAt = Date.now()
+    state.toolLog = []
     persistState()
     renderTranscript()
-  }
-
-  function handleClearAll () {
-    if (!confirm('Delete ALL sessions? This cannot be undone.')) return
-    state.sessions = []
-    state.activeSessionId = null
-    state.nextSessionIndex = 1
-    persistState()
-    createSession()
+    renderToolLog()
   }
 
   function handleExportSessions () {
@@ -1047,16 +964,16 @@
       var fs = require('fs')
       var path = require('path')
       var ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-      var filename = 'ae-agent-sessions-' + ts + '.json'
+      var filename = 'ae-agent-session-' + ts + '.json'
       var outDir = path.join(require('os').homedir(), 'Desktop')
       var outPath = path.join(outDir, filename)
       var data = {
         exportedAt: new Date().toISOString(),
-        sessions: state.sessions
+        session: state.session
       }
       fs.writeFileSync(outPath, JSON.stringify(data, null, 2), 'utf8')
       setStatus('Exported to ~/Desktop/' + filename)
-      alert('Sessions exported to:\n' + outPath)
+      alert('Session exported to:\n' + outPath)
     } catch (e) {
       console.error('Export error:', e)
       alert('Export failed: ' + (e.message || String(e)))
@@ -1073,8 +990,10 @@
       var outPath = path.join(outDir, filename)
 
       var errorEntries = []
-      for (var si = 0; si < state.sessions.length; si++) {
-        var session = state.sessions[si]
+      // Work with single session (wrap in array for consistent logic)
+      var sessions = state.session ? [state.session] : []
+      for (var si = 0; si < sessions.length; si++) {
+        var session = sessions[si]
         var msgs = session.messages || []
         for (var mi = 0; mi < msgs.length; mi++) {
           var msg = msgs[mi]
@@ -1107,8 +1026,8 @@
       }
 
       if (errorEntries.length === 0) {
-        setStatus('No errors found in sessions')
-        alert('No errors found — nothing to export.')
+        setStatus('No errors found in session')
+        alert('No errors found \u2014 nothing to export.')
         return
       }
 
@@ -1127,10 +1046,10 @@
   }
 
   // ── Report generation ────────────────────────────────────────────────
-  var REPORT_CHUNK_CHARS = 24000 // ~6k tokens per chunk, safe for context window
+  var REPORT_CHUNK_CHARS = 24000
   var REPORT_SYSTEM_PROMPT = [
     'You are a QA analyst reviewing session logs from an Adobe After Effects AI agent panel (AE Motion Agent).',
-    'The panel has 46 tools that create/modify layers, shapes, keyframes, expressions, effects, masks, markers, 3D, camera, light, import files, capture frames.',
+    'The panel has 47 tools that create/modify layers, shapes, keyframes, expressions, effects, masks, markers, 3D, camera, light, import files, capture frames.',
     '',
     'Analyze the provided session log chunk and produce a structured report in this EXACT format:',
     '',
@@ -1162,13 +1081,11 @@
     var msgs = session.messages || []
     for (var i = 0; i < msgs.length; i++) {
       var m = msgs[i]
-      // Internal format uses 'text', API format uses 'content' — support both
       var textContent = m.text || m.content || ''
       if (m.role === 'user') {
         var userStr = typeof textContent === 'string' ? textContent : JSON.stringify(textContent)
         lines.push('\n[USER] ' + (userStr || '').substring(0, 500))
       } else if (m.role === 'assistant') {
-        // Internal format: toolCalls array; API format: tool_calls array
         var calls = m.toolCalls || m.tool_calls || []
         if (calls.length > 0) {
           for (var tc = 0; tc < calls.length; tc++) {
@@ -1218,19 +1135,15 @@
       alert('Chat provider not available.')
       return
     }
-    if (state.sessions.length === 0) {
-      alert('No sessions to analyze.')
+    if (!state.session || !state.session.messages || state.session.messages.length === 0) {
+      alert('No session data to analyze.')
       return
     }
 
-    // Serialize all sessions
-    var allText = ''
-    for (var si = 0; si < state.sessions.length; si++) {
-      allText += serializeSessionForReport(state.sessions[si]) + '\n\n'
-    }
+    var allText = serializeSessionForReport(state.session) + '\n\n'
 
     if (allText.trim().length < 50) {
-      alert('Sessions are empty, nothing to analyze.')
+      alert('Session is empty, nothing to analyze.')
       return
     }
 
@@ -1240,12 +1153,10 @@
     setStatus('Generating report... (0/' + totalChunks + ' chunks)')
     if (els.reportBtn) els.reportBtn.disabled = true
 
-    // Show progress in chat so user knows it's not frozen
-    var session = getActiveSession()
-    if (session) {
-      session.messages.push({ role: 'system', text: '📊 Report: analyzing ' + totalChunks + ' chunk(s)...' })
-      renderTranscript()
-    }
+    // Show progress in chat
+    var session = state.session
+    session.messages.push({ role: 'system', text: '\uD83D\uDCCA Report: analyzing ' + totalChunks + ' chunk(s)...' })
+    renderTranscript()
 
     var modelId = (els.modelSelect && els.modelSelect.value) || DEFAULT_MODEL
     var chunkReports = []
@@ -1255,8 +1166,8 @@
         return finalizeReport(chunkReports)
       }
       setStatus('Generating report... (' + (idx + 1) + '/' + totalChunks + ' chunks)')
-      if (session && totalChunks > 1) {
-        session.messages.push({ role: 'system', text: '📊 Report: processing chunk ' + (idx + 1) + '/' + totalChunks + '...' })
+      if (totalChunks > 1) {
+        session.messages.push({ role: 'system', text: '\uD83D\uDCCA Report: processing chunk ' + (idx + 1) + '/' + totalChunks + '...' })
         renderTranscript()
       }
 
@@ -1290,12 +1201,10 @@
         var ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
         var outDir = path.join(os.homedir(), 'Desktop')
 
-        // Build combined markdown report
         var md = []
-        md.push('# AE Motion Agent — Session Analysis Report')
+        md.push('# AE Motion Agent \u2014 Session Analysis Report')
         md.push('')
         md.push('Generated: ' + new Date().toISOString())
-        md.push('Sessions analyzed: ' + state.sessions.length)
         md.push('Chunks processed: ' + reports.length)
         md.push('')
         md.push('---')
@@ -1318,22 +1227,19 @@
         var reportPath = path.join(outDir, reportFilename)
         fs.writeFileSync(reportPath, md.join('\n'), 'utf8')
 
-        // Also save raw log for developer reference
         var rawFilename = 'ae-agent-raw-log-' + ts + '.json'
         var rawPath = path.join(outDir, rawFilename)
         var rawData = {
           exportedAt: new Date().toISOString(),
-          sessions: state.sessions
+          session: state.session
         }
         fs.writeFileSync(rawPath, JSON.stringify(rawData, null, 2), 'utf8')
 
         setStatus('Report saved to Desktop')
         if (els.reportBtn) els.reportBtn.disabled = false
-        if (session) {
-          session.messages.push({ role: 'system', text: '✅ Report saved to ~/Desktop/' + reportFilename })
-          renderTranscript()
-          persistState()
-        }
+        session.messages.push({ role: 'system', text: '\u2705 Report saved to ~/Desktop/' + reportFilename })
+        renderTranscript()
+        persistState()
         alert('Report saved:\n' + reportPath + '\n\nRaw log:\n' + rawPath)
       } catch (e) {
         console.error('Report save error:', e)
@@ -1346,12 +1252,10 @@
   }
 
   function handleModelChange () {
-    var session = getActiveSession()
-    if (!session) return
+    var session = ensureSession()
     session.model = normalizeModelId(els.modelSelect.value)
     session.updatedAt = Date.now()
     persistState()
-    renderSessions()
   }
 
   function refreshActiveCompNote (silent) {
@@ -1378,15 +1282,24 @@
 
   // ── Event binding ──────────────────────────────────────────────────────
   function bindEvents () {
-    if (els.newSessionBtn) els.newSessionBtn.addEventListener('click', createSession)
-    if (els.renameSessionBtn) els.renameSessionBtn.addEventListener('click', handleRenameSession)
+    // Tab switching
+    var tabBtns = document.querySelectorAll('.tab-btn')
+    for (var ti = 0; ti < tabBtns.length; ti++) {
+      tabBtns[ti].addEventListener('click', function () {
+        var tab = this.getAttribute('data-tab')
+        if (tab) switchTab(tab)
+      })
+    }
+
+    // Footer buttons
     if (els.clearSessionBtn) els.clearSessionBtn.addEventListener('click', handleClearSession)
-    if (els.clearAllBtn) els.clearAllBtn.addEventListener('click', handleClearAll)
     if (els.exportSessionsBtn) els.exportSessionsBtn.addEventListener('click', handleExportSessions)
     if (els.exportErrorsBtn) els.exportErrorsBtn.addEventListener('click', handleExportErrors)
     if (els.reportBtn) els.reportBtn.addEventListener('click', handleGenerateReport)
-    if (els.sendBtn) els.sendBtn.addEventListener('click', handleSend)
     if (els.undoBtn) els.undoBtn.addEventListener('click', handleUndo)
+
+    // Chat buttons
+    if (els.sendBtn) els.sendBtn.addEventListener('click', handleSend)
     if (els.cancelBtn) els.cancelBtn.addEventListener('click', function () {
       if (state.currentAbortHandle) {
         state.currentAbortHandle.aborted = true
@@ -1397,6 +1310,8 @@
       }
     })
     if (els.modelSelect) els.modelSelect.addEventListener('change', handleModelChange)
+
+    // Preset dropdown
     if (els.presetDropdownBtn) {
       els.presetDropdownBtn.addEventListener('click', function (e) {
         e.preventDefault()
@@ -1441,7 +1356,7 @@
       })
     }
 
-    // Quick actions.
+    // Quick actions — send without switching tab (user can switch manually).
     var quickBtns = document.querySelectorAll('.quick-action-btn')
     for (var qi = 0; qi < quickBtns.length; qi++) {
       quickBtns[qi].addEventListener('click', function () {
@@ -1464,16 +1379,12 @@
     cacheDomRefs()
     loadState()
 
-    // Ensure at least one session.
-    if (state.sessions.length === 0) {
-      createSession()
-    } else {
-      renderSessions()
-      renderTranscript()
-    }
+    // Ensure single session exists
+    ensureSession()
+    renderTranscript()
 
-    // Set model selector to active session's model.
-    var session = getActiveSession()
+    // Set model selector to session's model
+    var session = state.session
     if (session && els.modelSelect) {
       var opts = els.modelSelect.options
       for (var i = 0; i < opts.length; i++) {

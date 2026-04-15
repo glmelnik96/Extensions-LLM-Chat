@@ -17,15 +17,9 @@ The panel uses a single config object exposed as `window.EXTENSIONS_LLM_CHAT_CON
 | cloudChatTimeoutMs | number | Timeout for Cloud.ru `/chat/completions` requests in milliseconds (default `120000`). |
 | defaultModel | string | Model used for generator and validator passes. |
 | fallbackModel | string | Model used for repair and for runtime fallback on transport failure. |
-| ollamaBaseUrl | string | Local Ollama HTTP API root (no trailing slash). Default `http://127.0.0.1:11434`. Reserved for vision phases. |
-| ollamaChatTimeoutMs | number | Timeout for Ollama `/api/chat` requests in milliseconds (default `120000`). |
-| ollamaVisionModel | string | Primary vision model tag (default `llava-phi3:latest`). |
-| ollamaVisionFallbackModel | string | Fallback vision model (default `moondream:latest`). |
 | captureEnabled | boolean | When `false`, screen capture buttons are disabled. Default true. |
 | previewCaptureInset | object | Fractional rectangle inside the frontmost After Effects window for **Capture comp area** (`leftFrac`, `topFrac`, `widthFrac`, `heightFrac`). |
 | captureTimeoutMs | number | Subprocess timeout in milliseconds (default 15000). |
-| ollamaVisionTimeoutMs | number | Timeout for Ollama `/api/chat` when sending images (default 90000). |
-| ollamaVisionMaxEdgePx | number | On macOS, resize PNG so longest edge ≤ this value before Ollama (default **1024**). **0** = send full resolution. Lowers GPU OOM risk on **Analyze frame**. |
 
 ## Behavior
 

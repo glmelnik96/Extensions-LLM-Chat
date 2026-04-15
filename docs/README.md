@@ -9,8 +9,7 @@
 
 ## Testing
 
-- [qa-test-plan.md](qa-test-plan.md) — smoke checklist (32 tests)
-- [manual-test-v3.md](manual-test-v3.md) — full test matrix (35 tests, 11 blocks)
+- [manual-test-v3.md](manual-test-v3.md) — test template + passed blocks reference
 - [release-checklist.md](release-checklist.md) — pre-release validation
 
 ## Reference

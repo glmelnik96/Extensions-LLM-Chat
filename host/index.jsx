@@ -1378,8 +1378,8 @@ function _resolveProperty (layer, propertyPath) {
     'mask shape': 'ADBE Mask Shape',
     'mask feather': 'ADBE Mask Feather',
     'mask opacity': 'ADBE Mask Opacity',
-    'mask expansion': 'ADBE Mask Expansion',
-    'expansion': 'ADBE Mask Expansion',
+    'mask expansion': 'ADBE Mask Offset',
+    'expansion': 'ADBE Mask Offset',
     'feather': 'ADBE Mask Feather',
     'inverted': 'ADBE Mask Inverted',
     'effects': 'ADBE Effect Parade',
@@ -1407,14 +1407,22 @@ function _resolveProperty (layer, propertyPath) {
     if (!next && current.numProperties !== undefined) {
       try {
         var segLower = seg.toLowerCase();
-        for (var ci = 1; ci <= current.numProperties; ci++) {
-          try {
-            var child = current.property(ci);
-            if (child && child.name && child.name.toLowerCase() === segLower) {
-              next = child;
-              break;
-            }
-          } catch (eChild) {}
+        // Numeric index fallback: "Mask 1", "Mask 2" etc. → property(N)
+        var numMatch = segLower.match(/^(?:mask|effect|group)\s+(\d+)$/);
+        if (numMatch) {
+          var idx = parseInt(numMatch[1], 10);
+          try { next = current.property(idx); } catch (eIdx) {}
+        }
+        if (!next) {
+          for (var ci = 1; ci <= current.numProperties; ci++) {
+            try {
+              var child = current.property(ci);
+              if (child && child.name && child.name.toLowerCase() === segLower) {
+                next = child;
+                break;
+              }
+            } catch (eChild) {}
+          }
         }
       } catch (eScan) {}
     }
@@ -2863,24 +2871,33 @@ function extensionsLlmChat_addMask (layerIndex, layerId, opts) {
     if (!maskGroup) { _endToolUndo(); result.message = 'Layer does not support masks.'; return resultToJson(result); }
     var newMask = maskGroup.addProperty('ADBE Mask Atom');
 
-    // Set mode: 1=Add, 2=Subtract, 3=Intersect, 4=Lighten, 5=Darken
-    var modeMap = { 'add': 1, 'subtract': 2, 'intersect': 3, 'lighten': 4, 'darken': 5 };
-    var modeVal = modeMap[String(opts.mode || 'add').toLowerCase()] || 1;
-    var modeNames = { 1: 'add', 2: 'subtract', 3: 'intersect', 4: 'lighten', 5: 'darken' };
+    // Set mode using MaskMode enum — raw integers cause "not of the correct type" in some AE versions
+    var modeMap = {
+      'add': MaskMode.ADD, 'subtract': MaskMode.SUBTRACT, 'intersect': MaskMode.INTERSECT,
+      'lighten': MaskMode.LIGHTEN, 'darken': MaskMode.DARKEN, 'difference': MaskMode.DIFFERENCE
+    };
+    var modeVal = modeMap[String(opts.mode || 'add').toLowerCase()];
+    if (modeVal === undefined) modeVal = MaskMode.ADD;
+    var modeEnumToName = {};
+    modeEnumToName[MaskMode.ADD] = 'add'; modeEnumToName[MaskMode.SUBTRACT] = 'subtract';
+    modeEnumToName[MaskMode.INTERSECT] = 'intersect'; modeEnumToName[MaskMode.LIGHTEN] = 'lighten';
+    modeEnumToName[MaskMode.DARKEN] = 'darken'; modeEnumToName[MaskMode.DIFFERENCE] = 'difference';
     var warnings = [];
-    // Try multiple ways to access mask mode — matchName varies across AE versions
-    var modeProp = null;
-    try { modeProp = newMask.property('ADBE Mask Mode'); } catch (e) {}
-    if (!modeProp) { try { modeProp = newMask.property('maskMode'); } catch (e) {} }
-    if (!modeProp) { try { modeProp = newMask.property(1); } catch (e) {} } // mode is typically first property
-    if (modeProp) {
-      try { modeProp.setValue(modeVal); } catch (eMode) {
-        warnings.push('mode set failed: ' + eMode.toString());
-      }
-    } else {
-      // Last resort: set via the MaskAtom's maskMode attribute (AE 2024+)
-      try { newMask.maskMode = modeVal; } catch (eMode2) {
-        warnings.push('mode property not found, maskMode attribute failed: ' + eMode2.toString());
+    // Set mask mode: try direct maskMode attribute FIRST (most reliable),
+    // then fallback to property setValue if attribute fails.
+    var modeSet = false;
+    try { newMask.maskMode = modeVal; modeSet = true; } catch (eAttr) {
+      // Attribute failed, try property setValue as fallback
+      var modeProp = null;
+      try { modeProp = newMask.property('ADBE Mask Mode'); } catch (e) {}
+      if (!modeProp) { try { modeProp = newMask.property('maskMode'); } catch (e) {} }
+      if (!modeProp) { try { modeProp = newMask.property(1); } catch (e) {} }
+      if (modeProp) {
+        try { modeProp.setValue(modeVal); modeSet = true; } catch (eMode) {
+          warnings.push('mode set failed: ' + eAttr.toString() + ' / ' + eMode.toString());
+        }
+      } else {
+        warnings.push('mode set failed: maskMode attribute: ' + eAttr.toString() + ', no mode property found');
       }
     }
 
@@ -2895,12 +2912,34 @@ function extensionsLlmChat_addMask (layerIndex, layerId, opts) {
         warnings.push('custom shape failed: ' + eShape.toString());
       }
     } else {
-      // Default rectangular mask covering the layer
-      var w = 0; var h = 0;
-      try { w = layer.width; h = layer.height; } catch (eDim) { w = ctx.comp.width; h = ctx.comp.height; }
+      // Default rectangular mask — use sourceRectAtTime for text/shape layers,
+      // fall back to layer.width/height for solids/footage, then comp dimensions.
+      var maskLeft = 0, maskTop = 0, maskW = 0, maskH = 0;
+      var gotRect = false;
+      // sourceRectAtTime works on TextLayer, ShapeLayer, and AVLayer with source —
+      // it returns the visual bounding box in layer coordinates (crucial for text & shapes
+      // where layer.width/height just returns the comp dimensions).
+      try {
+        var rect = layer.sourceRectAtTime(ctx.comp.time, false);
+        if (rect && typeof rect.width === 'number' && rect.width > 0 && typeof rect.height === 'number' && rect.height > 0) {
+          maskLeft = rect.left;
+          maskTop = rect.top;
+          maskW = rect.width;
+          maskH = rect.height;
+          gotRect = true;
+        }
+      } catch (eRect) { /* sourceRectAtTime not available — fall through */ }
+      if (!gotRect) {
+        try { maskW = layer.width; maskH = layer.height; } catch (eDim) { maskW = ctx.comp.width; maskH = ctx.comp.height; }
+      }
       var inset = typeof opts.inset === 'number' ? opts.inset : 0;
       var defShape = new Shape();
-      defShape.vertices = [[inset, inset], [w - inset, inset], [w - inset, h - inset], [inset, h - inset]];
+      defShape.vertices = [
+        [maskLeft + inset, maskTop + inset],
+        [maskLeft + maskW - inset, maskTop + inset],
+        [maskLeft + maskW - inset, maskTop + maskH - inset],
+        [maskLeft + inset, maskTop + maskH - inset]
+      ];
       defShape.closed = true;
       try { newMask.property('ADBE Mask Shape').setValue(defShape); } catch (eDefShape) {
         warnings.push('default shape failed: ' + eDefShape.toString());
@@ -2918,17 +2957,37 @@ function extensionsLlmChat_addMask (layerIndex, layerId, opts) {
       }
     }
     if (typeof opts.expansion === 'number') {
-      try { newMask.property('ADBE Mask Expansion').setValue(opts.expansion); } catch (eE) {
+      try { newMask.property('ADBE Mask Offset').setValue(opts.expansion); } catch (eE) {
         warnings.push('expansion failed: ' + eE.toString());
       }
     }
 
+    // Set mask mode AFTER shape is set — on freshly created masks, maskMode attribute
+    // is silently ignored if set before the shape. Re-apply mode here for reliability.
+    if (modeVal !== MaskMode.ADD) {
+      try { newMask.maskMode = modeVal; } catch (eMode2) {
+        // Try property setValue as last resort
+        try {
+          var mp2 = newMask.property('ADBE Mask Mode');
+          if (mp2) mp2.setValue(modeVal);
+        } catch (eMode3) {
+          warnings.push('post-shape mode set failed: ' + eMode3.toString());
+        }
+      }
+    }
+
     // Read back actual mode to report truthfully
-    var actualMode = 'add';
+    var actualMode = 'unknown';
     try {
-      var readModeProp = modeProp || newMask.property('ADBE Mask Mode');
-      if (readModeProp) actualMode = modeNames[readModeProp.value] || 'unknown';
-    } catch (eRead) {}
+      // Read maskMode attribute first (most reliable)
+      var readModeVal = newMask.maskMode;
+      actualMode = modeEnumToName[readModeVal] || 'unknown';
+    } catch (eRead) {
+      try {
+        var readModeProp = newMask.property('ADBE Mask Mode');
+        if (readModeProp) actualMode = modeEnumToName[readModeProp.value] || 'unknown';
+      } catch (eRead2) {}
+    }
 
     _endToolUndo();
     result.ok = true;
@@ -2976,21 +3035,29 @@ function extensionsLlmChat_setMaskProperties (layerIndex, layerId, maskIndex, pr
       try { mask.property('ADBE Mask Opacity').setValue(props.opacity); changed.push('opacity=' + props.opacity); } catch (e2) { warnings.push('opacity failed: ' + e2.toString()); }
     }
     if (typeof props.expansion === 'number') {
-      try { mask.property('ADBE Mask Expansion').setValue(props.expansion); changed.push('expansion=' + props.expansion); } catch (e3) { warnings.push('expansion failed: ' + e3.toString()); }
+      try { mask.property('ADBE Mask Offset').setValue(props.expansion); changed.push('expansion=' + props.expansion); } catch (e3) { warnings.push('expansion failed: ' + e3.toString()); }
     }
     if (typeof props.mode === 'string') {
-      var modeMap2 = { 'add': 1, 'subtract': 2, 'intersect': 3, 'lighten': 4, 'darken': 5 };
+      var modeMap2 = {
+        'add': MaskMode.ADD, 'subtract': MaskMode.SUBTRACT, 'intersect': MaskMode.INTERSECT,
+        'lighten': MaskMode.LIGHTEN, 'darken': MaskMode.DARKEN, 'difference': MaskMode.DIFFERENCE
+      };
       var mv = modeMap2[props.mode.toLowerCase()];
-      if (mv) {
-        var mp = null;
-        try { mp = mask.property('ADBE Mask Mode'); } catch (e) {}
-        if (!mp) { try { mp = mask.property('maskMode'); } catch (e) {} }
-        if (!mp) { try { mp = mask.property(1); } catch (e) {} }
-        if (mp) {
-          try { mp.setValue(mv); changed.push('mode=' + props.mode); } catch (e4) { warnings.push('mode failed: ' + e4.toString()); }
-        } else {
-          try { mask.maskMode = mv; changed.push('mode=' + props.mode); } catch (e4) { warnings.push('mode property not found: ' + e4.toString()); }
+      if (mv !== undefined) {
+        // Try direct maskMode attribute first (most reliable)
+        var modeOk = false;
+        try { mask.maskMode = mv; modeOk = true; } catch (eAttr) {
+          var mp = null;
+          try { mp = mask.property('ADBE Mask Mode'); } catch (e) {}
+          if (!mp) { try { mp = mask.property('maskMode'); } catch (e) {} }
+          if (!mp) { try { mp = mask.property(1); } catch (e) {} }
+          if (mp) {
+            try { mp.setValue(mv); modeOk = true; } catch (e4) { warnings.push('mode failed: ' + eAttr.toString() + ' / ' + e4.toString()); }
+          } else {
+            warnings.push('mode failed: ' + eAttr.toString());
+          }
         }
+        if (modeOk) changed.push('mode=' + props.mode);
       }
     }
     if (typeof props.inverted === 'boolean') {
@@ -3026,15 +3093,18 @@ function extensionsLlmChat_getMaskInfo (layerIndex, layerId) {
     var maskGroup = layer.property('ADBE Mask Parade');
     if (!maskGroup) { result.ok = true; result.message = 'Layer has no mask support.'; return resultToJson(result); }
 
-    var modeNames = { 1: 'add', 2: 'subtract', 3: 'intersect', 4: 'lighten', 5: 'darken' };
+    var modeReadNames = {};
+    modeReadNames[MaskMode.ADD] = 'add'; modeReadNames[MaskMode.SUBTRACT] = 'subtract';
+    modeReadNames[MaskMode.INTERSECT] = 'intersect'; modeReadNames[MaskMode.LIGHTEN] = 'lighten';
+    modeReadNames[MaskMode.DARKEN] = 'darken'; modeReadNames[MaskMode.DIFFERENCE] = 'difference';
     for (var mi = 1; mi <= maskGroup.numProperties; mi++) {
       var m = maskGroup.property(mi);
       var info = { index: mi, name: '', mode: '', feather: 0, opacity: 100, expansion: 0, inverted: false, numVertices: 0 };
       try { info.name = m.name; } catch (e1) {}
-      try { info.mode = modeNames[m.property('ADBE Mask Mode').value] || 'unknown'; } catch (e2) {}
+      try { info.mode = modeReadNames[m.property('ADBE Mask Mode').value] || 'unknown'; } catch (e2) {}
       try { var fv = m.property('ADBE Mask Feather').value; info.feather = typeof fv === 'number' ? fv : fv[0]; } catch (e3) {}
       try { info.opacity = m.property('ADBE Mask Opacity').value; } catch (e4) {}
-      try { info.expansion = m.property('ADBE Mask Expansion').value; } catch (e5) {}
+      try { info.expansion = m.property('ADBE Mask Offset').value; } catch (e5) {}
       try { info.inverted = m.property('ADBE Mask Inverted').value; } catch (e6) {}
       try { info.numVertices = m.property('ADBE Mask Shape').value.vertices.length; } catch (e7) {}
       result.masks.push(info);
