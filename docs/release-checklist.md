@@ -1,45 +1,46 @@
-# Release checklist
+# Release Checklist
 
-Use this checklist before packaging or releasing the CEP extension.
+Pre-release validation for the AE Motion Agent CEP extension.
 
 ---
 
-## Pre-release validation
+## Structure
 
-- [ ] **Repo structure**: Run `node scripts/validate-repo.js` from repo root; exit code 0.
-- [ ] **Required files**: Run `node scripts/check-required-files.js`; exit code 0.
-- [ ] **Config**: Ensure `config/example.config.js` is committed; `config/runtime-config.js` is **not** committed (in .gitignore). No real API keys in repo.
-- [ ] **Docs**: Key active docs present (`configuration.md`, `secret-handling.md`, `final-architecture.md`, `capabilities-and-roadmap.md`, `qa-test-plan.md`, `troubleshooting.md`). Legacy references live only in archive: [legacy-archive-on-user-request-only/README.md](legacy-archive-on-user-request-only/README.md).
+- [ ] Required files exist: `index.html`, `main.js`, `styles.css`, `host/index.jsx`, `CSXS/manifest.xml`
+- [ ] Agent modules: `agentSystemPrompt.js`, `agentToolLoop.js`, `chatProvider.js`, `hostBridge.js`, `toolRegistry.js`
+- [ ] Config: `config/example.config.js` committed, `secrets.local.js` and `runtime-config.js` in `.gitignore`
+- [ ] No real API keys in any tracked file
 
 ---
 
 ## Functional QA
 
-- [ ] **Startup**: Panel launches with default config (example.config.js); status shows config message when apiKey empty.
-- [ ] **Startup**: With valid runtime-config, panel loads and Send works when session + input present.
-- [ ] **Sessions**: New, switch, rename, clear, clear all, persistence after reload (see docs/qa-test-plan.md).
-- [ ] **Agent cycle**: Happy path → one assistant message with tool cards and final text.
-- [ ] **Tool failures**: Invalid expression/tool args show error status in tool cards or system message, panel remains responsive.
-- [ ] **Undo**: Reverts all successful mutating actions from the previous request.
-- [ ] **Stop**: Cancels current run and returns control to the user.
-- [ ] **No legacy pipeline UI**: No generator/validator/repair stage UI and no Apply button in current panel.
+- [ ] Panel launches, status shows **Ready** (or config message if no key)
+- [ ] Agent cycle: happy path — tool calls + final text
+- [ ] Tool errors shown in cards, panel remains responsive
+- [ ] Undo reverts all mutating actions
+- [ ] Stop cancels running agent
+- [ ] Sessions: new, switch, rename, clear, clear all, persistence after reload
+- [ ] Preset toolbar: dropdown, apply preset to selected layers
+- [ ] Quick actions: buttons trigger correct prompts
+- [ ] Export: saves JSON to Desktop
+- [ ] Report: generates LLM-analyzed report to Desktop
+- [ ] Streaming: text appears incrementally during generation
+
+See [qa-test-plan.md](qa-test-plan.md) for full smoke list, [manual-test-v3.md](manual-test-v3.md) for 35-test detailed checklist.
 
 ---
 
 ## Deployment
 
-- [ ] **manifest**: CSXS/manifest.xml version and host list correct for target AE version.
-- [ ] **Host script**: `host/index.jsx` is included and invoked via `CSInterface.evalScript` through `hostBridge.js` for agent tools.
-- [ ] **Paths**: All script paths in index.html are correct for the install location (relative to extension root).
-- [ ] **Instructions**: README (and optionally [legacy-archive-on-user-request-only/planning/plan-deployment-install-packaging.md](legacy-archive-on-user-request-only/planning/plan-deployment-install-packaging.md)) describe how to install and configure (config, API key).
+- [ ] `CSXS/manifest.xml` version and host list correct for target AE version
+- [ ] `--enable-nodejs` and `--mixed-context` parameters in manifest
+- [ ] All script paths in `index.html` are correct (relative to extension root)
+- [ ] `lib/CSInterface.js` installation documented in README
 
 ---
 
 ## Post-release
 
-- [ ] **Changelog / notes**: Known limitations in [capabilities-and-roadmap.md](capabilities-and-roadmap.md); historical hardening context in [legacy-archive-on-user-request-only/implementation-reports/report-stage-05-hardening-diagnostics-release-prep.md](legacy-archive-on-user-request-only/implementation-reports/report-stage-05-hardening-diagnostics-release-prep.md).
-- [ ] **Secrets**: Confirm no keys or tokens in packaged artifact; users supply config locally.
-
----
-
-See **docs/qa-test-plan.md** for the short agent smoke list; extended matrices and Copilot-era plans live under **docs/legacy-archive-on-user-request-only/qa-testing/** (open when needed).
+- [ ] Known limitations documented in [capabilities-and-roadmap.md](capabilities-and-roadmap.md)
+- [ ] No keys or tokens in packaged artifact

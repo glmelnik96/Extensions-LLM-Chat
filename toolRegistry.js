@@ -433,6 +433,309 @@
       }
     },
 
+    // ── Shape content tools ──────────────────────────────────────────
+    {
+      type: 'function',
+      function: {
+        name: 'add_shape_rectangle',
+        description: 'Add a rectangle shape group to a shape layer with optional fill and stroke.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID' },
+            name: { type: 'string', description: 'Name for the shape group (default "Rectangle")' },
+            width: { type: 'number', description: 'Rectangle width in px (default 200)' },
+            height: { type: 'number', description: 'Rectangle height in px (default 200)' },
+            position: { type: 'array', items: { type: 'number' }, description: '[x, y] position relative to layer anchor' },
+            roundness: { type: 'number', description: 'Corner roundness in px' },
+            fill_color: { type: 'array', items: { type: 'number' }, description: 'RGB fill [0-1, 0-1, 0-1]' },
+            fill_opacity: { type: 'number', description: 'Fill opacity 0-100' },
+            stroke_color: { type: 'array', items: { type: 'number' }, description: 'RGB stroke [0-1, 0-1, 0-1]' },
+            stroke_width: { type: 'number', description: 'Stroke width in px' }
+          },
+          required: ['layer_index']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'add_shape_ellipse',
+        description: 'Add an ellipse shape group to a shape layer with optional fill and stroke.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID' },
+            name: { type: 'string', description: 'Name for the shape group (default "Ellipse")' },
+            width: { type: 'number', description: 'Ellipse width in px (default 200)' },
+            height: { type: 'number', description: 'Ellipse height in px (default 200)' },
+            position: { type: 'array', items: { type: 'number' }, description: '[x, y] position relative to layer anchor' },
+            fill_color: { type: 'array', items: { type: 'number' }, description: 'RGB fill [0-1, 0-1, 0-1]' },
+            fill_opacity: { type: 'number', description: 'Fill opacity 0-100' },
+            stroke_color: { type: 'array', items: { type: 'number' }, description: 'RGB stroke [0-1, 0-1, 0-1]' },
+            stroke_width: { type: 'number', description: 'Stroke width in px' }
+          },
+          required: ['layer_index']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'add_shape_path',
+        description: 'Add a custom bezier path to a shape layer. Vertices are [x,y] arrays in layer coordinates.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID' },
+            name: { type: 'string', description: 'Name for the shape group' },
+            vertices: { type: 'array', items: { type: 'array', items: { type: 'number' } }, description: 'Array of [x, y] vertex positions (minimum 2)' },
+            in_tangents: { type: 'array', items: { type: 'array', items: { type: 'number' } }, description: 'Incoming tangent handles per vertex' },
+            out_tangents: { type: 'array', items: { type: 'array', items: { type: 'number' } }, description: 'Outgoing tangent handles per vertex' },
+            closed: { type: 'boolean', description: 'Close the path (default true)' },
+            fill_color: { type: 'array', items: { type: 'number' }, description: 'RGB fill [0-1, 0-1, 0-1]' },
+            stroke_color: { type: 'array', items: { type: 'number' }, description: 'RGB stroke [0-1, 0-1, 0-1]' },
+            stroke_width: { type: 'number', description: 'Stroke width in px' }
+          },
+          required: ['layer_index', 'vertices']
+        }
+      }
+    },
+
+    // ── 3D / Camera / Light tools ─────────────────────────────────────
+    {
+      type: 'function',
+      function: {
+        name: 'set_layer_3d',
+        description: 'Enable or disable 3D on a layer. Does not apply to camera/light layers (always 3D).',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID' },
+            enabled: { type: 'boolean', description: 'true to enable 3D, false to disable' }
+          },
+          required: ['layer_index', 'enabled']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'set_camera_properties',
+        description: 'Set camera-specific properties: zoom, focus distance, aperture, blur level, depth of field.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based camera layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID' },
+            zoom: { type: 'number', description: 'Camera zoom in pixels' },
+            focus_distance: { type: 'number', description: 'Focus distance in pixels' },
+            aperture: { type: 'number', description: 'Aperture value' },
+            blur_level: { type: 'number', description: 'Blur level 0-100' },
+            depth_of_field: { type: 'boolean', description: 'Enable depth of field' }
+          },
+          required: ['layer_index']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'set_light_properties',
+        description: 'Set light-specific properties: intensity, color, cone angle, cone feather.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based light layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID' },
+            intensity: { type: 'number', description: 'Light intensity 0-300%' },
+            color: { type: 'array', items: { type: 'number' }, description: 'RGB color [0-1, 0-1, 0-1]' },
+            cone_angle: { type: 'number', description: 'Cone angle in degrees (spot lights)' },
+            cone_feather: { type: 'number', description: 'Cone feather 0-100%' }
+          },
+          required: ['layer_index']
+        }
+      }
+    },
+
+    // ── Mask tools ────────────────────────────────────────────────────
+    {
+      type: 'function',
+      function: {
+        name: 'add_mask',
+        description: 'Add a mask to a layer. Creates a rectangular mask by default, or use vertices for custom shape.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID' },
+            mode: { type: 'string', enum: ['add', 'subtract', 'intersect', 'lighten', 'darken'], description: 'Mask mode (default "add")' },
+            vertices: { type: 'array', items: { type: 'array', items: { type: 'number' } }, description: 'Custom mask path vertices [x,y] in layer coords' },
+            in_tangents: { type: 'array', items: { type: 'array', items: { type: 'number' } }, description: 'Incoming bezier tangents' },
+            out_tangents: { type: 'array', items: { type: 'array', items: { type: 'number' } }, description: 'Outgoing bezier tangents' },
+            closed: { type: 'boolean', description: 'Close the mask path (default true)' },
+            feather: { type: 'number', description: 'Mask feather in px' },
+            opacity: { type: 'number', description: 'Mask opacity 0-100' },
+            expansion: { type: 'number', description: 'Mask expansion in px' },
+            inset: { type: 'number', description: 'Inset from layer edges in px (for default rect mask)' }
+          },
+          required: ['layer_index']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'set_mask_properties',
+        description: 'Modify properties of an existing mask: feather, opacity, expansion, mode, inverted.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID' },
+            mask_index: { type: 'number', description: '1-based mask index' },
+            feather: { type: 'number', description: 'Mask feather in px' },
+            opacity: { type: 'number', description: 'Mask opacity 0-100' },
+            expansion: { type: 'number', description: 'Mask expansion in px' },
+            mode: { type: 'string', enum: ['add', 'subtract', 'intersect', 'lighten', 'darken'] },
+            inverted: { type: 'boolean', description: 'Invert the mask' }
+          },
+          required: ['layer_index', 'mask_index']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_mask_info',
+        description: 'Read all masks on a layer: mode, feather, opacity, expansion, vertex count.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID' }
+          },
+          required: ['layer_index']
+        }
+      }
+    },
+
+    // ─��� Marker tools ──────────────────────────────────────────────────
+    {
+      type: 'function',
+      function: {
+        name: 'add_marker',
+        description: 'Add a marker to a layer or the composition.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index (for layer markers)' },
+            layer_id: { type: 'number', description: 'Persistent layer ID' },
+            target: { type: 'string', enum: ['layer', 'comp'], description: '"layer" (default) or "comp"' },
+            time: { type: 'number', description: 'Time in seconds (default: current time)' },
+            comment: { type: 'string', description: 'Marker comment text' },
+            duration: { type: 'number', description: 'Marker duration in seconds' }
+          },
+          required: []
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'get_markers',
+        description: 'Read all markers from a layer or the composition.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID' },
+            target: { type: 'string', enum: ['layer', 'comp'], description: '"layer" (default) or "comp"' }
+          },
+          required: []
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'delete_marker',
+        description: 'Delete a marker by its 1-based index.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID' },
+            target: { type: 'string', enum: ['layer', 'comp'], description: '"layer" (default) or "comp"' },
+            marker_index: { type: 'number', description: '1-based marker index' }
+          },
+          required: ['marker_index']
+        }
+      }
+    },
+
+    // ── Import / Project items tools ──────────────────────────────────
+    {
+      type: 'function',
+      function: {
+        name: 'list_project_items',
+        description: 'List all items in the AE project: compositions, footage, folders.',
+        parameters: {
+          type: 'object',
+          properties: {
+            max_items: { type: 'number', description: 'Max items to return (default 100)' }
+          },
+          required: []
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'import_file',
+        description: 'Import a file (image, video, audio) into the AE project.',
+        parameters: {
+          type: 'object',
+          properties: {
+            file_path: { type: 'string', description: 'Absolute file path to import' }
+          },
+          required: ['file_path']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'add_item_to_comp',
+        description: 'Add a project item (footage, comp) to the active composition as a new layer.',
+        parameters: {
+          type: 'object',
+          properties: {
+            project_item_index: { type: 'number', description: '1-based project item index from list_project_items' }
+          },
+          required: ['project_item_index']
+        }
+      }
+    },
+
+    // ── Capture tool ──────────────────────────────────────────────────
+    {
+      type: 'function',
+      function: {
+        name: 'capture_comp_frame',
+        description: 'Save the current composition frame as PNG. Returns the file path that can be shown as a preview image.',
+        parameters: {
+          type: 'object',
+          properties: {},
+          required: []
+        }
+      }
+    },
+
     // ── Effect tools ───────────────────────────────────────────────────
     {
       type: 'function',
@@ -560,6 +863,23 @@
             tracking: { type: 'number' },
             leading: { type: 'number' },
             baseline_shift: { type: 'number' }
+          },
+          required: ['layer_index']
+        }
+      }
+    },
+
+    // ── Create Shapes from Text ────────────────────────────────────────
+    {
+      type: 'function',
+      function: {
+        name: 'create_shapes_from_text',
+        description: 'Convert a text layer into a shape layer with vector outlines of each glyph. The original text layer is preserved. Use the resulting shape layer as a track matte, for path animations, or to extract outlines. Only works on text layers.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID' }
           },
           required: ['layer_index']
         }

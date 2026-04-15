@@ -16,6 +16,9 @@
           <button id="rename-session-btn" class="btn btn-secondary" title="Rename this chat session">Rename</button>
           <button id="clear-session-btn" class="btn btn-secondary" title="Clear all messages in this session">Clear</button>
           <button id="clear-all-btn" class="btn btn-danger" title="Delete ALL sessions permanently">Clear All</button>
+          <button id="export-sessions-btn" class="btn btn-secondary" title="Export all sessions to JSON on Desktop">Export</button>
+          <button id="export-errors-btn" class="btn btn-secondary" title="Export errors only: user request + failed tools + agent response → JSON on Desktop">Errors</button>
+          <button id="report-btn" class="btn btn-secondary" title="Analyze all sessions with LLM and generate a bug report on Desktop">Report</button>
         </div>
       </aside>
       <main class="chat-area">
@@ -62,12 +65,19 @@
           </div>
           <button id="apply-preset-btn" class="btn btn-secondary" title="Apply selected preset to selected layers">Apply preset</button>
         </div>
+        <div class="quick-actions" id="quick-actions">
+          <button class="quick-action-btn" data-prompt="Add wiggle(3, 25) to selected layers" title="Apply wiggle expression to selection">Wiggle</button>
+          <button class="quick-action-btn" data-prompt="Create a counter from 0 to 100 on selected text layer" title="Counter expression on text">Counter</button>
+          <button class="quick-action-btn" data-prompt="Animate selected layers in from the left with easing" title="Slide in from left">Slide In</button>
+          <button class="quick-action-btn" data-prompt="Add bounce easing expression to all keyframes on selected layers" title="Bounce overshoot on keyframes">Bounce</button>
+          <button class="quick-action-btn" data-prompt="Capture current frame preview" title="Save and show current comp frame">Preview</button>
+        </div>
         <div class="chat-input-container">
           <textarea
             id="user-input"
             class="chat-input"
-            rows="3"
-            placeholder="Describe what you want to animate, create, or improve...&#10;&#10;Examples: &quot;Add wiggle to selected layer&quot;, &quot;Create a counter from 0 to 100&quot;, &quot;Animate title flying in from left&quot;"
+            rows="2"
+            placeholder="Describe what to animate, create, or fix... (Enter to send, Shift+Enter for newline)"
           ></textarea>
           <div class="chat-actions">
             <button id="send-btn" class="btn btn-primary" title="Send message (Enter). Shift+Enter for new line.">Send</button>
@@ -82,18 +92,7 @@
     <script src="./config/runtime-config.js"></script>
     <script src="./config/secrets.local.js"></script>
 
-    <!-- Existing modules (kept for backward compat) -->
-    <script src="./diagnostics.js"></script>
-    <script src="./knowledge-base/index/corpusIndex.js"></script>
-    <script src="./prompt-library/promptsBundle.js"></script>
-    <script src="./pipelineAssembly.js"></script>
-    <script src="./systemPrompt.js"></script>
-    <script src="./aeDocsIndex.js"></script>
-    <script src="./aeDocsRetrieval.js"></script>
-    <script src="./aePromptContext.js"></script>
-    <script src="./aeResponseValidation.js"></script>
-    <script src="./lib/captureMacOS.js"></script>
-    <script src="./lib/ollamaVision.js"></script>
+    <!-- Libraries -->
     <script src="./lib/CSInterface.js"></script>
 
     <!-- New agent modules -->

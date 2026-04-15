@@ -5,7 +5,7 @@
 ### Agent Tool System
 The extension works as an AI agent that can inspect, create, and modify After Effects compositions through tool calls. The LLM plans a sequence of actions, executes them one by one via ExtendScript, and reports results.
 
-**Supported tools (30):**
+**Supported tools (47):**
 
 #### Read (inspection)
 | Tool | Description |
@@ -17,6 +17,9 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 | `get_keyframes` | Read all keyframes with times, values, easing |
 | `get_layer_properties` | Deep scan of all properties on a layer |
 | `get_effect_properties` | List properties of a specific effect |
+| `get_mask_info` | Read all masks on a layer: mode, feather, opacity, expansion, vertex count |
+| `get_markers` | Read all markers from a layer or composition |
+| `list_project_items` | List all comps, footage, and folders in the project |
 
 #### Layer operations
 | Tool | Description |
@@ -28,6 +31,14 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 | `set_layer_parent` | Parent/unparent layers |
 | `set_layer_timing` | Set in/out points and start time |
 | `rename_layer` | Rename a layer |
+| `set_layer_3d` | Enable/disable 3D on a layer |
+
+#### Shape content
+| Tool | Description |
+|------|-------------|
+| `add_shape_rectangle` | Rectangle with size, position, roundness, fill, stroke |
+| `add_shape_ellipse` | Ellipse with size, position, fill, stroke |
+| `add_shape_path` | Custom bezier path with vertices, tangents, fill, stroke |
 
 #### Animation
 | Tool | Description |
@@ -38,9 +49,9 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 | `set_property_value` | Set a static value on any property |
 | `apply_expression` | Apply an AE expression to any expressable property. Returns expression errors for agent self-correction. |
 | `apply_expression_batch` | Apply expressions to multiple layer properties in one tool call with per-target success/error details. |
-| `apply_fade_preset` | Deterministic fade preset with fixed keyframe/easing recipe (`duration`, `delay`, `direction`) |
-| `apply_pop_preset` | Deterministic pop preset with fixed keyframe/easing recipe (`duration`, `delay`, `direction`, `intensity`) |
-| `apply_slide_preset` | Deterministic slide preset with fixed keyframe/easing recipe (`duration`, `delay`, `direction`, `amplitude`) |
+| `apply_fade_preset` | Deterministic fade preset with fixed keyframe/easing recipe |
+| `apply_pop_preset` | Deterministic pop preset with fixed keyframe/easing recipe |
+| `apply_slide_preset` | Deterministic slide preset with fixed keyframe/easing recipe |
 
 #### Effects
 | Tool | Description |
@@ -48,6 +59,31 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 | `add_effect` | Add effect by matchName or display name |
 | `remove_effect` | Remove an effect |
 | `set_effect_property` | Set a value on an effect property |
+
+#### 3D, Camera & Light
+| Tool | Description |
+|------|-------------|
+| `set_camera_properties` | Zoom, focus distance, aperture, blur level, depth of field |
+| `set_light_properties` | Intensity, color, cone angle, cone feather |
+
+#### Masks
+| Tool | Description |
+|------|-------------|
+| `add_mask` | Create a mask on a layer with custom vertices, mode, feather, opacity, expansion. Reports actual mode and warnings if properties fail. |
+| `set_mask_properties` | Modify mask feather, opacity, expansion, mode, inverted. Reports warnings on failures. |
+| `create_masks_from_text` | Convert text layer outlines into masks (letter shapes). Only works on text layers. |
+
+#### Markers
+| Tool | Description |
+|------|-------------|
+| `add_marker` | Add layer or comp marker at a time with comment and optional duration |
+| `delete_marker` | Remove marker by index |
+
+#### Import & Project
+| Tool | Description |
+|------|-------------|
+| `import_file` | Import image/video/audio into the project |
+| `add_item_to_comp` | Add a project item (footage or comp) to the active composition |
 
 #### Composition
 | Tool | Description |
@@ -61,14 +97,25 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 |------|-------------|
 | `set_text_document` | Set text content, font, size, color, justification, tracking, leading |
 
+#### Preview
+| Tool | Description |
+|------|-------------|
+| `capture_comp_frame` | Save current frame as PNG and return the file path for inline display |
+
 ### UI
 - Chat interface with tool-call visualization (collapsible cards showing args + results)
-- **Markdown rendering** in agent responses (headers, bold, italic, code blocks, lists)
+- **Markdown rendering** in agent responses (headers, bold, italic, code blocks, lists, inline images)
+- **Frame preview** — `capture_comp_frame` results shown as inline images in chat
+- **No-composition warning** — system message when no active comp is detected before sending
 - Session management (create, rename, clear, switch between sessions)
+- **Session metadata** — message count displayed under each session in sidebar
 - Model selector: Cloud.ru models (local Ollama chat UI is intentionally disabled)
-- **Active composition note** under transcript: `Active composition: "<name>". Changes are applied to this composition.`
-- **Preset toolbar**: deterministic preset dropdown (`fade`/`pop`/`slide`) + parameter fields (`duration`, `delay`, `intensity/amplitude`) + `Apply preset` for selected layers
-- **Undo button** — reverts ALL agent actions from last request (counts mutating tool calls and batch-undoes them via N × Cmd+Z)
+- **Active composition note** under transcript
+- **Preset toolbar**: deterministic preset dropdown (`fade`/`pop`/`slide`) + parameter fields + `Apply preset`
+- **Quick action buttons**: Wiggle, Counter, Slide In, Bounce, Preview — one-click common operations
+- **Streaming text preview** — agent response text appears in real-time during generation
+- **Textarea auto-resize** — input grows up to ~8 lines as you type
+- **Undo button** — reverts ALL agent actions from last request (batch-undo via N x Cmd+Z)
 - **Stop button** — cancel a running agent mid-execution
 - **Step progress indicator** — shows `Step N/maxSteps` and tool call count during execution
 - **Token usage display** — shows total tokens after each request
@@ -77,143 +124,92 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 
 ### Reliability
 - **Expression error detection** — `apply_expression` checks `expressionError` after applying and returns the error to the agent for self-correction
+- **Static expression validation** — panel-side checks before sending to AE: `text.sourceText.value` warning, `\n` vs `\r`, unbalanced brackets/parens
+- **Knowledge base injection** — keyword-matched AE expression documentation injected into system prompt for accuracy
 - **API retry with backoff** — automatic retry on 429/5xx errors (3 attempts, exponential backoff)
+- **Streaming API** — SSE streaming with incremental tool_call argument accumulation
 - **Conversation pruning** — old messages automatically trimmed to fit within token budget
 - **Tool call history preservation** — agent remembers its prior tool calls and results across turns in a session
 - **Host script single-load** — ExtendScript loaded once at startup, not re-parsed on every tool call
 
 ### API Providers
-- **Cloud.ru Foundation Models** — OpenAI-compatible chat/completions with tool calling
+- **Cloud.ru Foundation Models** — OpenAI-compatible chat/completions with tool calling and SSE streaming
 - **Ollama (local)** — available for legacy/vision-related modules; not exposed as a selectable chat provider in the current UI flow
 
 ---
 
 ## Known Limitations
 
-1. **Shape layer content creation** — `create_layer('shape')` creates an empty shape layer. The agent cannot yet programmatically add shape paths (rectangles, ellipses, stars) as content groups. Workaround: agent creates shape layer, user adds shapes manually, agent then animates them.
+1. **No render/export** — `renderQueue.render()` blocks the CEP UI until completion. No async render API exists. Can add to render queue without starting, but live monitoring is not possible.
 
-2. **No mask operations** — cannot create, modify, or animate masks.
+2. **No motion path control** — cannot set spatial bezier handles on position keyframes (only temporal easing is supported). `setSpatialTangentsAtKey()` exists but is fragile.
 
-3. **No render/export** — cannot add to render queue or export compositions.
+3. **Single comp context** — agent always works with the active composition. No explicit comp switching.
 
-4. **No footage import** — cannot import files, images, or video into the project.
+4. **No graph editor control** — easing is set via speed/influence values, not visual curve editing.
 
-5. **No motion path control** — cannot set spatial bezier handles on position keyframes (only temporal easing is supported).
+5. **Freeform mask paths** — simple shapes (rect, ellipse) work via computed vertices. Arbitrary freeform paths are fragile without a proper `Shape()` constructor.
 
-6. **No 3D layer toggle** — cannot enable/disable 3D on a layer.
+6. **Model limitations** — Cloud.ru models may occasionally confuse anchor point with position, or use wrong property paths. The system prompt and knowledge base mitigate this but don't eliminate it.
 
-7. **No markers** — cannot add or read layer/comp markers.
+7. **Layer Styles** — `addProperty("dropShadow")` on layer styles works inconsistently across layer types and AE versions. Use effects (Drop Shadow effect) instead.
 
-8. **Single comp context** — agent always works with the active composition. No explicit comp switching.
+8. **Gradient Stroke/Fill on shapes** — These are shape content modifiers, not effects. Cannot be added via `add_effect`. Not yet supported as dedicated tools.
 
-9. **No graph editor control** — easing is set via speed/influence values, not visual curve editing.
+9. **Solid layer color** — Cannot be changed after creation. Use `add_effect("ADBE Fill")` as a workaround.
 
-10. **Model limitations** — Cloud.ru models (Qwen3-Coder, GPT-OSS-120B) may occasionally confuse anchor point with position, or use wrong property paths. The system prompt mitigates this but doesn't eliminate it. Expression errors are now detected and the agent retries automatically.
+10. **3D Z Position** — Separate Z Position property only exists with separated dimensions. Use Position `[x, y, z]` array instead.
+
+11. **Date() in expressions** — Not available in AE expression engine. Use `time`, `timeToCurrentFormat()` or frame-based counters.
+
+12. **Text layer font/size via create_layer** — Unreliable. Use `set_text_document` as a separate call.
 
 ---
 
 ## Improvement Roadmap
 
-### Priority 1 — Fix & Stabilize
+### Completed
 
-**1.1 Shape content creation**
-Add ExtendScript functions to programmatically add shape content:
-- `addRectangle(layerIndex, size, position, roundness)`
-- `addEllipse(layerIndex, size, position)`
-- `addPathFromVertices(layerIndex, vertices, inTangents, outTangents, closed)`
-- `addFill(layerIndex, color, opacity)`
-- `addStroke(layerIndex, color, width)`
+All phases from the initial roadmap have been implemented:
 
-This is the most impactful improvement — shape layers are fundamental to motion design.
+- **Phase 0** — Technical debt: dead code removed, 7 files archived to `legacy-archive/`
+- **Phase 1** — Shape content creation: `add_shape_rectangle`, `add_shape_ellipse`, `add_shape_path`
+- **Phase 2** — 3D/Camera/Light: `set_layer_3d`, `set_camera_properties`, `set_light_properties`
+- **Phase 3** — Frame preview: `capture_comp_frame` + inline image rendering in chat
+- **Phase 4** — Knowledge base injection: keyword-matched KB snippets injected into system prompt
+- **Phase 5** — Masks: `add_mask`, `set_mask_properties`, `get_mask_info`
+- **Phase 6** — Markers: `add_marker`, `get_markers`, `delete_marker`
+- **Phase 7** — Import/Project items: `list_project_items`, `import_file`, `add_item_to_comp`
+- **Phase 8** — Streaming API: SSE streaming in chatProvider.js with incremental tool_call parsing
+- **Phase 9** — UX: quick action buttons, textarea auto-resize, session metadata, streaming text preview
+- **Phase 10** — Agent intelligence: static expression validation before AE execution
+- **Phase 11** — Bug fixes: temporal ease dimension detection, silent catch reporting in masks/keyframes, create_masks_from_text tool, no-comp warning, system prompt limitations guidance
 
-**1.2 3D layer support**
-- `setLayer3D(layerIndex, enabled)` — toggle 3D
-- Add Z position/rotation to keyframe tools
-- Support camera and light property paths
+### Future Improvements
 
-**1.3 Better error recovery** ✅ DONE
-- `apply_expression` now detects `expressionError` and returns it to the agent
-- Agent system prompt instructs retry on expression errors
-- `get_expression` tool added for reading/debugging existing expressions
-- Common expression mistakes documented in prompt (SourceText, 2D/3D, loopOut, etc.)
-- Few-shot tool chain examples in prompt guide correct workflows
+**Spatial keyframe control**
+Set spatial bezier handles (roving keyframes, motion path curves). API exists but is fragile — deferred until stable approach found.
 
-### Priority 2 — Expand Capabilities
+**Persistent animation library**
+Save and recall animation patterns across sessions: "Save this as 'bounce reveal'" / "Apply 'bounce reveal' to layer 3".
 
-**2.1 Mask operations**
-- `addMask(layerIndex, vertices, mode)`
-- `getMaskProperties(layerIndex, maskIndex)`
-- `setMaskPath(layerIndex, maskIndex, vertices)`
-- Mask feather, expansion, opacity animation
+**Before/after comparison**
+Capture a frame before and after agent changes, show side-by-side in chat.
 
-**2.2 Footage and asset management**
-- `importFile(path)` — import image/video/audio
-- `addToComp(itemId, compIndex)` — add project item to comp
-- `listProjectItems()` — list all project items
-
-**2.3 Spatial keyframe control**
-- Set spatial bezier handles (roving keyframes, motion path curves)
-- `setSpatialTangentsAtKey(layerIndex, propPath, keyIndex, inTangent, outTangent)`
-
-**2.4 Markers**
-- `addLayerMarker(layerIndex, time, comment, duration)`
-- `addCompMarker(time, comment, duration)`
-- `getMarkers(layerIndex)` — read existing markers
-
-**2.5 Render queue**
-- `addToRenderQueue(outputModule, outputPath)`
-- `renderComp()` — start render
-- Useful for automated workflows
-
-### Priority 3 — Agent Intelligence
-
-**3.1 Vision-informed animation**
-Currently Ollama vision (screen capture + comp frame analysis) exists but is disconnected from the agent loop. Reconnect it:
-- Agent can request a comp frame capture and analyze it
-- Use visual context to make better animation decisions
-- "This frame looks dark, I'll add a bright element" type reasoning
-
-**3.2 Reference-based animation**
-- User provides a reference video/GIF frame
-- Ollama vision describes the motion
-- Agent recreates the motion pattern using keyframes/expressions
-
-**3.3 Animation presets / templates**
-Build a library of common animation patterns in the knowledge base:
-- Fade in + scale up (standard reveal)
-- Typewriter text animation
-- Logo reveal with mask wipe
-- Parallax scrolling layers
-- Particle-like scatter/gather
-- Elastic/spring overshoot
-
-The system prompt can reference these so the model doesn't reinvent them each time.
-
-**3.4 Multi-step undo awareness** ✅ DONE
-The panel counts mutating (non-read-only) tool calls per request and the Undo button batch-undoes them all at once via N × `app.executeCommand(16)`. AE cannot span a single undo group across multiple `evalScript()` calls (each execution auto-closes the group), so the batch-undo approach is used instead.
-
-**3.5 Comp frame preview after changes**
-After making changes, automatically capture and show a frame preview in the chat, so the user can see results without switching to AE.
-
-### Priority 4 — Workflow & UX
-
-**4.1 Persistent animation library**
-Save and recall animation patterns across sessions:
-- "Save this animation as 'bounce reveal'"
-- "Apply 'bounce reveal' to layer 3"
-- Stored as templates with parameterized values
-
-**4.2 Before/after comparison**
-Capture a frame before agent changes and after, show side-by-side in chat.
-
-**4.3 Batch mode**
+**Batch mode**
 "Apply this animation to all text layers" — detect matching layers and batch-apply.
 
-**4.4 Expression library integration**
-The existing knowledge base (`knowledge-base/corpus/`) has curated AE expression docs. Wire it into the agent flow so expression-related requests get relevant docs injected into context.
+**Context persistence across sessions**
+Remember comp structure between sessions so the agent doesn't need to re-inspect every time.
 
-**4.5 Context persistence across sessions**
-Remember comp structure between sessions — "last time we worked on the intro comp with 12 layers" — so the agent doesn't need to re-inspect every time.
+**Compound tools (macros)**
+Frequent patterns in one tool call: `create_animated_layer(type, name, animation, params)` — create + position + animate in one step.
+
+**Session export/import**
+Export sessions as JSON files, import them back.
+
+**Trim Paths / Merge Paths / Repeater**
+Shape modifiers via the same `addProperty()` API — natural extension of Phase 1.
 
 ---
 
@@ -221,20 +217,23 @@ Remember comp structure between sessions — "last time we worked on the intro c
 
 ### File Structure (agent modules)
 ```
-agentSystemPrompt.js  — Agent persona, workflow rules, expression guidance, few-shot examples
-agentToolLoop.js      — LLM ↔ tool execution cycle with abort support and usage tracking
-chatProvider.js       — Cloud.ru + Ollama unified API with retry on 429/5xx
-hostBridge.js         — Tool name → ExtendScript mapping (single-load host script)
-toolRegistry.js       — 30 OpenAI-compatible tool definitions
-host/index.jsx        — ExtendScript functions (AE operations, expression error detection)
-main.js               — UI, sessions, markdown rendering, pruning, cancel, batch-undo
+agentSystemPrompt.js  — Agent persona, workflow rules, expression guidance, 47 tool documentation, known limitations
+agentToolLoop.js      — LLM <> tool execution cycle with abort, streaming, expression validation
+chatProvider.js       — Cloud.ru + Ollama unified API with retry, SSE streaming
+hostBridge.js         — Tool name -> ExtendScript mapping (single-load host script)
+toolRegistry.js       — 47 OpenAI-compatible tool definitions
+host/index.jsx        — ExtendScript functions (AE operations, shapes, 3D, masks, markers, import)
+main.js               — UI, sessions, markdown, pruning, cancel, batch-undo, KB injection, quick actions
 ```
 
-### Key Architecture Improvements (v2)
+### Key Architecture
 - **Host script loaded once** — `hostBridge.js` uses `ensureHostScriptLoaded()` instead of inlining 2000+ lines per call
 - **Shared `_resolveProperty`** — single property resolution function used by all expression/property tools
 - **Expression error feedback loop** — `apply_expression` checks `expressionError` after apply, rolls back on failure
-- **Conversation pruning** — `pruneConversation()` in `main.js` trims old messages to fit token budget
+- **Static expression validation** — `validateExpression()` catches common mistakes before they reach AE
+- **Knowledge base injection** — keyword matching on user message triggers relevant doc snippets in system prompt
+- **SSE streaming** — `invokeCloudRuStreaming()` parses SSE chunks, accumulates tool_call arguments incrementally
+- **Conversation pruning** — `pruneConversation()` trims old messages to fit token budget
 - **Tool call history** — full assistant+tool message chain preserved across turns in a session
 
 ### Adding a New Tool
@@ -242,3 +241,4 @@ main.js               — UI, sessions, markdown rendering, pruning, cancel, bat
 2. Add tool definition in `toolRegistry.js` (OpenAI function schema)
 3. Add mapping in `hostBridge.js` (`executeToolCall` switch case)
 4. Update system prompt if the tool needs special guidance
+5. If read-only, add to `READ_ONLY_TOOLS` array in `main.js`

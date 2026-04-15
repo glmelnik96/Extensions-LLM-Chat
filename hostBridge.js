@@ -315,6 +315,165 @@
           }) + ')'
         break
 
+      // Shape content tools
+      case 'add_shape_rectangle':
+        call = 'extensionsLlmChat_addShapeRect(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral({
+            name: args.name || null,
+            width: args.width || null,
+            height: args.height || null,
+            position: args.position || null,
+            roundness: args.roundness || null,
+            fill_color: args.fill_color || null,
+            fill_opacity: args.fill_opacity || null,
+            stroke_color: args.stroke_color || null,
+            stroke_width: args.stroke_width || null
+          }) + ')'
+        break
+      case 'add_shape_ellipse':
+        call = 'extensionsLlmChat_addShapeEllipse(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral({
+            name: args.name || null,
+            width: args.width || null,
+            height: args.height || null,
+            position: args.position || null,
+            fill_color: args.fill_color || null,
+            fill_opacity: args.fill_opacity || null,
+            stroke_color: args.stroke_color || null,
+            stroke_width: args.stroke_width || null
+          }) + ')'
+        break
+      case 'add_shape_path':
+        call = 'extensionsLlmChat_addShapePath(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral({
+            name: args.name || null,
+            vertices: args.vertices || [],
+            in_tangents: args.in_tangents || null,
+            out_tangents: args.out_tangents || null,
+            closed: args.closed !== undefined ? args.closed : true,
+            fill_color: args.fill_color || null,
+            stroke_color: args.stroke_color || null,
+            stroke_width: args.stroke_width || null
+          }) + ')'
+        break
+
+      // 3D / Camera / Light tools
+      case 'set_layer_3d':
+        call = 'extensionsLlmChat_setLayer3D(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral(!!args.enabled) + ')'
+        break
+      case 'set_camera_properties':
+        call = 'extensionsLlmChat_setCameraProperties(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral({
+            zoom: args.zoom || null,
+            focus_distance: args.focus_distance || null,
+            aperture: args.aperture || null,
+            blur_level: args.blur_level || null,
+            depth_of_field: args.depth_of_field !== undefined ? args.depth_of_field : null
+          }) + ')'
+        break
+      case 'set_light_properties':
+        call = 'extensionsLlmChat_setLightProperties(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral({
+            intensity: args.intensity || null,
+            color: args.color || null,
+            cone_angle: args.cone_angle || null,
+            cone_feather: args.cone_feather || null
+          }) + ')'
+        break
+
+      // Mask tools
+      case 'add_mask':
+        call = 'extensionsLlmChat_addMask(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral({
+            mode: args.mode || null,
+            vertices: args.vertices || null,
+            in_tangents: args.in_tangents || null,
+            out_tangents: args.out_tangents || null,
+            closed: args.closed !== undefined ? args.closed : null,
+            feather: args.feather || null,
+            opacity: args.opacity !== undefined ? args.opacity : null,
+            expansion: args.expansion || null,
+            inset: args.inset || null
+          }) + ')'
+        break
+      case 'set_mask_properties':
+        call = 'extensionsLlmChat_setMaskProperties(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral(args.mask_index) + ',' +
+          toESLiteral({
+            feather: args.feather || null,
+            opacity: args.opacity !== undefined ? args.opacity : null,
+            expansion: args.expansion || null,
+            mode: args.mode || null,
+            inverted: args.inverted !== undefined ? args.inverted : null
+          }) + ')'
+        break
+      case 'get_mask_info':
+        call = 'extensionsLlmChat_getMaskInfo(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ')'
+        break
+
+      // Marker tools
+      case 'add_marker':
+        call = 'extensionsLlmChat_addMarker(' +
+          toESLiteral(args.layer_index || null) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral({
+            target: args.target || 'layer',
+            time: args.time !== undefined ? args.time : null,
+            comment: args.comment || '',
+            duration: args.duration || null
+          }) + ')'
+        break
+      case 'get_markers':
+        call = 'extensionsLlmChat_getMarkers(' +
+          toESLiteral(args.layer_index || null) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral(args.target || 'layer') + ')'
+        break
+      case 'delete_marker':
+        call = 'extensionsLlmChat_deleteMarker(' +
+          toESLiteral(args.layer_index || null) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral(args.marker_index) + ',' +
+          toESLiteral(args.target || 'layer') + ')'
+        break
+
+      // Import / Project items tools
+      case 'list_project_items':
+        call = 'extensionsLlmChat_listProjectItems(' +
+          toESLiteral({ maxItems: args.max_items || null }) + ')'
+        break
+      case 'import_file':
+        call = 'extensionsLlmChat_importFile(' + toESLiteral(args.file_path) + ')'
+        break
+      case 'add_item_to_comp':
+        call = 'extensionsLlmChat_addItemToComp(' + toESLiteral(args.project_item_index) + ')'
+        break
+
+      // Capture tool
+      case 'capture_comp_frame':
+        var tmpPath = '/tmp/ae-motion-agent-frame-' + Date.now() + '.png'
+        call = 'extensionsLlmChat_saveCompFramePng(' + toESLiteral(tmpPath) + ')'
+        break
+
       // Effect tools
       case 'add_effect':
         call = 'extensionsLlmChat_addEffect(' +
@@ -381,6 +540,12 @@
             leading: args.leading || undefined,
             baselineShift: args.baseline_shift || undefined
           }) + ')'
+        break
+
+      case 'create_shapes_from_text':
+        call = 'extensionsLlmChat_createShapesFromText(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ')'
         break
 
       default:

@@ -1,68 +1,93 @@
-# Final architecture
+# Architecture
 
-Practical overview of the extension as implemented today. **Authoritative list of tools, UI behavior, limitations, and roadmap:** **[capabilities-and-roadmap.md](capabilities-and-roadmap.md)**.
+Runtime architecture of the AE Motion Agent CEP extension.
 
 ---
 
 ## Stack
 
-- **Panel**: HTML/CSS/JS CEP panel; **index.html**; runtime **main.js** (AE Motion Agent).
-- **Agent loop**: **agentToolLoop.js** (`runAgentLoop`), **agentSystemPrompt.js**, **toolRegistry.js** (30 OpenAI-style tools, including deterministic motion presets for fade/pop/slide), **chatProvider.js** (Cloud.ru provider in active Send flow; Ollama path retained for compatibility modules), **hostBridge.js** (promise wrapper around **CSInterface.evalScript** + host script inlining).
-- **Host**: After Effects ExtendScript in **host/index.jsx** — invoked per tool call (not a single “apply only” entry).
-- **Cloud**: Configurable **baseUrl** (default Cloud.ru Foundation Models), **chat/completions** with **tool calling**.
-- **Local optional**: **Ollama** integrations exist in code for vision/legacy compatibility, but Ollama chat is not exposed in the current model selector UI.
-- **Still loaded (non–Send-path)**: **pipelineAssembly.js**, **systemPrompt.js**, **aeDocsIndex.js**, **aeDocsRetrieval.js**, **aePromptContext.js**, **aeResponseValidation.js**, **lib/captureMacOS.js**, **lib/ollamaVision.js** — kept for compatibility or future wiring; the active **Send** path does not run the multi-pass expression pipeline or inject vision grounding into the agent loop (see **capabilities-and-roadmap.md**, *Vision-informed animation*).
+- **Panel**: HTML/CSS/JS CEP panel (`index.html`, `styles.css`, `main.js`)
+- **Agent loop**: `agentToolLoop.js` — LLM ↔ tool execution cycle with abort and streaming support
+- **System prompt**: `agentSystemPrompt.js` — agent persona, 47 tool documentation, workflow rules, known limitations
+- **Tool registry**: `toolRegistry.js` — 47 OpenAI-compatible function definitions
+- **Chat provider**: `chatProvider.js` — Cloud.ru (with SSE streaming) + Ollama API abstraction, retry on 429/5xx
+- **Host bridge**: `hostBridge.js` — promise wrapper around `CSInterface.evalScript`, single-load host script caching
+- **Host**: `host/index.jsx` — ExtendScript functions for all AE operations (shapes, 3D, masks, markers, import, etc.)
+- **Cloud API**: Cloud.ru Foundation Models `chat/completions` with tool calling and SSE streaming
+- **Vision modules**: `lib/captureMacOS.js`, `lib/ollamaVision.js` — loaded but not connected to agent loop
 
 ---
 
 ## Config loading
 
-- **index.html** order: **config/example.config.js** → **config/runtime-config.js** (optional) → **config/secrets.local.js** (API key via **EXTENSIONS_LLM_CHAT_SECRETS.apiKey**).
-- **getConfig()** / **isConfigValid()** behavior: see **docs/configuration.md** and **docs/secret-handling.md**. Cloud models require a key; Ollama-only sessions do not use Cloud.ru key.
+`index.html` load order:
+1. `config/example.config.js` — defaults (tracked)
+2. `config/runtime-config.js` — optional overrides (gitignored)
+3. `config/secrets.local.js` — API key (gitignored)
+
+Details: [configuration.md](configuration.md), [secret-handling.md](secret-handling.md).
 
 ---
 
-## Primary runtime: agent tool loop
+## Agent tool loop
 
-1. User sends a message → **main.js** appends a **user** message and calls **AGENT_TOOL_LOOP.runAgentLoop** with conversation history, **AGENT_SYSTEM_PROMPT**, and **AGENT_TOOL_REGISTRY.tools**.
-2. The loop calls **CHAT_PROVIDER** (Cloud.ru or Ollama) with messages + tools until the model returns final **content** or **maxSteps** is reached.
-3. Each tool call is executed via **hostBridge** → ExtendScript in **host/index.jsx**; results are sent back to the model as **tool** messages.
-4. On success, **main.js** appends one **assistant** message with **text** and **toolCalls** (name, args, result, status) for the UI cards.
-5. **Undo** triggers After Effects undo (last host operations are grouped in ExtendScript as appropriate).
-6. **Preset toolbar** in **main.js** can directly call deterministic tools (`apply_fade_preset`, `apply_pop_preset`, `apply_slide_preset`) for selected layers.
-
-Session persistence (**localStorage** key **ae-motion-agent-state**): see **docs/runtime-state-schema.md**.
+1. User sends a message → `main.js` builds conversation history + system prompt (with KB snippets injected by keyword matching) → calls `AGENT_TOOL_LOOP.runAgentLoop`
+2. Loop calls `CHAT_PROVIDER.invoke()` with messages + tools. If `onTextChunk` callback is set and provider is Cloud.ru, SSE streaming is used.
+3. If model returns `tool_calls` → each tool is executed sequentially via `hostBridge.executeToolCall()` → ExtendScript runs in AE → results sent back as `tool` messages → loop continues
+4. Static expression validation (`validateExpression()`) runs on `apply_expression` / `apply_expression_batch` calls before sending to AE
+5. When model returns plain content → done, result displayed in chat with tool call cards
+6. Abort: user can cancel via Stop button at any point (`abortHandle.aborted = true`)
 
 ---
 
-## Legacy: multi-pass expression Copilot
+## Tool categories (47 tools)
 
-The repo still contains documentation and scripts for a historical **multi-pass expression pipeline** (prepare → generate → validate → rules → repair → finalize, **manual Apply Expression**, **latestExtractedExpression**). That pipeline is **not** invoked from the current **main.js** **Send** handler.
-
-| Topic | Legacy doc (full text under `legacy-archive-on-user-request-only/`) |
-|-------|------------|
-| Stage sequence | `multi-pass-copilot-legacy/legacy-pipeline-runtime-flow-stages-and-models.md` |
-| Chat output rules | `multi-pass-copilot-legacy/legacy-chat-publication-final-only-policy.md` |
-| Disposition / Apply | `multi-pass-copilot-legacy/legacy-final-disposition-and-apply-policy.md`, `multi-pass-copilot-legacy/legacy-manual-apply-expression-policy.md` |
-| Stage grounding policy | `multi-pass-copilot-legacy/legacy-grounding-policy-by-pipeline-stage.md` |
-| Target + Apply bridge | **docs/host-bridge-notes.md** (current agent path; legacy Apply note inside) |
-
-Use these when maintaining or restoring the old flow, not when describing the shipping agent UX.
-
----
-
-## Knowledge-base and prompt-library
-
-- **knowledge-base** and **prompt-library** feed **pipelineAssembly.js** and related retrieval helpers. The **agent** uses **agentSystemPrompt.js** and tool schemas in **toolRegistry.js**; deeper KB injection into the agent loop is roadmap item **4.4** in **capabilities-and-roadmap.md**.
+| Category | Tools |
+|----------|-------|
+| Read/inspect | `get_detailed_comp_summary`, `get_host_context`, `get_property_value`, `get_expression`, `get_keyframes`, `get_layer_properties`, `get_effect_properties`, `get_mask_info`, `get_markers`, `list_project_items` |
+| Layer ops | `create_layer`, `delete_layer`, `duplicate_layer`, `reorder_layer`, `set_layer_parent`, `set_layer_timing`, `rename_layer`, `set_layer_3d` |
+| Shape content | `add_shape_rectangle`, `add_shape_ellipse`, `add_shape_path` |
+| Animation | `add_keyframes`, `delete_keyframes`, `set_keyframe_easing`, `set_property_value`, `apply_expression`, `apply_expression_batch`, `apply_fade_preset`, `apply_pop_preset`, `apply_slide_preset` |
+| Effects | `add_effect`, `remove_effect`, `set_effect_property` |
+| 3D/Camera/Light | `set_camera_properties`, `set_light_properties` |
+| Masks | `add_mask`, `set_mask_properties` |
+| Markers | `add_marker`, `delete_marker` |
+| Import | `import_file`, `add_item_to_comp` |
+| Composition | `create_comp`, `precompose_layers`, `set_comp_settings` |
+| Text | `set_text_document` |
+| Preview | `capture_comp_frame` |
 
 ---
 
-## Diagnostics and troubleshooting
+## UI features
 
-- **diagnostics.js** exposes **window.EXTENSIONS_LLM_CHAT_DIAGNOSTICS**. See **docs/runtime-diagnostics.md** and **docs/troubleshooting.md**.
+- Chat with collapsible tool call cards (args + results)
+- Markdown rendering (headers, bold, code blocks, lists, inline images)
+- Session management (create, rename, clear, switch)
+- Quick action buttons (Wiggle, Counter, Slide In, Bounce, Preview)
+- Preset toolbar (Fade/Pop/Slide with duration, delay, strength)
+- Streaming text preview during generation
+- Batch-undo (N x Cmd+Z for all mutating tool calls)
+- Stop (cancel running agent)
+- Export sessions to JSON
+- Report generation (LLM-analyzed session logs)
+- Auto-resize textarea, session metadata, token usage display
 
 ---
 
-## Validating the repo before release
+## Persistence
 
-- Run **node scripts/validate-repo.js** and **node scripts/check-required-files.js** from repo root. See **docs/repository-validation.md** and **docs/release-checklist.md**.
+- **localStorage** key: `ae-motion-agent-state`
+- Stores: sessions array, activeSessionId, nextSessionIndex
+- Each session: id, title, createdAt, updatedAt, model, messages[]
+- Details: [runtime-state-schema.md](runtime-state-schema.md)
+
+---
+
+## Adding a new tool
+
+1. Add ExtendScript function in `host/index.jsx` (try/catch, undo group, `resultToJson`)
+2. Add tool definition in `toolRegistry.js` (OpenAI function schema)
+3. Add case in `hostBridge.js` `executeToolCall` switch
+4. Update `agentSystemPrompt.js` if the tool needs special guidance
+5. If read-only, add to `READ_ONLY_TOOLS` array in `main.js`
