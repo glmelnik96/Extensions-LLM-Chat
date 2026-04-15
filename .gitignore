@@ -25,3 +25,6 @@ npm-debug.log*
 
 # Node (if a package.json is added later)
 node_modules/
+
+# Local project memory/artifacts
+.omc/
