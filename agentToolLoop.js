@@ -46,6 +46,7 @@
     var temperature = (typeof options.temperature === 'number') ? options.temperature : DEFAULT_TEMPERATURE
     var onToolCall = options.onToolCall || function () {}
     var onStepComplete = options.onStepComplete || function () {}
+    var onTextChunk = options.onTextChunk || null
     var abortHandle = options.abortHandle || null
 
     // Build the full message array for the API.
@@ -82,7 +83,8 @@
         tool_choice: tools.length > 0 ? 'auto' : undefined,
         max_tokens: 4096,
         temperature: temperature,
-        abortHandle: abortHandle
+        abortHandle: abortHandle,
+        onTextChunk: onTextChunk
       }
 
       return window.CHAT_PROVIDER.invoke(modelId, messages, invokeOptions)
@@ -162,6 +164,18 @@
           }
           log.push(logEntry)
           onToolCall(logEntry)
+
+          // Phase 10: Static expression validation before sending to AE
+          if ((toolName === 'apply_expression' || toolName === 'apply_expression_batch') && window.validateExpression) {
+            var exprText = args.expression || ''
+            if (toolName === 'apply_expression_batch' && args.targets) {
+              exprText = args.targets.map(function (t) { return t.expression || '' }).join('\n')
+            }
+            var warnings = window.validateExpression(exprText)
+            if (warnings.length > 0) {
+              logEntry.validationWarnings = warnings
+            }
+          }
 
           return window.HOST_BRIDGE.executeToolCall(toolName, args)
             .then(function (hostResult) {

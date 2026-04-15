@@ -1,50 +1,110 @@
-# QA test plan (AE Motion Agent)
+# QA Test Plan (AE Motion Agent)
 
-Краткий чеклист для **текущей** панели. Расширенные сценарии и исторический план Copilot — только по явному запросу, в архиве: **[legacy-archive-on-user-request-only/qa-testing/](legacy-archive-on-user-request-only/qa-testing/)** (см. [README](legacy-archive-on-user-request-only/README.md) архива).
+Краткий smoke-чеклист. Полная матрица на 40 тестов (12 блоков): [manual-test-v3.md](manual-test-v3.md).
 
 ---
 
 ## 1. Запуск и конфиг
 
-1. Открыть панель в After Effects — без ошибок в консоли CEP, строка статуса **Ready**.
-2. Без ключа Cloud.ru: **Send** с облачной моделью → сообщение о `secrets.local.js`, без падения.
-3. С валидным ключом: **Send** доступен, запрос уходит.
+1. Открыть панель в AE — без ошибок, статус **Ready**.
+2. Без ключа: **Send** → сообщение о `secrets.local.js`, без падения.
+3. С ключом: **Send** работает.
 
 ---
 
 ## 2. Сессии
 
-4. **New** — новая сессия в списке, чат пустой (или только системные сообщения после действий).
-5. Переключение между двумя сессиями — разный transcript и выбранная модель.
-6. **Rename**, **Clear**, **Clear All** (с подтверждением) — ожидаемое поведение, после перезагрузки панели состояние восстанавливается из `localStorage` (ключ `ae-motion-agent-state`).
+4. **New** — новая сессия, чат пустой.
+5. Переключение между сессиями — разный transcript и модель.
+6. **Rename**, **Clear**, **Clear All** — ожидаемое поведение, восстановление после перезагрузки.
 
 ---
 
 ## 3. Агент и инструменты
 
-7. Простой запрос (например добавить текстовый слой или изменить opacity) — в ответе есть карточки **tool calls** и итоговый текст агента; в композиции видны изменения.
-8. **Undo** в панели — откат последней операции в AE (в разумных пределах undo AE).
-9. Ошибка инструмента (намеренно неверный expression) — в карточке виден `error` / сообщение хоста; агент не ломает панель.
+7. Простой запрос (создать слой, анимировать) — карточки tool calls + итоговый текст.
+8. **Undo** — откат всех мутирующих действий.
+9. Ошибка инструмента — `error` в карточке, панель стабильна.
+10. **Stop** — отмена выполнения.
 
 ---
 
-## 4. Модели
+## 4. Shape content
 
-10. Облачная модель из списка — успешный цикл.
-11. В текущем UI доступны только Cloud.ru модели; отсутствие Ollama не влияет на чат-цикл.
-
----
-
-## 5. Deterministic preset toolbar
-
-12. Клик по кнопке пресета открывает список (`Fade/Pop/Slide`); выбор пункта меняет название кнопки.
-13. Подписи полей отображаются корректно: `Duration (s)`, `Delay (s)`, `Intensity` (для Pop), `Amplitude (px)` (для Slide); для Fade третье поле отключено.
-14. `Apply preset` на выделенных слоях применяет соответствующий deterministic tool (`apply_fade_preset` / `apply_pop_preset` / `apply_slide_preset`) без запуска LLM-цикла.
-15. Без выделенных слоев `Apply preset` возвращает понятную ошибку и не ломает UI.
+11. "Создай красный круг" — shape layer с ellipse и fill.
+12. "Создай прямоугольник с округлением" — rectangle с roundness.
 
 ---
 
-## Дополнительно
+## 5. 3D / Camera / Light
 
-- Матрица pass/fail и длинный план старого UI: [legacy-archive-on-user-request-only/qa-testing/qa-manual-test-matrix-compact-pass-fail.md](legacy-archive-on-user-request-only/qa-testing/qa-manual-test-matrix-compact-pass-fail.md), [qa-legacy-full-test-plan-copilot-pipeline-ui.md](legacy-archive-on-user-request-only/qa-testing/qa-legacy-full-test-plan-copilot-pipeline-ui.md).
-- Детальный чеклист v2 по агенту: [qa-motion-agent-manual-checklist-v2.md](legacy-archive-on-user-request-only/qa-testing/qa-motion-agent-manual-checklist-v2.md).
+13. "Включи 3D на слое" — `threeDLayer = true`.
+14. "Создай камеру с zoom 800" — camera layer.
+
+---
+
+## 6. Маски
+
+15. "Добавь маску с feather 30" — маска с feather.
+16. "Покажи маски слоя" — `get_mask_info` возвращает данные.
+17. "Добавь subtract маску" — результат содержит `actualMode: "subtract"`.
+18. "Создай маски из контуров текста" (на text layer) — `create_masks_from_text` создаёт маски.
+
+---
+
+## 7. Маркеры
+
+19. "Добавь маркер на 2 секунде" — маркер создан.
+20. "Покажи маркеры" — список маркеров.
+
+---
+
+## 8. Импорт
+
+21. "Покажи элементы проекта" — `list_project_items`.
+22. "Импортируй файл" (подготовить PNG) — файл в Project panel.
+
+---
+
+## 9. Превью
+
+23. "Покажи текущий кадр" — `capture_comp_frame` → картинка в чате.
+
+---
+
+## 10. Streaming и UX
+
+24. Отправить запрос — текст появляется по мере генерации.
+25. Quick action (Wiggle) — prompt отправляется.
+26. Textarea растёт при наборе текста.
+27. Session metadata видна в sidebar.
+
+---
+
+## 11. Preset toolbar
+
+28. Dropdown пресетов открывается, выбор меняет название.
+29. **Apply preset** на выделенных слоях — пресет применён.
+30. Без выделенных слоёв — ошибка, панель стабильна.
+
+---
+
+## 12. Export / Report
+
+31. **Export** — JSON файл на Desktop.
+32. **Report** — LLM-обработанный отчёт + raw JSON на Desktop.
+
+---
+
+## 13. Выражения
+
+33. Expression с ошибкой — агент обнаруживает, исправляет, retry.
+34. `get_expression` — возвращает текст существующего выражения.
+
+---
+
+## 14. Phase 11 — исправления
+
+35. Easing на Position — keyframes с easing без ошибки `setTemporalEaseAtKey`.
+36. Без открытой композиции — системное предупреждение перед запуском агента.
+37. `add_mask(mode: "subtract")` — результат содержит `actualMode` и `warnings` при ошибке.

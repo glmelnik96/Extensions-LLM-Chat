@@ -1,132 +1,110 @@
 # Troubleshooting
 
-Common issues when the **AE Motion Agent** panel misbehaves. Sections below still mention the **legacy multi-pass Copilot** pipeline (`latestExtractedExpression`, Apply, validator stages) where useful for old builds or diagnostics strings — full policy text is in **`docs/legacy-archive-on-user-request-only/`** (open only when you need history).
-
-**Current product:** [capabilities-and-roadmap.md](capabilities-and-roadmap.md), [final-architecture.md](final-architecture.md).
+Common issues with the AE Motion Agent panel.
 
 ---
 
-## Panel won’t open or is blank
+## Panel won't open or is blank
 
-- **CEP / host**: Ensure After Effects version matches the CEP host and manifest (CSXS/manifest.xml). Check CEP debug logs if available.
-- **Script load order**: Config and diagnostics must load before main.js (see index.html). If a script fails to load, the panel may be blank; check browser devtools (Debug → Show Developer Tools in CEP).
-- **CSInterface**: If `CSInterface` is undefined, the extension is not running inside CEP; panel logic may disable host-dependent features.
+- **CEP version**: Ensure AE version matches the manifest (`CSXS/manifest.xml`).
+- **Script load order**: Config scripts must load before `main.js` (see `index.html`). If any script fails, panel may be blank — check CEP DevTools (Debug → Show Developer Tools).
+- **CSInterface.js missing**: Download and place in `lib/` — see README installation instructions.
 
 ---
 
-## "Set API key in config/secrets.local.js. See config/README.md"
+## "Set API key in config/secrets.local.js"
 
-- **Cause**: `EXTENSIONS_LLM_CHAT_SECRETS.apiKey` and `EXTENSIONS_LLM_CHAT_CONFIG.apiKey` are both empty or missing, or `secrets.local.js` failed to load (404).
-- **Fix**: `cp config/secrets.local.example.js config/secrets.local.js`, paste your Cloud.ru Bearer token into `apiKey` (no `Bearer ` prefix). Ensure `index.html` loads `secrets.local.js` after `example.config.js`. See **docs/secret-handling.md**.
+- **Cause**: No API key found.
+- **Fix**: `cp config/secrets.local.example.js config/secrets.local.js`, paste your Cloud.ru Bearer token (no `Bearer ` prefix). See [secret-handling.md](secret-handling.md).
 
 ---
 
 ## Send does nothing
 
-- **Config**: If API key is empty, Send is intentionally no-op and status shows the config message.
-- **Session**: There must be an active session (create one with New if needed).
-- **In flight**: While a request is in progress, Send is disabled; wait for completion or error.
+- **No API key**: Send is blocked when key is empty — status bar shows config message.
+- **No session**: Create one with the New button.
+- **In flight**: While a request is running, Send is disabled. Wait or click Stop.
 
 ---
 
-## "Error contacting cloud model: …"
+## "Error contacting cloud model"
 
-- **Network**: Check internet connection and firewall; ensure the API base URL is reachable from your machine.
-- **HTTP**: 4xx/5xx from the API (wrong key, quota, or endpoint) → check baseUrl and apiKey; see docs/configuration.md.
-- **Malformed response**: API returned non-JSON or missing `choices`/content; extension may retry with fallback model once. If it keeps failing, check API response format.
-
-Internal details are in the browser console (diagnostics layer); user-facing text is kept short (see docs/runtime-diagnostics.md).
-
----
-
-## Agent run failed or tool errors
-
-- **Cloud**: Same as "Error contacting cloud model" above; check key, base URL, and model id.
-- **Tool / host error**: Read the **tool call** card in the chat (args + result). For expression errors, fix the prompt or layer index; see [capabilities-and-roadmap.md](capabilities-and-roadmap.md) (limitations).
-- **Debug**: `window.EXTENSIONS_LLM_CHAT_DIAGNOSTICS.setDebug(true)` in the CEP console — see [runtime-diagnostics.md](runtime-diagnostics.md).
+- **Network**: Check internet and firewall. Ensure API base URL is reachable.
+- **HTTP errors**: 4xx/5xx — verify `baseUrl` and `apiKey` in config. See [configuration.md](configuration.md).
+- **Malformed response**: API returned non-JSON or missing `choices`. Check API status.
+- **Retry**: The panel retries automatically on 429/5xx (3 attempts, exponential backoff).
 
 ---
 
-## Legacy: pipeline "Failed / blocked" (multi-pass Copilot)
+## Agent tool errors
 
-If you maintain an old build with generator → validate → repair:
-
-- **Rules / validation / repair** failures and **latestExtractedExpression** rules are documented only in the archive: [legacy-final-result-publication-policy.md](legacy-archive-on-user-request-only/multi-pass-copilot-legacy/legacy-final-result-publication-policy.md), [legacy-final-disposition-and-apply-policy.md](legacy-archive-on-user-request-only/multi-pass-copilot-legacy/legacy-final-disposition-and-apply-policy.md). Console `[pipeline]` stage hints apply to that flow.
-
----
-
-## Legacy: Apply button stays disabled
-
-The shipping **AE Motion Agent** UI has no separate **Apply Expression** button; expressions are applied via the **apply_expression** tool when the model chooses it. For historical Apply + `latestExtractedExpression` behavior see [legacy-manual-apply-expression-policy.md](legacy-archive-on-user-request-only/multi-pass-copilot-legacy/legacy-manual-apply-expression-policy.md) and [legacy-final-result-publication-policy.md](legacy-archive-on-user-request-only/multi-pass-copilot-legacy/legacy-final-result-publication-policy.md).
+- Read the **tool call card** in chat — it shows the tool name, args, and error message.
+- **Expression errors**: If `apply_expression` returns `ok: false` with `expressionError`, the agent should auto-retry with a corrected expression.
+- **Wrong layer index**: Agent may reference a deleted or wrong layer. Ask it to re-inspect with `get_detailed_comp_summary`.
+- **Property path errors**: "Can't access" usually means wrong property path. Agent should check `get_layer_properties` first.
 
 ---
 
-## Legacy: Apply clicked but host reports error
+## Undo doesn't revert everything
 
-Applies to old UI with manual Apply: invalid target, unsupported property, host script — see [host-bridge-notes.md](host-bridge-notes.md) and **host/index.jsx**.
+- **Batch undo**: The Undo button sends N × Cmd+Z where N = number of mutating tool calls. If AE's undo history is shorter than expected (e.g., due to AE's own undo limit), not all actions may revert.
+- **Read-only tools** (`get_detailed_comp_summary`, `get_host_context`, etc.) are not counted as mutating.
 
 ---
 
-## Preset dropdown does not open / Apply preset fails
+## Preset toolbar issues
 
-- **Dropdown UI**: The preset list is a custom panel dropdown. If clicks do nothing, reload the CEP panel and verify no runtime errors in DevTools.
-- **No selected layers**: `Apply preset` requires at least one selected layer in the active composition.
-- **Range errors**: Duration, delay, intensity/amplitude are validated in host tools. If out of range, host returns `ok:false` with a range message.
+- **Dropdown doesn't open**: Reload CEP panel, check for JS errors in DevTools.
+- **No selected layers**: "Apply preset" requires at least one selected layer in the active composition.
+- **Range errors**: Duration, delay, intensity/amplitude are validated by the host. Out-of-range values return `ok: false`.
+
+---
+
+## Streaming not working
+
+- SSE streaming requires Cloud.ru provider. Ollama provider does not use streaming.
+- If text doesn't appear incrementally, the `onTextChunk` callback may not be firing — check DevTools console.
+
+---
+
+## Export / Report fails
+
+- **Export**: Uses Node.js `require('fs')` — requires CEP mixed-context mode (`--mixed-context` in manifest).
+- **Report**: Requires working Cloud.ru API key (sends session logs to LLM for analysis). Check network and key.
+- **File path**: Both save to `~/Desktop/`. Ensure Desktop directory exists and is writable.
+
+---
+
+## Screen capture issues
+
+- **Permission**: macOS requires Screen Recording permission for After Effects. System Settings → Privacy & Security → Screen Recording → enable AE.
+- **Comp area capture**: May need Automation permission for System Events.
+- **Timeout**: Increase `captureTimeoutMs` in config for large displays.
+- **Node unavailable**: Capture requires `--enable-nodejs` and `--mixed-context` in manifest.
 
 ---
 
 ## Ollama vision errors
 
-- **Connection / timeout**: Ensure **Ollama** is running (`ollama serve`) and vision models are pulled (defaults: `ollama pull llava-phi3:latest`, `ollama pull moondream:latest`). Increase `ollamaVisionTimeoutMs` in config for large images or slow hardware.
-- **Empty content**: Model may not support images; try `ollamaVisionFallbackModel` or a different tag from the Ollama library.
-- **HTTP 500 / “received zero length image”**: The PNG was missing, still 0 bytes, or not a valid PNG when Ollama read it. Wait and retry **Analyze frame**; ensure the host returns a real path (`fsName`) and disk flush completed. The panel waits for a minimum file size and PNG signature before posting to Ollama.
-- **HTTP 500 / “model runner has unexpectedly stopped”**: Often **GPU VRAM** or **image too large** for the vision model. The panel **downscales** PNGs on macOS so the longest edge is at most **`ollamaVisionMaxEdgePx`** (default **1024**) via `sips` before calling Ollama. If it still crashes, set **`ollamaVisionMaxEdgePx`** to **768** or **512** in config, restart Ollama, close other GPU apps, or temporarily use **CPU-only** Ollama if your setup supports it. Check `~/.ollama/logs` or the terminal where `ollama serve` runs.
-- **Frame export**: If you see `saveFrameToPng` missing, update After Effects or use **Capture full screen** / **Capture comp area** instead of **Analyze frame**.
-
----
-
-## Clear All and Ollama
-
-- **Clear All** removes extension temp capture PNGs and calls Ollama **`GET /api/ps`** then **`POST /api/generate`** with **`keep_alive: 0`** for each loaded model so they unload from memory. If Ollama is not running, that step fails silently (sessions still clear).
-- Ollama’s HTTP API does **not** store a global chat transcript for the extension; unloading is the supported way to reset in-memory model state. Persistent logs (if any) live outside this panel.
+- Ensure Ollama is running (`ollama serve`) with vision models pulled.
+- **GPU OOM**: Reduce `ollamaVisionMaxEdgePx` in config (default 1024, try 768 or 512).
+- **Timeout**: Increase `ollamaVisionTimeoutMs` for slow hardware.
+- Vision modules are loaded but **not connected** to the agent loop — they work only via dedicated capture buttons.
 
 ---
 
 ## Sessions lost after reload
 
-- Sessions are persisted in localStorage (or equivalent) keyed by the extension. If the storage key or origin changes, previous sessions may not appear. Do not clear site data for the CEP origin if you need to keep sessions.
-
----
-
-## Screen capture disabled or "Node not available"
-
-- **Cause**: CEP panel does not have Node enabled, or `lib/captureMacOS.js` did not load.
-- **Fix**: Confirm `CSXS/manifest.xml` includes `<Parameter>--enable-nodejs</Parameter>` and `<Parameter>--mixed-context</Parameter>`. Reload the panel (or restart After Effects). Confirm `index.html` loads `lib/captureMacOS.js` before `main.js`.
-
-## "No After Effects window found for comp-area capture"
-
-- **AE 2024 / year-suffixed process**: The panel discovers AE via **System Events** (frontmost app or any process whose name contains `After Effects`, excluding Render Engine). If it still fails, grant **Automation**: **System Settings → Privacy & Security → Automation** — allow **After Effects** to control **System Events**.
-- **Focus**: Click the main AE window (or the CEP panel inside AE) so After Effects stays the frontmost app, then try **Capture comp area** again.
-- **Fallback**: Use **Capture full screen** (no AppleScript).
-
-## Capture fails / permission
-
-- **Cause**: macOS blocked screen capture for After Effects.
-- **Fix**: **System Settings → Privacy & Security → Screen Recording** — enable **After Effects**. Restart AE if the OS prompts you to quit first.
-
-## Capture times out
-
-- Increase `captureTimeoutMs` in config. If using a huge display or slow disk, full-screen PNG can take longer.
+- Sessions are stored in `localStorage` key `ae-motion-agent-state`. Clearing browser data or changing the CEP origin loses them.
+- Use **Export** button to back up sessions before clearing.
 
 ---
 
 ## Debug logging
 
-- Set `window.EXTENSIONS_LLM_CHAT_DIAGNOSTICS.setDebug(true)` in the console to enable verbose diagnostics (info/debug). Logs go to the browser console only, not into the chat transcript.
-- Use debug logs to see pipeline stage entry/exit, parse failures (generator, validator, repair), fallback model activation, and prompt-assembly degradation. See docs/runtime-diagnostics.md for the full list of pipeline log points and error categories.
+In CEP DevTools console:
+```js
+console.log(JSON.stringify(JSON.parse(localStorage.getItem('ae-motion-agent-state')), null, 2))
+```
 
----
-
-## Repo validation
-
-- Run `node scripts/validate-repo.js` and `node scripts/check-required-files.js` from the repo root to ensure required files and directories exist (see docs/repository-validation.md).
+This dumps the full session state for inspection.

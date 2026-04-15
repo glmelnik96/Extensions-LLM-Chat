@@ -1006,26 +1006,66 @@ function _setKeyAtTimeAndGetIndex (prop, time, value) {
   return -1;
 }
 
+/**
+ * Determine the number of temporal ease dimensions for a property.
+ * Reads existing ease from a key if available; falls back to value inspection.
+ * This avoids the broken `prop.value instanceof Array` pattern that returns
+ * wrong counts for spatial properties (Position needs dims matching its
+ * actual temporal ease structure, not its value array length).
+ */
+function _getTemporalEaseDims (prop, keyIndex) {
+  // Best source: read existing temporal ease from the key itself
+  if (typeof keyIndex === 'number' && keyIndex >= 1 && keyIndex <= prop.numKeys) {
+    try {
+      var existing = prop.keyTemporalEase(keyIndex, false);
+      if (existing instanceof Array && existing.length > 0) return existing.length;
+    } catch (e1) {}
+    // Some AE versions: keyTemporalEase(idx) without second arg
+    try {
+      var ex2 = prop.keyTemporalEase(keyIndex);
+      if (ex2 instanceof Array && ex2.length > 0) return ex2.length;
+    } catch (e2) {}
+  }
+  // Fallback: try reading from any existing key
+  if (prop.numKeys >= 1) {
+    var probe = (typeof keyIndex === 'number' && keyIndex >= 1) ? keyIndex : 1;
+    try {
+      var ex3 = prop.keyTemporalEase(probe);
+      if (ex3 instanceof Array && ex3.length > 0) return ex3.length;
+    } catch (e3) {}
+  }
+  // Last resort: value inspection
+  try {
+    var v = prop.value;
+    if (v instanceof Array) return v.length;
+  } catch (e4) {}
+  return 1;
+}
+
 function _setKeyEaseBezier (prop, keyIndex, inInfluence, outInfluence) {
   if (!(keyIndex >= 1)) return;
   try {
     prop.setInterpolationTypeAtKey(keyIndex, KeyframeInterpolationType.BEZIER, KeyframeInterpolationType.BEZIER);
   } catch (eInterp) {}
+  var inInf = (typeof inInfluence === 'number') ? inInfluence : 33.33;
+  var outInf = (typeof outInfluence === 'number') ? outInfluence : 33.33;
+  var dims = _getTemporalEaseDims(prop, keyIndex);
+  var easeIn = [];
+  var easeOut = [];
+  for (var d = 0; d < dims; d++) {
+    easeIn.push(new KeyframeEase(0, inInf));
+    easeOut.push(new KeyframeEase(0, outInf));
+  }
   try {
-    var inInf = (typeof inInfluence === 'number') ? inInfluence : 33.33;
-    var outInf = (typeof outInfluence === 'number') ? outInfluence : 33.33;
-    var dims = 1;
-    try {
-      if (prop.value instanceof Array && prop.value.length > 0) dims = prop.value.length;
-    } catch (eDim) {}
-    var easeIn = [];
-    var easeOut = [];
-    for (var d = 0; d < dims; d++) {
-      easeIn.push(new KeyframeEase(0, inInf));
-      easeOut.push(new KeyframeEase(0, outInf));
-    }
     prop.setTemporalEaseAtKey(keyIndex, easeIn, easeOut);
-  } catch (eEase) {}
+  } catch (eEase) {
+    // Retry with 1 dimension (spatial properties like Position)
+    if (dims > 1) {
+      try {
+        prop.setTemporalEaseAtKey(keyIndex, [easeIn[0]], [easeOut[0]]);
+      } catch (eRetry) {}
+    }
+  }
 }
 
 function _copyArrayValue (val) {
@@ -1329,6 +1369,25 @@ function _resolveProperty (layer, propertyPath) {
     return null;
   }
 
+  // Segment alias map: common display names → AE matchNames.
+  // Allows agent to use e.g. "Masks>Mask 1>Expansion" instead of ADBE matchNames.
+  var _segAlias = {
+    'masks': 'ADBE Mask Parade',
+    'mask parade': 'ADBE Mask Parade',
+    'mask mode': 'ADBE Mask Mode',
+    'mask shape': 'ADBE Mask Shape',
+    'mask feather': 'ADBE Mask Feather',
+    'mask opacity': 'ADBE Mask Opacity',
+    'mask expansion': 'ADBE Mask Expansion',
+    'expansion': 'ADBE Mask Expansion',
+    'feather': 'ADBE Mask Feather',
+    'inverted': 'ADBE Mask Inverted',
+    'effects': 'ADBE Effect Parade',
+    'contents': 'ADBE Root Vectors Group',
+    'source text': 'ADBE Text Document',
+    'text': 'ADBE Text Properties'
+  };
+
   // Generic segment walk.
   // AE property() accepts matchNames and display names, but for shape layer
   // content the display names (e.g. "Ellipse 1") don't always resolve via
@@ -1337,6 +1396,9 @@ function _resolveProperty (layer, propertyPath) {
   var current = layer;
   for (var i = 0; i < segments.length; i++) {
     var seg = segments[i];
+    // Check alias table first
+    var segAlias = _segAlias[seg.toLowerCase()];
+    if (segAlias) seg = segAlias;
     if (!seg) { current = null; break; }
     var next = null;
     // Try direct lookup (works for matchNames and most display names).
@@ -1675,22 +1737,27 @@ function extensionsLlmChat_addKeyframes (layerIndex, layerId, propertyPath, keyf
 
       // Set easing if provided.
       if (kf.easeIn || kf.easeOut) {
+        var numDims = _getTemporalEaseDims(prop, kIdx);
+        var eIn = [];
+        var eOut = [];
+        for (var d = 0; d < numDims; d++) {
+          var inSpec = (kf.easeIn instanceof Array && kf.easeIn[d]) ? kf.easeIn[d] : null;
+          var outSpec = (kf.easeOut instanceof Array && kf.easeOut[d]) ? kf.easeOut[d] : null;
+          var speed_in = (inSpec && typeof inSpec.speed === 'number') ? inSpec.speed : 0;
+          var infl_in = (inSpec && typeof inSpec.influence === 'number') ? inSpec.influence : 33.33;
+          var speed_out = (outSpec && typeof outSpec.speed === 'number') ? outSpec.speed : 0;
+          var infl_out = (outSpec && typeof outSpec.influence === 'number') ? outSpec.influence : 33.33;
+          eIn.push(new KeyframeEase(speed_in, infl_in));
+          eOut.push(new KeyframeEase(speed_out, infl_out));
+        }
         try {
-          var numDims = prop.value instanceof Array ? prop.value.length : 1;
-          var eIn = [];
-          var eOut = [];
-          for (var d = 0; d < numDims; d++) {
-            var inSpec = (kf.easeIn instanceof Array && kf.easeIn[d]) ? kf.easeIn[d] : null;
-            var outSpec = (kf.easeOut instanceof Array && kf.easeOut[d]) ? kf.easeOut[d] : null;
-            var speed_in = (inSpec && typeof inSpec.speed === 'number') ? inSpec.speed : 0;
-            var infl_in = (inSpec && typeof inSpec.influence === 'number') ? inSpec.influence : 33.33;
-            var speed_out = (outSpec && typeof outSpec.speed === 'number') ? outSpec.speed : 0;
-            var infl_out = (outSpec && typeof outSpec.influence === 'number') ? outSpec.influence : 33.33;
-            eIn.push(new KeyframeEase(speed_in, infl_in));
-            eOut.push(new KeyframeEase(speed_out, infl_out));
-          }
           prop.setTemporalEaseAtKey(kIdx, eIn, eOut);
-        } catch (eEase) {}
+        } catch (eEase) {
+          // Retry with 1 dimension for spatial properties
+          if (numDims > 1) {
+            try { prop.setTemporalEaseAtKey(kIdx, [eIn[0]], [eOut[0]]); } catch (eRetry) {}
+          }
+        }
       }
     }
 
@@ -1822,7 +1889,7 @@ function extensionsLlmChat_setKeyframeEasing (layerIndex, layerId, propertyPath,
     }
 
     if (easeIn || easeOut) {
-      var numDims = prop.value instanceof Array ? prop.value.length : 1;
+      var numDims = _getTemporalEaseDims(prop, keyIndex);
       var eIn = [];
       var eOut = [];
       for (var d = 0; d < numDims; d++) {
@@ -1835,7 +1902,14 @@ function extensionsLlmChat_setKeyframeEasing (layerIndex, layerId, propertyPath,
         eIn.push(new KeyframeEase(sp_in, inf_in));
         eOut.push(new KeyframeEase(sp_out, inf_out));
       }
-      prop.setTemporalEaseAtKey(keyIndex, eIn, eOut);
+      try {
+        prop.setTemporalEaseAtKey(keyIndex, eIn, eOut);
+      } catch (eEase) {
+        // Retry with 1 dimension for spatial properties
+        if (numDims > 1) {
+          try { prop.setTemporalEaseAtKey(keyIndex, [eIn[0]], [eOut[0]]); } catch (eRetry) {}
+        }
+      }
     }
 
     _endToolUndo();
@@ -1867,11 +1941,40 @@ function extensionsLlmChat_getPropertyValue (layerIndex, layerId, propertyPath, 
     if (!prop || !(prop instanceof Property)) {
       result.message = 'Property not found or is a group.'; return resultToJson(result);
     }
+    var rawVal;
     if (typeof time === 'number') {
-      result.value = prop.valueAtTime(time, false);
+      rawVal = prop.valueAtTime(time, false);
     } else {
-      result.value = prop.value;
+      rawVal = prop.value;
     }
+
+    // TextDocument objects can't be serialized by resultToJson — extract fields
+    if (rawVal !== null && rawVal !== undefined && typeof rawVal === 'object' && !(rawVal instanceof Array)) {
+      try {
+        if (rawVal.toString && rawVal.toString().indexOf('TextDocument') !== -1 ||
+            typeof rawVal.text === 'string' || typeof rawVal.fontSize === 'number') {
+          var td = {};
+          try { td.text = rawVal.text; } catch (e) {}
+          try { td.font = rawVal.font; } catch (e) {}
+          try { td.fontSize = rawVal.fontSize; } catch (e) {}
+          try { td.fillColor = rawVal.fillColor; } catch (e) {}
+          try { td.strokeColor = rawVal.strokeColor; } catch (e) {}
+          try { td.strokeWidth = rawVal.strokeWidth; } catch (e) {}
+          try { td.tracking = rawVal.tracking; } catch (e) {}
+          try { td.leading = rawVal.leading; } catch (e) {}
+          try { td.justification = rawVal.justification; } catch (e) {}
+          try { td.baselineShift = rawVal.baselineShift; } catch (e) {}
+          result.value = td;
+        } else {
+          result.value = rawVal;
+        }
+      } catch (eTd) {
+        result.value = rawVal;
+      }
+    } else {
+      result.value = rawVal;
+    }
+
     try {
       result.hasExpression = prop.expressionEnabled === true;
       result.expression = prop.expression || '';
@@ -1958,10 +2061,22 @@ function extensionsLlmChat_setPropertyValue (layerIndex, layerId, propertyPath, 
       value = arr;
     }
     _beginToolUndo('Agent: Set property value');
+    // If property has keyframes, remove them first then set static value,
+    // or use setValueAtTime at current comp time. This avoids the
+    // "Can not call setValue() on a property with keyframes" error.
+    if (prop.numKeys > 0) {
+      // Remove all keyframes to set a clean static value
+      for (var ki = prop.numKeys; ki >= 1; ki--) {
+        prop.removeKey(ki);
+      }
+      result.keyframesRemoved = true;
+    }
     prop.setValue(value);
     _endToolUndo();
     result.ok = true;
-    result.message = 'Set "' + propertyPath + '" on "' + layer.name + '".';
+    var msg = 'Set "' + propertyPath + '" on "' + layer.name + '".';
+    if (result.keyframesRemoved) msg += ' (existing keyframes were removed to set static value)';
+    result.message = msg;
     return resultToJson(result);
   } catch (e) {
     try { _endToolUndo(); } catch (x) {}
@@ -2446,6 +2561,772 @@ function extensionsLlmChat_getDetailedCompSummary (filterOptions) {
     return resultToJson(result);
   } catch (e) {
     result.message = 'getDetailedCompSummary error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+// ============================================================================
+// Phase 1 — Shape content creation
+// ============================================================================
+
+/**
+ * Add a rectangle to a shape layer.
+ */
+function extensionsLlmChat_addShapeRect (layerIndex, layerId, opts) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!(layer instanceof ShapeLayer)) { result.message = 'Layer is not a shape layer.'; return resultToJson(result); }
+    if (!opts) opts = {};
+
+    _beginToolUndo('Agent: Add rectangle');
+    var contents = layer.property('ADBE Root Vectors Group');
+    var grp = contents.addProperty('ADBE Vector Group');
+    var groupName = typeof opts.name === 'string' && opts.name.length ? opts.name : 'Rectangle';
+    grp.name = groupName;
+
+    var vectors = grp.property('ADBE Vectors Group');
+    var rect = vectors.addProperty('ADBE Vector Shape - Rect');
+    var rectSize = rect.property('ADBE Vector Rect Size');
+    if (rectSize) rectSize.setValue([typeof opts.width === 'number' ? opts.width : 200, typeof opts.height === 'number' ? opts.height : 200]);
+    var rectPos = rect.property('ADBE Vector Rect Position');
+    if (rectPos && opts.position instanceof Array) rectPos.setValue(opts.position);
+    var rectRound = rect.property('ADBE Vector Rect Roundness');
+    if (rectRound && typeof opts.roundness === 'number') rectRound.setValue(opts.roundness);
+
+    if (opts.fill_color instanceof Array && opts.fill_color.length >= 3) {
+      var fill = vectors.addProperty('ADBE Vector Graphic - Fill');
+      fill.property('ADBE Vector Fill Color').setValue(opts.fill_color);
+      if (typeof opts.fill_opacity === 'number') fill.property('ADBE Vector Fill Opacity').setValue(opts.fill_opacity);
+    }
+    if (opts.stroke_color instanceof Array && opts.stroke_color.length >= 3) {
+      var stroke = vectors.addProperty('ADBE Vector Graphic - Stroke');
+      stroke.property('ADBE Vector Stroke Color').setValue(opts.stroke_color);
+      if (typeof opts.stroke_width === 'number') stroke.property('ADBE Vector Stroke Width').setValue(opts.stroke_width);
+    }
+    _endToolUndo();
+    result.ok = true;
+    result.groupName = grp.name;
+    result.message = 'Added rectangle "' + grp.name + '" to shape layer "' + layer.name + '".';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'addShapeRect error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Add an ellipse to a shape layer.
+ */
+function extensionsLlmChat_addShapeEllipse (layerIndex, layerId, opts) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!(layer instanceof ShapeLayer)) { result.message = 'Layer is not a shape layer.'; return resultToJson(result); }
+    if (!opts) opts = {};
+
+    _beginToolUndo('Agent: Add ellipse');
+    var contents = layer.property('ADBE Root Vectors Group');
+    var grp = contents.addProperty('ADBE Vector Group');
+    var groupName = typeof opts.name === 'string' && opts.name.length ? opts.name : 'Ellipse';
+    grp.name = groupName;
+
+    var vectors = grp.property('ADBE Vectors Group');
+    var ellipse = vectors.addProperty('ADBE Vector Shape - Ellipse');
+    var eSize = ellipse.property('ADBE Vector Ellipse Size');
+    if (eSize) eSize.setValue([typeof opts.width === 'number' ? opts.width : 200, typeof opts.height === 'number' ? opts.height : 200]);
+    var ePos = ellipse.property('ADBE Vector Ellipse Position');
+    if (ePos && opts.position instanceof Array) ePos.setValue(opts.position);
+
+    if (opts.fill_color instanceof Array && opts.fill_color.length >= 3) {
+      var fill = vectors.addProperty('ADBE Vector Graphic - Fill');
+      fill.property('ADBE Vector Fill Color').setValue(opts.fill_color);
+      if (typeof opts.fill_opacity === 'number') fill.property('ADBE Vector Fill Opacity').setValue(opts.fill_opacity);
+    }
+    if (opts.stroke_color instanceof Array && opts.stroke_color.length >= 3) {
+      var stroke = vectors.addProperty('ADBE Vector Graphic - Stroke');
+      stroke.property('ADBE Vector Stroke Color').setValue(opts.stroke_color);
+      if (typeof opts.stroke_width === 'number') stroke.property('ADBE Vector Stroke Width').setValue(opts.stroke_width);
+    }
+    _endToolUndo();
+    result.ok = true;
+    result.groupName = grp.name;
+    result.message = 'Added ellipse "' + grp.name + '" to shape layer "' + layer.name + '".';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'addShapeEllipse error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Add a custom path to a shape layer.
+ */
+function extensionsLlmChat_addShapePath (layerIndex, layerId, opts) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!(layer instanceof ShapeLayer)) { result.message = 'Layer is not a shape layer.'; return resultToJson(result); }
+    if (!opts) opts = {};
+    if (!(opts.vertices instanceof Array) || opts.vertices.length < 2) {
+      result.message = 'vertices must be an array of at least 2 [x,y] points.';
+      return resultToJson(result);
+    }
+
+    _beginToolUndo('Agent: Add path');
+    var contents = layer.property('ADBE Root Vectors Group');
+    var grp = contents.addProperty('ADBE Vector Group');
+    var groupName = typeof opts.name === 'string' && opts.name.length ? opts.name : 'Path';
+    grp.name = groupName;
+
+    var vectors = grp.property('ADBE Vectors Group');
+    var pathGrp = vectors.addProperty('ADBE Vector Shape - Group');
+    var pathProp = pathGrp.property('ADBE Vector Shape');
+
+    var shapeObj = new Shape();
+    shapeObj.vertices = opts.vertices;
+    if (opts.in_tangents instanceof Array) shapeObj.inTangents = opts.in_tangents;
+    if (opts.out_tangents instanceof Array) shapeObj.outTangents = opts.out_tangents;
+    shapeObj.closed = opts.closed !== false;
+    pathProp.setValue(shapeObj);
+
+    if (opts.fill_color instanceof Array && opts.fill_color.length >= 3) {
+      var fill = vectors.addProperty('ADBE Vector Graphic - Fill');
+      fill.property('ADBE Vector Fill Color').setValue(opts.fill_color);
+    }
+    if (opts.stroke_color instanceof Array && opts.stroke_color.length >= 3) {
+      var stroke = vectors.addProperty('ADBE Vector Graphic - Stroke');
+      stroke.property('ADBE Vector Stroke Color').setValue(opts.stroke_color);
+      if (typeof opts.stroke_width === 'number') stroke.property('ADBE Vector Stroke Width').setValue(opts.stroke_width);
+    }
+    _endToolUndo();
+    result.ok = true;
+    result.groupName = grp.name;
+    result.message = 'Added path "' + grp.name + '" with ' + opts.vertices.length + ' vertices to "' + layer.name + '".';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'addShapePath error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+// ============================================================================
+// Phase 2 — 3D / Camera / Light
+// ============================================================================
+
+/**
+ * Toggle 3D on a layer.
+ */
+function extensionsLlmChat_setLayer3D (layerIndex, layerId, enabled) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (layer instanceof CameraLayer || layer instanceof LightLayer) {
+      result.message = 'Camera and light layers are always 3D.'; return resultToJson(result);
+    }
+    _beginToolUndo('Agent: Set 3D');
+    layer.threeDLayer = !!enabled;
+    _endToolUndo();
+    result.ok = true;
+    result.message = 'Layer "' + layer.name + '" 3D ' + (enabled ? 'enabled' : 'disabled') + '.';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'setLayer3D error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Set camera-specific properties.
+ */
+function extensionsLlmChat_setCameraProperties (layerIndex, layerId, props) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!(layer instanceof CameraLayer)) { result.message = 'Layer is not a camera.'; return resultToJson(result); }
+    if (!props) props = {};
+
+    _beginToolUndo('Agent: Camera props');
+    var changed = [];
+    var camOpts = layer.property('ADBE Camera Options Group');
+    if (typeof props.zoom === 'number' && camOpts) {
+      var z = camOpts.property('ADBE Camera Zoom');
+      if (z) { z.setValue(props.zoom); changed.push('zoom=' + props.zoom); }
+    }
+    if (typeof props.focus_distance === 'number' && camOpts) {
+      var fd = camOpts.property('ADBE Camera Focus Distance');
+      if (fd) { fd.setValue(props.focus_distance); changed.push('focusDist=' + props.focus_distance); }
+    }
+    if (typeof props.aperture === 'number' && camOpts) {
+      var ap = camOpts.property('ADBE Camera Aperture');
+      if (ap) { ap.setValue(props.aperture); changed.push('aperture=' + props.aperture); }
+    }
+    if (typeof props.blur_level === 'number' && camOpts) {
+      var bl = camOpts.property('ADBE Camera Blur Level');
+      if (bl) { bl.setValue(props.blur_level); changed.push('blurLevel=' + props.blur_level); }
+    }
+    if (props.depth_of_field !== undefined && camOpts) {
+      var dof = camOpts.property('ADBE Camera Depth of Field');
+      if (dof) { dof.setValue(props.depth_of_field ? 1 : 0); changed.push('DOF=' + (props.depth_of_field ? 'on' : 'off')); }
+    }
+    _endToolUndo();
+    result.ok = true;
+    result.message = 'Camera "' + layer.name + '": ' + (changed.length ? changed.join(', ') : 'no changes') + '.';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'setCameraProperties error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Set light-specific properties.
+ */
+function extensionsLlmChat_setLightProperties (layerIndex, layerId, props) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!(layer instanceof LightLayer)) { result.message = 'Layer is not a light.'; return resultToJson(result); }
+    if (!props) props = {};
+
+    _beginToolUndo('Agent: Light props');
+    var changed = [];
+    var lightOpts = layer.property('ADBE Light Options Group');
+    if (typeof props.intensity === 'number' && lightOpts) {
+      var inten = lightOpts.property('ADBE Light Intensity');
+      if (inten) { inten.setValue(props.intensity); changed.push('intensity=' + props.intensity); }
+    }
+    if (props.color instanceof Array && props.color.length >= 3 && lightOpts) {
+      var col = lightOpts.property('ADBE Light Color');
+      if (col) { col.setValue(props.color); changed.push('color set'); }
+    }
+    if (typeof props.cone_angle === 'number' && lightOpts) {
+      var ca = lightOpts.property('ADBE Light Cone Angle');
+      if (ca) { ca.setValue(props.cone_angle); changed.push('coneAngle=' + props.cone_angle); }
+    }
+    if (typeof props.cone_feather === 'number' && lightOpts) {
+      var cf = lightOpts.property('ADBE Light Cone Feather');
+      if (cf) { cf.setValue(props.cone_feather); changed.push('coneFeather=' + props.cone_feather); }
+    }
+    _endToolUndo();
+    result.ok = true;
+    result.message = 'Light "' + layer.name + '": ' + (changed.length ? changed.join(', ') : 'no changes') + '.';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'setLightProperties error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+// ============================================================================
+// Phase 5 — Mask operations
+// ============================================================================
+
+/**
+ * Add a mask to a layer. Creates a rectangular or elliptical mask by default.
+ */
+function extensionsLlmChat_addMask (layerIndex, layerId, opts) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!opts) opts = {};
+
+    _beginToolUndo('Agent: Add mask');
+    var maskGroup = layer.property('ADBE Mask Parade');
+    if (!maskGroup) { _endToolUndo(); result.message = 'Layer does not support masks.'; return resultToJson(result); }
+    var newMask = maskGroup.addProperty('ADBE Mask Atom');
+
+    // Set mode: 1=Add, 2=Subtract, 3=Intersect, 4=Lighten, 5=Darken
+    var modeMap = { 'add': 1, 'subtract': 2, 'intersect': 3, 'lighten': 4, 'darken': 5 };
+    var modeVal = modeMap[String(opts.mode || 'add').toLowerCase()] || 1;
+    var modeNames = { 1: 'add', 2: 'subtract', 3: 'intersect', 4: 'lighten', 5: 'darken' };
+    var warnings = [];
+    // Try multiple ways to access mask mode — matchName varies across AE versions
+    var modeProp = null;
+    try { modeProp = newMask.property('ADBE Mask Mode'); } catch (e) {}
+    if (!modeProp) { try { modeProp = newMask.property('maskMode'); } catch (e) {} }
+    if (!modeProp) { try { modeProp = newMask.property(1); } catch (e) {} } // mode is typically first property
+    if (modeProp) {
+      try { modeProp.setValue(modeVal); } catch (eMode) {
+        warnings.push('mode set failed: ' + eMode.toString());
+      }
+    } else {
+      // Last resort: set via the MaskAtom's maskMode attribute (AE 2024+)
+      try { newMask.maskMode = modeVal; } catch (eMode2) {
+        warnings.push('mode property not found, maskMode attribute failed: ' + eMode2.toString());
+      }
+    }
+
+    // Set mask shape — default to layer-sized rectangle
+    if (opts.vertices instanceof Array && opts.vertices.length >= 3) {
+      var shapeObj = new Shape();
+      shapeObj.vertices = opts.vertices;
+      if (opts.in_tangents instanceof Array) shapeObj.inTangents = opts.in_tangents;
+      if (opts.out_tangents instanceof Array) shapeObj.outTangents = opts.out_tangents;
+      shapeObj.closed = opts.closed !== false;
+      try { newMask.property('ADBE Mask Shape').setValue(shapeObj); } catch (eShape) {
+        warnings.push('custom shape failed: ' + eShape.toString());
+      }
+    } else {
+      // Default rectangular mask covering the layer
+      var w = 0; var h = 0;
+      try { w = layer.width; h = layer.height; } catch (eDim) { w = ctx.comp.width; h = ctx.comp.height; }
+      var inset = typeof opts.inset === 'number' ? opts.inset : 0;
+      var defShape = new Shape();
+      defShape.vertices = [[inset, inset], [w - inset, inset], [w - inset, h - inset], [inset, h - inset]];
+      defShape.closed = true;
+      try { newMask.property('ADBE Mask Shape').setValue(defShape); } catch (eDefShape) {
+        warnings.push('default shape failed: ' + eDefShape.toString());
+      }
+    }
+
+    if (typeof opts.feather === 'number') {
+      try { newMask.property('ADBE Mask Feather').setValue([opts.feather, opts.feather]); } catch (eF) {
+        warnings.push('feather failed: ' + eF.toString());
+      }
+    }
+    if (typeof opts.opacity === 'number') {
+      try { newMask.property('ADBE Mask Opacity').setValue(opts.opacity); } catch (eO) {
+        warnings.push('opacity failed: ' + eO.toString());
+      }
+    }
+    if (typeof opts.expansion === 'number') {
+      try { newMask.property('ADBE Mask Expansion').setValue(opts.expansion); } catch (eE) {
+        warnings.push('expansion failed: ' + eE.toString());
+      }
+    }
+
+    // Read back actual mode to report truthfully
+    var actualMode = 'add';
+    try {
+      var readModeProp = modeProp || newMask.property('ADBE Mask Mode');
+      if (readModeProp) actualMode = modeNames[readModeProp.value] || 'unknown';
+    } catch (eRead) {}
+
+    _endToolUndo();
+    result.ok = true;
+    result.maskIndex = maskGroup.numProperties;
+    result.actualMode = actualMode;
+    var msg = 'Added mask #' + maskGroup.numProperties + ' to "' + layer.name + '" (mode: ' + actualMode + ').';
+    if (warnings.length > 0) {
+      result.warnings = warnings;
+      msg += ' Warnings: ' + warnings.join('; ');
+    }
+    result.message = msg;
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'addMask error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Set mask properties (feather, opacity, expansion, mode) on an existing mask.
+ */
+function extensionsLlmChat_setMaskProperties (layerIndex, layerId, maskIndex, props) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!props) props = {};
+
+    var maskGroup = layer.property('ADBE Mask Parade');
+    if (!maskGroup || maskIndex < 1 || maskIndex > maskGroup.numProperties) {
+      result.message = 'Mask #' + maskIndex + ' not found.'; return resultToJson(result);
+    }
+    var mask = maskGroup.property(maskIndex);
+
+    _beginToolUndo('Agent: Set mask props');
+    var changed = [];
+    var warnings = [];
+    if (typeof props.feather === 'number') {
+      try { mask.property('ADBE Mask Feather').setValue([props.feather, props.feather]); changed.push('feather=' + props.feather); } catch (e1) { warnings.push('feather failed: ' + e1.toString()); }
+    }
+    if (typeof props.opacity === 'number') {
+      try { mask.property('ADBE Mask Opacity').setValue(props.opacity); changed.push('opacity=' + props.opacity); } catch (e2) { warnings.push('opacity failed: ' + e2.toString()); }
+    }
+    if (typeof props.expansion === 'number') {
+      try { mask.property('ADBE Mask Expansion').setValue(props.expansion); changed.push('expansion=' + props.expansion); } catch (e3) { warnings.push('expansion failed: ' + e3.toString()); }
+    }
+    if (typeof props.mode === 'string') {
+      var modeMap2 = { 'add': 1, 'subtract': 2, 'intersect': 3, 'lighten': 4, 'darken': 5 };
+      var mv = modeMap2[props.mode.toLowerCase()];
+      if (mv) {
+        var mp = null;
+        try { mp = mask.property('ADBE Mask Mode'); } catch (e) {}
+        if (!mp) { try { mp = mask.property('maskMode'); } catch (e) {} }
+        if (!mp) { try { mp = mask.property(1); } catch (e) {} }
+        if (mp) {
+          try { mp.setValue(mv); changed.push('mode=' + props.mode); } catch (e4) { warnings.push('mode failed: ' + e4.toString()); }
+        } else {
+          try { mask.maskMode = mv; changed.push('mode=' + props.mode); } catch (e4) { warnings.push('mode property not found: ' + e4.toString()); }
+        }
+      }
+    }
+    if (typeof props.inverted === 'boolean') {
+      try { mask.property('ADBE Mask Inverted').setValue(props.inverted); changed.push('inverted=' + props.inverted); } catch (e5) { warnings.push('inverted failed: ' + e5.toString()); }
+    }
+    _endToolUndo();
+    result.ok = true;
+    var msg = 'Mask #' + maskIndex + ' on "' + layer.name + '": ' + (changed.length ? changed.join(', ') : 'no changes') + '.';
+    if (warnings.length > 0) {
+      result.warnings = warnings;
+      msg += ' Warnings: ' + warnings.join('; ');
+    }
+    result.message = msg;
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'setMaskProperties error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Read all masks on a layer.
+ */
+function extensionsLlmChat_getMaskInfo (layerIndex, layerId) {
+  var result = { ok: false, message: '', masks: [] };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+
+    var maskGroup = layer.property('ADBE Mask Parade');
+    if (!maskGroup) { result.ok = true; result.message = 'Layer has no mask support.'; return resultToJson(result); }
+
+    var modeNames = { 1: 'add', 2: 'subtract', 3: 'intersect', 4: 'lighten', 5: 'darken' };
+    for (var mi = 1; mi <= maskGroup.numProperties; mi++) {
+      var m = maskGroup.property(mi);
+      var info = { index: mi, name: '', mode: '', feather: 0, opacity: 100, expansion: 0, inverted: false, numVertices: 0 };
+      try { info.name = m.name; } catch (e1) {}
+      try { info.mode = modeNames[m.property('ADBE Mask Mode').value] || 'unknown'; } catch (e2) {}
+      try { var fv = m.property('ADBE Mask Feather').value; info.feather = typeof fv === 'number' ? fv : fv[0]; } catch (e3) {}
+      try { info.opacity = m.property('ADBE Mask Opacity').value; } catch (e4) {}
+      try { info.expansion = m.property('ADBE Mask Expansion').value; } catch (e5) {}
+      try { info.inverted = m.property('ADBE Mask Inverted').value; } catch (e6) {}
+      try { info.numVertices = m.property('ADBE Mask Shape').value.vertices.length; } catch (e7) {}
+      result.masks.push(info);
+    }
+    result.ok = true;
+    result.message = layer.name + ': ' + result.masks.length + ' mask(s).';
+    return resultToJson(result);
+  } catch (e) {
+    result.message = 'getMaskInfo error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Create Shapes from Text — converts a text layer into a shape layer
+ * with vector outlines of each glyph. Uses app.executeCommand(3736)
+ * ("Create Shapes from Text" in AE Layer menu).
+ * The original text layer is preserved (hidden). A new shape layer is created.
+ */
+function extensionsLlmChat_createShapesFromText (layerIndex, layerId) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+
+    // Verify it's a text layer
+    if (!(layer instanceof TextLayer)) {
+      result.message = 'Layer "' + layer.name + '" is not a text layer. Create Shapes from Text only works on text layers.';
+      return resultToJson(result);
+    }
+
+    var layersBefore = ctx.comp.numLayers;
+    var textLayerName = layer.name;
+
+    _beginToolUndo('Agent: Create shapes from text');
+
+    // Select only this layer (required for menu commands)
+    for (var i = 1; i <= ctx.comp.numLayers; i++) {
+      ctx.comp.layer(i).selected = (i === layer.index);
+    }
+
+    // Execute "Create Shapes from Text" — creates a new shape layer above the text layer
+    app.executeCommand(3736);
+
+    var layersAfter = ctx.comp.numLayers;
+    _endToolUndo();
+
+    if (layersAfter > layersBefore) {
+      // The new shape layer is typically at index 1 (top of stack)
+      var newLayer = ctx.comp.layer(1);
+      result.ok = true;
+      result.newLayerIndex = newLayer.index;
+      try { result.newLayerId = newLayer.id; } catch (e) {}
+      result.newLayerName = newLayer.name;
+      result.message = 'Created shape layer "' + newLayer.name + '" from text outlines of "' + textLayerName + '". ' +
+        'Original text layer is preserved (may be hidden). The shape layer contains vector paths for each glyph.';
+    } else {
+      result.ok = false;
+      result.message = 'Create Shapes from Text command did not produce a new layer. ' +
+        'Ensure the text layer "' + textLayerName + '" has visible text content and is not locked.';
+    }
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'createShapesFromText error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+// ============================================================================
+// Phase 6 — Markers
+// ============================================================================
+
+/**
+ * Add a marker to a layer or the composition.
+ * target: "layer" (default) or "comp"
+ */
+function extensionsLlmChat_addMarker (layerIndex, layerId, opts) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    if (!opts) opts = {};
+
+    var time = typeof opts.time === 'number' ? opts.time : ctx.comp.time;
+    var comment = typeof opts.comment === 'string' ? opts.comment : '';
+    var markerVal = new MarkerValue(comment);
+    if (typeof opts.duration === 'number' && opts.duration > 0) markerVal.duration = opts.duration;
+
+    _beginToolUndo('Agent: Add marker');
+    if (opts.target === 'comp') {
+      ctx.comp.markerProperty.setValueAtTime(time, markerVal);
+      _endToolUndo();
+      result.ok = true;
+      result.message = 'Added comp marker at t=' + time + 's: "' + comment + '".';
+    } else {
+      var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+      if (!layer) { _endToolUndo(); result.message = 'Layer not found.'; return resultToJson(result); }
+      layer.marker.setValueAtTime(time, markerVal);
+      _endToolUndo();
+      result.ok = true;
+      result.message = 'Added marker at t=' + time + 's on "' + layer.name + '": "' + comment + '".';
+    }
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'addMarker error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Read all markers from a layer or comp.
+ */
+function extensionsLlmChat_getMarkers (layerIndex, layerId, target) {
+  var result = { ok: false, message: '', markers: [] };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+
+    var markerProp = null;
+    var targetName = '';
+    if (target === 'comp') {
+      markerProp = ctx.comp.markerProperty;
+      targetName = 'comp "' + ctx.comp.name + '"';
+    } else {
+      var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+      if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+      markerProp = layer.marker;
+      targetName = 'layer "' + layer.name + '"';
+    }
+
+    for (var ki = 1; ki <= markerProp.numKeys; ki++) {
+      var mv = markerProp.keyValue(ki);
+      result.markers.push({
+        index: ki,
+        time: markerProp.keyTime(ki),
+        comment: mv.comment || '',
+        duration: mv.duration || 0
+      });
+    }
+    result.ok = true;
+    result.message = targetName + ': ' + result.markers.length + ' marker(s).';
+    return resultToJson(result);
+  } catch (e) {
+    result.message = 'getMarkers error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Delete a marker by index.
+ */
+function extensionsLlmChat_deleteMarker (layerIndex, layerId, markerIndex, target) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+
+    var markerProp = null;
+    if (target === 'comp') {
+      markerProp = ctx.comp.markerProperty;
+    } else {
+      var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+      if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+      markerProp = layer.marker;
+    }
+
+    if (markerIndex < 1 || markerIndex > markerProp.numKeys) {
+      result.message = 'Marker index ' + markerIndex + ' out of range (1..' + markerProp.numKeys + ').';
+      return resultToJson(result);
+    }
+
+    _beginToolUndo('Agent: Delete marker');
+    markerProp.removeKey(markerIndex);
+    _endToolUndo();
+    result.ok = true;
+    result.message = 'Deleted marker #' + markerIndex + '.';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'deleteMarker error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+// ============================================================================
+// Phase 7 — Import / Project items
+// ============================================================================
+
+/**
+ * List all project items.
+ */
+function extensionsLlmChat_listProjectItems (opts) {
+  var result = { ok: false, message: '', items: [] };
+  try {
+    if (!app.project) { result.message = 'No project open.'; return resultToJson(result); }
+    if (!opts) opts = {};
+    var maxItems = typeof opts.maxItems === 'number' ? opts.maxItems : 100;
+
+    for (var i = 1; i <= app.project.numItems && result.items.length < maxItems; i++) {
+      var item = null;
+      try { item = app.project.item(i); } catch (eItem) { continue; }
+      if (!item) continue;
+
+      var info = { index: i, name: '', typeName: '', itemType: '' };
+      try { info.name = item.name; } catch (e1) {}
+      try { info.typeName = item.typeName; } catch (e2) {}
+
+      if (item instanceof CompItem) {
+        info.itemType = 'comp';
+        try { info.width = item.width; info.height = item.height; info.duration = item.duration; info.frameRate = item.frameRate; } catch (e3) {}
+      } else if (item instanceof FolderItem) {
+        info.itemType = 'folder';
+      } else if (item instanceof FootageItem) {
+        info.itemType = 'footage';
+        try { info.width = item.width; info.height = item.height; info.duration = item.duration || 0; } catch (e4) {}
+        try { if (item.file) info.filePath = item.file.fsName; } catch (e5) {}
+        try { info.hasVideo = item.hasVideo; info.hasAudio = item.hasAudio; } catch (e6) {}
+      }
+      result.items.push(info);
+    }
+    result.ok = true;
+    result.message = result.items.length + ' project item(s) listed.';
+    return resultToJson(result);
+  } catch (e) {
+    result.message = 'listProjectItems error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Import a file into the project.
+ */
+function extensionsLlmChat_importFile (filePath) {
+  var result = { ok: false, message: '', itemIndex: null, itemName: '' };
+  try {
+    if (!app.project) { result.message = 'No project open.'; return resultToJson(result); }
+    if (typeof filePath !== 'string' || !filePath.length) { result.message = 'No file path.'; return resultToJson(result); }
+
+    var f = new File(filePath);
+    if (!f.exists) { result.message = 'File not found: ' + filePath; return resultToJson(result); }
+
+    _beginToolUndo('Agent: Import file');
+    var importOpts = new ImportOptions(f);
+    var item = app.project.importFile(importOpts);
+    _endToolUndo();
+
+    if (!item) { result.message = 'Import returned null.'; return resultToJson(result); }
+    result.ok = true;
+    result.itemIndex = item.index;
+    result.itemName = item.name;
+    try { result.width = item.width; result.height = item.height; } catch (e2) {}
+    result.message = 'Imported "' + item.name + '" (index ' + item.index + ').';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'importFile error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Add a project item to the active composition as a new layer.
+ */
+function extensionsLlmChat_addItemToComp (projectItemIndex) {
+  var result = { ok: false, message: '', layerIndex: null, layerId: null };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    if (typeof projectItemIndex !== 'number' || projectItemIndex < 1 || projectItemIndex > app.project.numItems) {
+      result.message = 'Invalid project item index: ' + projectItemIndex; return resultToJson(result);
+    }
+    var item = app.project.item(projectItemIndex);
+    if (!item) { result.message = 'Project item not found.'; return resultToJson(result); }
+    if (item instanceof FolderItem) { result.message = 'Cannot add a folder to a composition.'; return resultToJson(result); }
+
+    _beginToolUndo('Agent: Add item to comp');
+    var layer = ctx.comp.layers.add(item);
+    _endToolUndo();
+
+    result.ok = true;
+    result.layerIndex = layer.index;
+    result.layerId = layer.id;
+    result.layerName = layer.name;
+    result.message = 'Added "' + item.name + '" to "' + ctx.comp.name + '" at index ' + layer.index + '.';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'addItemToComp error: ' + e.toString();
     return resultToJson(result);
   }
 }

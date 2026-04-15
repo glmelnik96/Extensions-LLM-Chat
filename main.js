@@ -50,6 +50,9 @@
     els.renameSessionBtn = document.getElementById('rename-session-btn')
     els.clearSessionBtn = document.getElementById('clear-session-btn')
     els.clearAllBtn = document.getElementById('clear-all-btn')
+    els.exportSessionsBtn = document.getElementById('export-sessions-btn')
+    els.exportErrorsBtn = document.getElementById('export-errors-btn')
+    els.reportBtn = document.getElementById('report-btn')
     els.chatTranscript = document.getElementById('chat-transcript')
     els.activeCompNote = document.getElementById('active-comp-note')
     els.userInput = document.getElementById('user-input')
@@ -416,10 +419,11 @@
       titleSpan.textContent = s.title
       li.appendChild(titleSpan)
 
-      var badge = document.createElement('span')
-      badge.className = 'session-model-badge'
-      badge.textContent = 'cloud'
-      li.appendChild(badge)
+      var meta = document.createElement('div')
+      meta.className = 'session-meta'
+      var msgCount = s.messages ? s.messages.length : 0
+      meta.textContent = msgCount + ' msg' + (msgCount !== 1 ? 's' : '')
+      li.appendChild(meta)
 
       ;(function (sessionId) {
         li.addEventListener('click', function () { setActiveSession(sessionId) })
@@ -582,6 +586,7 @@
   function showThinking () {
     if (thinkingEl) return
     thinkingToolCount = 0
+    streamingTextBuffer = ''
     thinkingEl = document.createElement('div')
     thinkingEl.className = 'agent-thinking'
     thinkingEl.innerHTML = '<span>Agent working</span><span class="thinking-dots"><span></span><span></span><span></span></span>'
@@ -594,6 +599,23 @@
       thinkingEl.parentNode.removeChild(thinkingEl)
     }
     thinkingEl = null
+  }
+
+  var streamingTextBuffer = ''
+
+  function updateThinkingWithStreamText (chunk) {
+    if (!thinkingEl) return
+    streamingTextBuffer += chunk
+    // Show last 200 chars of streaming text
+    var preview = streamingTextBuffer.length > 200 ? '...' + streamingTextBuffer.slice(-200) : streamingTextBuffer
+    var streamDiv = thinkingEl.querySelector('.stream-preview')
+    if (!streamDiv) {
+      streamDiv = document.createElement('div')
+      streamDiv.className = 'stream-preview'
+      thinkingEl.appendChild(streamDiv)
+    }
+    streamDiv.textContent = preview
+    scrollToBottom()
   }
 
   function updateThinkingWithToolCall (tc) {
@@ -625,6 +647,12 @@
     if (!text) return ''
     // Escape HTML entities.
     var s = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
+
+    // Images: ![alt](file:///path) or ![alt](/path)
+    s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, function (_, alt, src) {
+      var safeSrc = src.replace(/"/g, '&quot;')
+      return '<img class="md-preview-img" src="' + safeSrc + '" alt="' + alt + '" />'
+    })
 
     // Code blocks (``` ... ```).
     s = s.replace(/```(\w*)\n([\s\S]*?)```/g, function (_, lang, code) {
@@ -706,6 +734,75 @@
     return pruned
   }
 
+  // ── Knowledge Base Context (Phase 4) ──────────────────────────────────
+  var KB_SNIPPETS = [
+    {
+      keywords: ['expression', 'expr', 'wiggle', 'loopout', 'loopin', 'valueattime', 'posterize', 'экспрешен', 'экспрессию', 'выражени'],
+      text: 'Expression engine: AE 26+ uses V8 JavaScript. Globals: thisComp, thisLayer, thisProperty, time, value, velocity. No DOM/browser APIs. Common: wiggle(freq,amp), loopOut("cycle"), linear(t,tMin,tMax,vMin,vMax), ease(). Property refs: thisComp.layer("Name").transform.position. Expression MUST end with a value (the property result). Use camelCase (thisComp, toWorld), not snake_case.'
+    },
+    {
+      keywords: ['sourcetext', 'source text', 'текст', 'text layer', 'текстов', 'counter', 'счётчик', 'typewriter', 'печатн'],
+      text: 'SourceText: expressions must return a string or number (AE auto-wraps into TextDocument). Use \\r for line breaks, NOT \\n. Do NOT use text.sourceText.value — use text.sourceText directly. Do NOT construct TextDocument objects. Examples: Math.floor(linear(time,0,3,0,100)) for counter; text.sourceText.slice(0,Math.floor(time*10)) for typewriter.'
+    },
+    {
+      keywords: ['sourcerectattime', 'bounding', 'boundingrect', 'rect'],
+      text: 'sourceRectAtTime(t, includeExtents): returns {left, top, width, height}. Use on text layers for bounding box. Common: var r = thisLayer.sourceRectAtTime(time, false); [r.left + r.width/2, r.top + r.height/2] for text center.'
+    },
+    {
+      keywords: ['repair', 'fix', 'error', 'ошибк', 'исправ', 'починить', 'debug'],
+      text: 'Common expression errors: "undefined is not a function" = wrong method name; "Expected ] or ," = array syntax error; "Can\'t access" = property doesn\'t exist on this layer type. After apply_expression returns error, read the error message, fix the expression, retry. Use get_expression to read existing expressions before modifying.'
+    }
+  ]
+
+  function buildKnowledgeBaseContext (userText) {
+    if (!userText) return ''
+    var lower = userText.toLowerCase()
+    var parts = []
+    for (var i = 0; i < KB_SNIPPETS.length; i++) {
+      var snippet = KB_SNIPPETS[i]
+      for (var k = 0; k < snippet.keywords.length; k++) {
+        if (lower.indexOf(snippet.keywords[k]) >= 0) {
+          parts.push(snippet.text)
+          break
+        }
+      }
+    }
+    return parts.join('\n\n')
+  }
+
+  // ── Expression Validation (Phase 10) ──────────────────────────────────
+  /**
+   * Quick static checks on expression text before sending to AE.
+   * Returns array of warning strings (empty if clean).
+   */
+  function validateExpression (exprText) {
+    var warnings = []
+    if (!exprText || typeof exprText !== 'string') return warnings
+
+    if (exprText.indexOf('text.sourceText.value') >= 0) {
+      warnings.push('WARN: "text.sourceText.value" is incorrect. Use "text.sourceText" directly.')
+    }
+    if (exprText.indexOf('\\n') >= 0 && exprText.indexOf('\\r') < 0 && exprText.toLowerCase().indexOf('sourcetext') >= 0) {
+      warnings.push('WARN: Use "\\r" for line breaks in SourceText, not "\\n".')
+    }
+    // Check unbalanced brackets
+    var opens = 0; var closes = 0
+    for (var i = 0; i < exprText.length; i++) {
+      if (exprText[i] === '(') opens++
+      if (exprText[i] === ')') closes++
+    }
+    if (opens !== closes) warnings.push('WARN: Unbalanced parentheses (' + opens + ' open, ' + closes + ' close).')
+
+    var squareOpen = 0; var squareClose = 0
+    for (var j = 0; j < exprText.length; j++) {
+      if (exprText[j] === '[') squareOpen++
+      if (exprText[j] === ']') squareClose++
+    }
+    if (squareOpen !== squareClose) warnings.push('WARN: Unbalanced brackets [' + squareOpen + ' open, ' + squareClose + ' close].')
+
+    return warnings
+  }
+
   // ── Handle Send ────────────────────────────────────────────────────────
   function handleSend () {
     if (state.isRequestInFlight) return
@@ -735,6 +832,13 @@
         persistState()
         return
       }
+    }
+
+    // Warn if no composition is open (non-blocking — agent will also get errors from tools).
+    if (els.activeCompNote && els.activeCompNote.textContent.indexOf('unavailable') !== -1) {
+      session.messages.push({ role: 'system', text: '⚠ No active composition detected. Open a composition in After Effects before sending requests — most tools require an active comp.' })
+      renderTranscript()
+      persistState()
     }
 
     // Start agent flow.
@@ -798,16 +902,24 @@
     var maxSteps = getAgentMaxSteps(agentCfg)
     apiMessages = pruneConversation(apiMessages, maxConversationTokens)
 
+    // Phase 4: Inject knowledge base context for expression-related queries
+    var kbContext = buildKnowledgeBaseContext(text)
+    var systemPrompt = window.AGENT_SYSTEM_PROMPT || ''
+    if (kbContext) systemPrompt += '\n\n## Expression Reference (from documentation)\n\n' + kbContext
+
     var toolCallLog = []
 
     window.AGENT_TOOL_LOOP.runAgentLoop({
       modelId: session.model,
-      systemPrompt: window.AGENT_SYSTEM_PROMPT || '',
+      systemPrompt: systemPrompt,
       messages: apiMessages,
       tools: (window.AGENT_TOOL_REGISTRY && window.AGENT_TOOL_REGISTRY.tools) || [],
       maxSteps: maxSteps,
       temperature: agentCfg.agentTemperature || 0.3,
       abortHandle: state.currentAbortHandle,
+      onTextChunk: function (chunk) {
+        updateThinkingWithStreamText(chunk)
+      },
       onToolCall: function (tc) {
         updateThinkingWithToolCall(tc)
       },
@@ -822,7 +934,9 @@
         get_detailed_comp_summary: true, get_host_context: true,
         get_property_value: true, get_keyframes: true,
         get_layer_properties: true, get_effect_properties: true,
-        get_expression: true
+        get_expression: true, get_mask_info: true,
+        get_markers: true, list_project_items: true,
+        capture_comp_frame: true
       }
       var mutatingCount = 0
       var allCalls = result.toolCallLog || []
@@ -928,6 +1042,309 @@
     createSession()
   }
 
+  function handleExportSessions () {
+    try {
+      var fs = require('fs')
+      var path = require('path')
+      var ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+      var filename = 'ae-agent-sessions-' + ts + '.json'
+      var outDir = path.join(require('os').homedir(), 'Desktop')
+      var outPath = path.join(outDir, filename)
+      var data = {
+        exportedAt: new Date().toISOString(),
+        sessions: state.sessions
+      }
+      fs.writeFileSync(outPath, JSON.stringify(data, null, 2), 'utf8')
+      setStatus('Exported to ~/Desktop/' + filename)
+      alert('Sessions exported to:\n' + outPath)
+    } catch (e) {
+      console.error('Export error:', e)
+      alert('Export failed: ' + (e.message || String(e)))
+    }
+  }
+
+  function handleExportErrors () {
+    try {
+      var fs = require('fs')
+      var path = require('path')
+      var ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+      var filename = 'ae-agent-errors-' + ts + '.json'
+      var outDir = path.join(require('os').homedir(), 'Desktop')
+      var outPath = path.join(outDir, filename)
+
+      var errorEntries = []
+      for (var si = 0; si < state.sessions.length; si++) {
+        var session = state.sessions[si]
+        var msgs = session.messages || []
+        for (var mi = 0; mi < msgs.length; mi++) {
+          var msg = msgs[mi]
+          if (msg.role !== 'assistant' || !msg.toolCalls) continue
+          var failedCalls = []
+          for (var ti = 0; ti < msg.toolCalls.length; ti++) {
+            var tc = msg.toolCalls[ti]
+            var res = tc.result || {}
+            if (tc.status === 'error' || res.ok === false || res.expressionError) {
+              failedCalls.push({
+                tool: tc.name,
+                args: tc.args,
+                status: tc.status,
+                error: res.message || res.expressionError || 'unknown error'
+              })
+            }
+          }
+          if (failedCalls.length === 0) continue
+          var userText = ''
+          for (var ui = mi - 1; ui >= 0; ui--) {
+            if (msgs[ui].role === 'user') { userText = msgs[ui].text; break }
+          }
+          errorEntries.push({
+            session: session.title,
+            userRequest: userText,
+            failedTools: failedCalls,
+            agentResponse: msg.text || ''
+          })
+        }
+      }
+
+      if (errorEntries.length === 0) {
+        setStatus('No errors found in sessions')
+        alert('No errors found — nothing to export.')
+        return
+      }
+
+      var data = {
+        exportedAt: new Date().toISOString(),
+        totalErrors: errorEntries.length,
+        errors: errorEntries
+      }
+      fs.writeFileSync(outPath, JSON.stringify(data, null, 2), 'utf8')
+      setStatus('Exported ' + errorEntries.length + ' error(s) to ~/Desktop/' + filename)
+      alert('Exported ' + errorEntries.length + ' error(s) to:\n' + outPath)
+    } catch (e) {
+      console.error('Export errors:', e)
+      alert('Export failed: ' + (e.message || String(e)))
+    }
+  }
+
+  // ── Report generation ────────────────────────────────────────────────
+  var REPORT_CHUNK_CHARS = 24000 // ~6k tokens per chunk, safe for context window
+  var REPORT_SYSTEM_PROMPT = [
+    'You are a QA analyst reviewing session logs from an Adobe After Effects AI agent panel (AE Motion Agent).',
+    'The panel has 46 tools that create/modify layers, shapes, keyframes, expressions, effects, masks, markers, 3D, camera, light, import files, capture frames.',
+    '',
+    'Analyze the provided session log chunk and produce a structured report in this EXACT format:',
+    '',
+    '## Errors & Failures',
+    'For each error found:',
+    '- **Tool**: tool_name | **Status**: error/expression_error | **Args**: brief summary of args',
+    '- **Error message**: the actual error text',
+    '- **Context**: what the user asked / what the agent was trying to do',
+    '- **Probable cause**: your analysis of why it failed',
+    '- **Fix suggestion**: specific technical suggestion for the developer',
+    '',
+    '## Warnings',
+    '- Expression validation warnings, retries that eventually succeeded, suspicious patterns',
+    '',
+    '## Working Features',
+    '- Brief list of tools/features that worked correctly in this chunk',
+    '',
+    '## Patterns & Observations',
+    '- Recurring issues, model behavior problems, prompt issues, UX friction',
+    '',
+    'Be concise but technically precise. Include tool names, property paths, error messages verbatim.',
+    'If the chunk has no errors, still list what worked.',
+    'Write in English for developer consumption. Do not add preamble or conclusions beyond the sections above.'
+  ].join('\n')
+
+  function serializeSessionForReport (session) {
+    var lines = []
+    lines.push('=== Session: ' + session.title + ' (model: ' + (session.model || 'unknown') + ') ===')
+    var msgs = session.messages || []
+    for (var i = 0; i < msgs.length; i++) {
+      var m = msgs[i]
+      // Internal format uses 'text', API format uses 'content' — support both
+      var textContent = m.text || m.content || ''
+      if (m.role === 'user') {
+        var userStr = typeof textContent === 'string' ? textContent : JSON.stringify(textContent)
+        lines.push('\n[USER] ' + (userStr || '').substring(0, 500))
+      } else if (m.role === 'assistant') {
+        // Internal format: toolCalls array; API format: tool_calls array
+        var calls = m.toolCalls || m.tool_calls || []
+        if (calls.length > 0) {
+          for (var tc = 0; tc < calls.length; tc++) {
+            var call = calls[tc]
+            var toolName = call.name || (call.function ? call.function.name : 'unknown')
+            var toolArgs = call.args ? JSON.stringify(call.args) : (call.function ? (call.function.arguments || '{}') : '{}')
+            var toolResult = call.result ? JSON.stringify(call.result) : ''
+            var isErr = call.status === 'error' || (toolResult.indexOf('"ok":false') !== -1)
+            lines.push('[TOOL_CALL] ' + toolName + ' | args: ' + (toolArgs || '{}').substring(0, 300))
+            if (toolResult) {
+              lines.push('[TOOL_RESULT] ' + (isErr ? toolResult.substring(0, 1000) : toolResult.substring(0, 400)))
+            }
+          }
+        }
+        var assistStr = typeof textContent === 'string' ? textContent : JSON.stringify(textContent)
+        if (assistStr) {
+          lines.push('[ASSISTANT] ' + assistStr.substring(0, 800))
+        }
+      } else if (m.role === 'tool') {
+        var resultStr = typeof textContent === 'string' ? textContent : JSON.stringify(textContent)
+        var isError = resultStr.indexOf('"ok":false') !== -1 || resultStr.indexOf('"ok": false') !== -1 || resultStr.indexOf('expressionError') !== -1
+        lines.push('[TOOL_RESULT] ' + (isError ? resultStr.substring(0, 1000) : resultStr.substring(0, 400)))
+      } else if (m.role === 'system') {
+        lines.push('[SYSTEM] ' + (typeof textContent === 'string' ? textContent : JSON.stringify(textContent)).substring(0, 300))
+      }
+    }
+    return lines.join('\n')
+  }
+
+  function splitIntoChunks (text, maxChars) {
+    var chunks = []
+    var lines = text.split('\n')
+    var current = ''
+    for (var i = 0; i < lines.length; i++) {
+      if (current.length + lines[i].length + 1 > maxChars && current.length > 0) {
+        chunks.push(current)
+        current = ''
+      }
+      current += (current ? '\n' : '') + lines[i]
+    }
+    if (current) chunks.push(current)
+    return chunks
+  }
+
+  function handleGenerateReport () {
+    if (!window.CHAT_PROVIDER || typeof window.CHAT_PROVIDER.invoke !== 'function') {
+      alert('Chat provider not available.')
+      return
+    }
+    if (state.sessions.length === 0) {
+      alert('No sessions to analyze.')
+      return
+    }
+
+    // Serialize all sessions
+    var allText = ''
+    for (var si = 0; si < state.sessions.length; si++) {
+      allText += serializeSessionForReport(state.sessions[si]) + '\n\n'
+    }
+
+    if (allText.trim().length < 50) {
+      alert('Sessions are empty, nothing to analyze.')
+      return
+    }
+
+    var chunks = splitIntoChunks(allText, REPORT_CHUNK_CHARS)
+    var totalChunks = chunks.length
+
+    setStatus('Generating report... (0/' + totalChunks + ' chunks)')
+    if (els.reportBtn) els.reportBtn.disabled = true
+
+    // Show progress in chat so user knows it's not frozen
+    var session = getActiveSession()
+    if (session) {
+      session.messages.push({ role: 'system', text: '📊 Report: analyzing ' + totalChunks + ' chunk(s)...' })
+      renderTranscript()
+    }
+
+    var modelId = (els.modelSelect && els.modelSelect.value) || DEFAULT_MODEL
+    var chunkReports = []
+
+    function processChunk (idx) {
+      if (idx >= totalChunks) {
+        return finalizeReport(chunkReports)
+      }
+      setStatus('Generating report... (' + (idx + 1) + '/' + totalChunks + ' chunks)')
+      if (session && totalChunks > 1) {
+        session.messages.push({ role: 'system', text: '📊 Report: processing chunk ' + (idx + 1) + '/' + totalChunks + '...' })
+        renderTranscript()
+      }
+
+      var userContent = 'Session log chunk ' + (idx + 1) + '/' + totalChunks + ':\n\n' + chunks[idx]
+      var messages = [
+        { role: 'system', content: REPORT_SYSTEM_PROMPT },
+        { role: 'user', content: userContent }
+      ]
+
+      return window.CHAT_PROVIDER.invoke(modelId, messages, {
+        max_tokens: 4096,
+        temperature: 0.2
+      }).then(function (response) {
+        var content = ''
+        if (response.choices && response.choices[0] && response.choices[0].message) {
+          content = response.choices[0].message.content || ''
+        }
+        chunkReports.push({ chunkIndex: idx + 1, report: content })
+        return processChunk(idx + 1)
+      }).catch(function (err) {
+        chunkReports.push({ chunkIndex: idx + 1, report: '[ERROR generating report for this chunk: ' + (err.message || String(err)) + ']' })
+        return processChunk(idx + 1)
+      })
+    }
+
+    function finalizeReport (reports) {
+      try {
+        var fs = require('fs')
+        var path = require('path')
+        var os = require('os')
+        var ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+        var outDir = path.join(os.homedir(), 'Desktop')
+
+        // Build combined markdown report
+        var md = []
+        md.push('# AE Motion Agent — Session Analysis Report')
+        md.push('')
+        md.push('Generated: ' + new Date().toISOString())
+        md.push('Sessions analyzed: ' + state.sessions.length)
+        md.push('Chunks processed: ' + reports.length)
+        md.push('')
+        md.push('---')
+        md.push('')
+
+        for (var ri = 0; ri < reports.length; ri++) {
+          if (reports.length > 1) {
+            md.push('# Chunk ' + reports[ri].chunkIndex + '/' + totalChunks)
+            md.push('')
+          }
+          md.push(reports[ri].report)
+          md.push('')
+          if (ri < reports.length - 1) {
+            md.push('---')
+            md.push('')
+          }
+        }
+
+        var reportFilename = 'ae-agent-report-' + ts + '.md'
+        var reportPath = path.join(outDir, reportFilename)
+        fs.writeFileSync(reportPath, md.join('\n'), 'utf8')
+
+        // Also save raw log for developer reference
+        var rawFilename = 'ae-agent-raw-log-' + ts + '.json'
+        var rawPath = path.join(outDir, rawFilename)
+        var rawData = {
+          exportedAt: new Date().toISOString(),
+          sessions: state.sessions
+        }
+        fs.writeFileSync(rawPath, JSON.stringify(rawData, null, 2), 'utf8')
+
+        setStatus('Report saved to Desktop')
+        if (els.reportBtn) els.reportBtn.disabled = false
+        if (session) {
+          session.messages.push({ role: 'system', text: '✅ Report saved to ~/Desktop/' + reportFilename })
+          renderTranscript()
+          persistState()
+        }
+        alert('Report saved:\n' + reportPath + '\n\nRaw log:\n' + rawPath)
+      } catch (e) {
+        console.error('Report save error:', e)
+        if (els.reportBtn) els.reportBtn.disabled = false
+        alert('Report save failed: ' + (e.message || String(e)))
+      }
+    }
+
+    processChunk(0)
+  }
+
   function handleModelChange () {
     var session = getActiveSession()
     if (!session) return
@@ -965,6 +1382,9 @@
     if (els.renameSessionBtn) els.renameSessionBtn.addEventListener('click', handleRenameSession)
     if (els.clearSessionBtn) els.clearSessionBtn.addEventListener('click', handleClearSession)
     if (els.clearAllBtn) els.clearAllBtn.addEventListener('click', handleClearAll)
+    if (els.exportSessionsBtn) els.exportSessionsBtn.addEventListener('click', handleExportSessions)
+    if (els.exportErrorsBtn) els.exportErrorsBtn.addEventListener('click', handleExportErrors)
+    if (els.reportBtn) els.reportBtn.addEventListener('click', handleGenerateReport)
     if (els.sendBtn) els.sendBtn.addEventListener('click', handleSend)
     if (els.undoBtn) els.undoBtn.addEventListener('click', handleUndo)
     if (els.cancelBtn) els.cancelBtn.addEventListener('click', function () {
@@ -1007,11 +1427,27 @@
     })
     if (els.applyPresetBtn) els.applyPresetBtn.addEventListener('click', handleApplyPresetFromUi)
 
-    // Enter to send (Shift+Enter for newline).
+    // Enter to send (Shift+Enter for newline) + auto-resize.
     if (els.userInput) {
       els.userInput.addEventListener('keydown', function (e) {
         if (e.key === 'Enter' && !e.shiftKey) {
           e.preventDefault()
+          handleSend()
+        }
+      })
+      els.userInput.addEventListener('input', function () {
+        this.style.height = 'auto'
+        this.style.height = Math.min(this.scrollHeight, 120) + 'px'
+      })
+    }
+
+    // Quick actions.
+    var quickBtns = document.querySelectorAll('.quick-action-btn')
+    for (var qi = 0; qi < quickBtns.length; qi++) {
+      quickBtns[qi].addEventListener('click', function () {
+        var prompt = this.getAttribute('data-prompt')
+        if (prompt && els.userInput) {
+          els.userInput.value = prompt
           handleSend()
         }
       })
@@ -1063,6 +1499,11 @@
     } else {
       setModelStatus('unknown', 'no API key')
     }
+  }
+
+  // Export expression validation for agent tool loop
+  if (typeof window !== 'undefined') {
+    window.validateExpression = validateExpression
   }
 
   // Boot.
