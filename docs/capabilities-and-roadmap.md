@@ -103,18 +103,18 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 | `capture_comp_frame` | Save current frame as PNG and return the file path for inline display |
 
 ### UI
+- **2-tab layout**: Chat / Presets & Logs — single session per project
 - Chat interface with tool-call visualization (collapsible cards showing args + results)
 - **Markdown rendering** in agent responses (headers, bold, italic, code blocks, lists, inline images)
 - **Frame preview** — `capture_comp_frame` results shown as inline images in chat
 - **No-composition warning** — system message when no active comp is detected before sending
-- Session management (create, rename, clear, switch between sessions)
-- **Session metadata** — message count displayed under each session in sidebar
-- Model selector: Cloud.ru models (local Ollama chat UI is intentionally disabled)
-- **Active composition note** under transcript
-- **Preset toolbar**: deterministic preset dropdown (`fade`/`pop`/`slide`) + parameter fields + `Apply preset`
+- Model selector in tab bar
+- **Preset toolbar** (Presets tab): deterministic preset dropdown (`fade`/`pop`/`slide`) + parameter fields + `Apply preset`
 - **Quick action buttons**: Wiggle, Counter, Slide In, Bounce, Preview — one-click common operations
+- **Tool Call Log** (Presets tab): shows only preset apply results (not agent tool calls)
 - **Streaming text preview** — agent response text appears in real-time during generation
 - **Textarea auto-resize** — input grows up to ~8 lines as you type
+- **Shared footer**: Undo, Clear, Export, Errors, Report — always visible across tabs
 - **Undo button** — reverts ALL agent actions from last request (batch-undo via N x Cmd+Z)
 - **Stop button** — cancel a running agent mid-execution
 - **Step progress indicator** — shows `Step N/maxSteps` and tool call count during execution
@@ -132,9 +132,8 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 - **Tool call history preservation** — agent remembers its prior tool calls and results across turns in a session
 - **Host script single-load** — ExtendScript loaded once at startup, not re-parsed on every tool call
 
-### API Providers
+### API Provider
 - **Cloud.ru Foundation Models** — OpenAI-compatible chat/completions with tool calling and SSE streaming
-- **Ollama (local)** — available for legacy/vision-related modules; not exposed as a selectable chat provider in the current UI flow
 
 ---
 
@@ -219,7 +218,7 @@ Shape modifiers via the same `addProperty()` API — natural extension of Phase 
 ```
 agentSystemPrompt.js  — Agent persona, workflow rules, expression guidance, 47 tool documentation, known limitations
 agentToolLoop.js      — LLM <> tool execution cycle with abort, streaming, expression validation
-chatProvider.js       — Cloud.ru + Ollama unified API with retry, SSE streaming
+chatProvider.js       — Cloud.ru API with retry, SSE streaming
 hostBridge.js         — Tool name -> ExtendScript mapping (single-load host script)
 toolRegistry.js       — 47 OpenAI-compatible tool definitions
 host/index.jsx        — ExtendScript functions (AE operations, shapes, 3D, masks, markers, import)

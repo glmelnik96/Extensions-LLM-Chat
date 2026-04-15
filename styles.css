@@ -9,89 +9,70 @@ body {
 
 .panel-root {
   display: flex;
+  flex-direction: column;
   height: 100vh;
   box-sizing: border-box;
   background-color: #323232;
 }
 
-/* ── Sidebar ──────────────────────────────────────────────────────────── */
+/* ── Tab bar ─────────────────────────────────────────────────────────── */
 
-.sidebar {
-  width: 140px;
-  min-width: 120px;
-  max-width: 180px;
-  display: flex;
-  flex-direction: column;
-  border-right: 1px solid #444;
-  background-color: #2b2b2b;
-  box-sizing: border-box;
-  padding: 4px;
-  gap: 4px;
-}
-
-.sidebar-header,
-.sidebar-footer {
-  display: flex;
-  gap: 4px;
-  flex-wrap: wrap;
-}
-
-.session-list {
-  flex: 1;
-  margin: 0;
-  padding: 0;
-  list-style: none;
-  overflow-y: auto;
-  border: 1px solid #444;
-  background-color: #242424;
-}
-
-.session-item {
-  padding: 4px 6px;
-  cursor: pointer;
-  border-bottom: 1px solid #383838;
+.tab-bar {
   display: flex;
   align-items: center;
-  justify-content: space-between;
-  gap: 4px;
-}
-
-.session-item:last-child {
-  border-bottom: none;
-}
-
-.session-item.active {
-  background-color: #3c5a80;
-}
-
-.session-title {
-  flex: 1;
-  white-space: nowrap;
-  text-overflow: ellipsis;
-  overflow: hidden;
-}
-
-.session-model-badge {
+  gap: 0;
+  border-bottom: 1px solid #444;
+  background-color: #2b2b2b;
+  padding: 0 4px;
   flex-shrink: 0;
-  font-size: 9px;
-  padding: 1px 4px;
-  border-radius: 2px;
-  background-color: #444;
+}
+
+.tab-btn {
+  background: transparent;
+  border: none;
+  border-bottom: 2px solid transparent;
+  color: #999;
+  font-size: 11px;
+  padding: 6px 12px;
+  cursor: pointer;
+  transition: color 0.15s, border-color 0.15s;
+}
+
+.tab-btn:hover {
   color: #ddd;
 }
 
-/* ── Chat area ────────────────────────────────────────────────────────── */
+.tab-btn.active {
+  color: #f0f0f0;
+  border-bottom-color: #5679aa;
+}
 
-.chat-area {
-  flex: 1;
+.tab-bar-right {
+  margin-left: auto;
   display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 2px 0;
+}
+
+/* ── Tab panels ──────────────────────────────────────────────────────── */
+
+.tab-panel {
+  display: none;
+  flex: 1;
   flex-direction: column;
   padding: 6px;
   box-sizing: border-box;
   gap: 6px;
   min-height: 0;
-  overflow: visible;
+  overflow: hidden;
 }
+
+.tab-panel.active {
+  display: flex;
+}
+
+/* ── Chat area (inside Chat tab) ─────────────────────────────────────── */
 
 .chat-transcript {
   flex: 1;
@@ -365,16 +346,25 @@ body {
   color: #dddddd;
 }
 
-.provider-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
 .model-selector {
-  flex: 1;
   font-size: 10px;
   min-width: 0;
+  max-width: 160px;
+}
+
+/* ── Preset bar ──────────────────────────────────────────────────────── */
+
+.presets-section {
+  flex-shrink: 0;
+}
+
+.section-label {
+  font-size: 10px;
+  color: #aaa;
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+  padding: 0 2px;
 }
 
 .preset-bar {
@@ -396,7 +386,7 @@ body {
 }
 
 .preset-dropdown-btn::after {
-  content: "▾";
+  content: "\25BE";
   position: absolute;
   right: 6px;
   top: 50%;
@@ -467,7 +457,6 @@ body {
   outline: 1px solid #5679aa;
   border-color: #5679aa;
 }
-
 
 /* ── Input ────────────────────────────────────────────────────────────── */
 
@@ -556,6 +545,19 @@ body {
   background-color: #8a3838;
 }
 
+/* ── Panel footer (shared actions) ───────────────────────────────────── */
+
+.panel-footer {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  padding: 4px 6px;
+  border-top: 1px solid #444;
+  background-color: #2b2b2b;
+  flex-shrink: 0;
+  flex-wrap: wrap;
+}
+
 /* ── Thinking/loading indicator ───────────────────────────────────────── */
 
 .agent-thinking {
@@ -612,7 +614,7 @@ body {
 .quick-actions {
   display: flex;
   gap: 4px;
-  padding: 3px 6px;
+  padding: 3px 0;
   flex-wrap: wrap;
 }
 
@@ -656,10 +658,73 @@ body {
   border: 1px solid #555;
 }
 
-/* ── Session metadata ────────────────────────────────────────────────── */
+/* ── Compact tool log (Presets & Logs tab) ────────────────────────────── */
 
-.session-meta {
+.log-section {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  margin-top: 8px;
+}
+
+.tool-log {
+  flex: 1;
+  border: 1px solid #444;
+  background-color: #1e1e1e;
+  padding: 4px 6px;
+  overflow-y: auto;
+  font-family: Menlo, Monaco, Consolas, monospace;
+  font-size: 10px;
+  line-height: 1.4;
+}
+
+.tool-log-entry {
+  padding: 2px 0;
+  border-bottom: 1px solid #2a2a2a;
+  display: flex;
+  align-items: baseline;
+  gap: 6px;
+}
+
+.tool-log-entry:last-child {
+  border-bottom: none;
+}
+
+.tool-log-time {
+  color: #666;
   font-size: 9px;
-  color: #777;
-  margin-top: 1px;
+  flex-shrink: 0;
+}
+
+.tool-log-name {
+  color: #9ad0ff;
+  flex-shrink: 0;
+}
+
+.tool-log-status {
+  font-size: 9px;
+  padding: 0 3px;
+  border-radius: 2px;
+}
+
+.tool-log-status.ok {
+  color: #a5f7b3;
+}
+
+.tool-log-status.error {
+  color: #ffb3b3;
+}
+
+.tool-log-status.running {
+  color: #f0f0a0;
+}
+
+.tool-log-msg {
+  color: #888;
+  font-size: 9px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  flex: 1;
 }

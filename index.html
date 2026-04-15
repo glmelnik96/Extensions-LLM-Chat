@@ -7,70 +7,27 @@
   </head>
   <body>
     <div id="app" class="panel-root">
-      <aside class="sidebar">
-        <div class="sidebar-header">
-          <button id="new-session-btn" class="btn btn-primary" title="Start a new chat session (agent forgets previous context)">New</button>
-        </div>
-        <ul id="session-list" class="session-list"></ul>
-        <div class="sidebar-footer">
-          <button id="rename-session-btn" class="btn btn-secondary" title="Rename this chat session">Rename</button>
-          <button id="clear-session-btn" class="btn btn-secondary" title="Clear all messages in this session">Clear</button>
-          <button id="clear-all-btn" class="btn btn-danger" title="Delete ALL sessions permanently">Clear All</button>
-          <button id="export-sessions-btn" class="btn btn-secondary" title="Export all sessions to JSON on Desktop">Export</button>
-          <button id="export-errors-btn" class="btn btn-secondary" title="Export errors only: user request + failed tools + agent response → JSON on Desktop">Errors</button>
-          <button id="report-btn" class="btn btn-secondary" title="Analyze all sessions with LLM and generate a bug report on Desktop">Report</button>
-        </div>
-      </aside>
-      <main class="chat-area">
-        <div id="chat-transcript" class="chat-transcript"></div>
-        <div id="active-comp-note" class="active-comp-note">Active composition: loading...</div>
-        <div id="status-line" class="status-line">
-          <span id="status-text">Ready</span>
-          <span id="model-status" class="model-status model-status-unknown">model: unknown</span>
-        </div>
-        <div class="provider-bar">
+      <!-- Tab bar -->
+      <div class="tab-bar">
+        <button class="tab-btn active" data-tab="chat">Chat</button>
+        <button class="tab-btn" data-tab="presets">Presets &amp; Logs</button>
+        <div class="tab-bar-right">
           <select id="model-select" class="btn model-selector">
             <optgroup label="Cloud.ru">
               <option value="cloudru/Qwen/Qwen3-Coder-Next">Qwen3 Coder</option>
               <option value="cloudru/openai/gpt-oss-120b">GPT-OSS 120B</option>
             </optgroup>
           </select>
-          <button id="undo-btn" class="btn btn-warning" title="Undo ALL agent actions from last request">Undo</button>
         </div>
-        <div class="preset-bar">
-          <div class="preset-dropdown">
-            <button id="preset-dropdown-btn" class="btn preset-dropdown-btn" type="button" title="Deterministic motion preset">Fade In</button>
-            <div id="preset-dropdown-menu" class="preset-dropdown-menu" style="display:none">
-              <button type="button" class="preset-option-btn" data-preset="fade_in">Fade In</button>
-              <button type="button" class="preset-option-btn" data-preset="fade_out">Fade Out</button>
-              <button type="button" class="preset-option-btn" data-preset="pop_in">Pop In</button>
-              <button type="button" class="preset-option-btn" data-preset="pop_out">Pop Out</button>
-              <button type="button" class="preset-option-btn" data-preset="slide_left">Slide Left</button>
-              <button type="button" class="preset-option-btn" data-preset="slide_right">Slide Right</button>
-              <button type="button" class="preset-option-btn" data-preset="slide_up">Slide Up</button>
-              <button type="button" class="preset-option-btn" data-preset="slide_down">Slide Down</button>
-            </div>
-          </div>
-          <div class="preset-field">
-            <label class="preset-field-label" for="preset-duration">Duration (s)</label>
-            <input id="preset-duration" class="preset-input" type="number" step="0.01" min="0.05" value="0.45" title="Duration (seconds)" />
-          </div>
-          <div class="preset-field">
-            <label class="preset-field-label" for="preset-delay">Delay (s)</label>
-            <input id="preset-delay" class="preset-input" type="number" step="0.01" min="0" value="0" title="Delay (seconds)" />
-          </div>
-          <div class="preset-field">
-            <label id="preset-strength-label" class="preset-field-label" for="preset-strength">Strength</label>
-            <input id="preset-strength" class="preset-input" type="number" step="0.01" value="" title="Intensity for pop / amplitude(px) for slide" />
-          </div>
-          <button id="apply-preset-btn" class="btn btn-secondary" title="Apply selected preset to selected layers">Apply preset</button>
-        </div>
-        <div class="quick-actions" id="quick-actions">
-          <button class="quick-action-btn" data-prompt="Add wiggle(3, 25) to selected layers" title="Apply wiggle expression to selection">Wiggle</button>
-          <button class="quick-action-btn" data-prompt="Create a counter from 0 to 100 on selected text layer" title="Counter expression on text">Counter</button>
-          <button class="quick-action-btn" data-prompt="Animate selected layers in from the left with easing" title="Slide in from left">Slide In</button>
-          <button class="quick-action-btn" data-prompt="Add bounce easing expression to all keyframes on selected layers" title="Bounce overshoot on keyframes">Bounce</button>
-          <button class="quick-action-btn" data-prompt="Capture current frame preview" title="Save and show current comp frame">Preview</button>
+      </div>
+
+      <!-- Tab: Chat -->
+      <div class="tab-panel active" data-tab="chat">
+        <div id="chat-transcript" class="chat-transcript"></div>
+        <div id="active-comp-note" class="active-comp-note">Active composition: loading...</div>
+        <div id="status-line" class="status-line">
+          <span id="status-text">Ready</span>
+          <span id="model-status" class="model-status model-status-unknown">model: unknown</span>
         </div>
         <div class="chat-input-container">
           <textarea
@@ -84,7 +41,68 @@
             <button id="cancel-btn" class="btn btn-danger" style="display:none" title="Cancel the running agent">Stop</button>
           </div>
         </div>
-      </main>
+      </div>
+
+      <!-- Tab: Presets & Logs -->
+      <div class="tab-panel" data-tab="presets">
+        <!-- Presets section -->
+        <div class="presets-section">
+          <div class="section-label">Motion Presets</div>
+          <div class="preset-bar">
+            <div class="preset-dropdown">
+              <button id="preset-dropdown-btn" class="btn preset-dropdown-btn" type="button" title="Deterministic motion preset">Fade In</button>
+              <div id="preset-dropdown-menu" class="preset-dropdown-menu" style="display:none">
+                <button type="button" class="preset-option-btn" data-preset="fade_in">Fade In</button>
+                <button type="button" class="preset-option-btn" data-preset="fade_out">Fade Out</button>
+                <button type="button" class="preset-option-btn" data-preset="pop_in">Pop In</button>
+                <button type="button" class="preset-option-btn" data-preset="pop_out">Pop Out</button>
+                <button type="button" class="preset-option-btn" data-preset="slide_left">Slide Left</button>
+                <button type="button" class="preset-option-btn" data-preset="slide_right">Slide Right</button>
+                <button type="button" class="preset-option-btn" data-preset="slide_up">Slide Up</button>
+                <button type="button" class="preset-option-btn" data-preset="slide_down">Slide Down</button>
+              </div>
+            </div>
+            <div class="preset-field">
+              <label class="preset-field-label" for="preset-duration">Duration (s)</label>
+              <input id="preset-duration" class="preset-input" type="number" step="0.01" min="0.05" value="0.45" title="Duration (seconds)" />
+            </div>
+            <div class="preset-field">
+              <label class="preset-field-label" for="preset-delay">Delay (s)</label>
+              <input id="preset-delay" class="preset-input" type="number" step="0.01" min="0" value="0" title="Delay (seconds)" />
+            </div>
+            <div class="preset-field">
+              <label id="preset-strength-label" class="preset-field-label" for="preset-strength">Strength</label>
+              <input id="preset-strength" class="preset-input" type="number" step="0.01" value="" title="Intensity for pop / amplitude(px) for slide" />
+            </div>
+            <button id="apply-preset-btn" class="btn btn-secondary" title="Apply selected preset to selected layers">Apply preset</button>
+          </div>
+
+          <!-- Quick actions -->
+          <div class="section-label" style="margin-top:8px">Quick Actions</div>
+          <div class="quick-actions" id="quick-actions">
+            <button class="quick-action-btn" data-prompt="Add wiggle(3, 25) to selected layers" title="Apply wiggle expression to selection">Wiggle</button>
+            <button class="quick-action-btn" data-prompt="Create a counter from 0 to 100 on selected text layer" title="Counter expression on text">Counter</button>
+            <button class="quick-action-btn" data-prompt="Animate selected layers in from the left with easing" title="Slide in from left">Slide In</button>
+            <button class="quick-action-btn" data-prompt="Add bounce easing expression to all keyframes on selected layers" title="Bounce overshoot on keyframes">Bounce</button>
+            <button class="quick-action-btn" data-prompt="Capture current frame preview" title="Save and show current comp frame">Preview</button>
+          </div>
+        </div>
+
+        <!-- Compact LLM tool call log -->
+        <div class="log-section">
+          <div class="section-label">Tool Call Log</div>
+          <div id="tool-log" class="tool-log"></div>
+        </div>
+      </div>
+
+      <!-- Shared footer -->
+      <div class="panel-footer">
+        <button id="undo-btn" class="btn btn-warning" title="Undo ALL agent actions from last request">Undo</button>
+        <button id="clear-session-btn" class="btn btn-secondary" title="Clear all messages in the current session">Clear</button>
+        <button id="export-sessions-btn" class="btn btn-secondary" title="Export session to JSON on Desktop">Export</button>
+        <button id="export-errors-btn" class="btn btn-secondary" title="Export errors only → JSON on Desktop">Errors</button>
+        <button id="report-btn" class="btn btn-secondary" title="Analyze session with LLM and generate a bug report on Desktop">Report</button>
+      </div>
     </div>
 
     <!-- Config (load order matters) -->

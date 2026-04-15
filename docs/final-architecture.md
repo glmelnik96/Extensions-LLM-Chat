@@ -10,11 +10,11 @@ Runtime architecture of the AE Motion Agent CEP extension.
 - **Agent loop**: `agentToolLoop.js` — LLM ↔ tool execution cycle with abort and streaming support
 - **System prompt**: `agentSystemPrompt.js` — agent persona, 47 tool documentation, workflow rules, known limitations
 - **Tool registry**: `toolRegistry.js` — 47 OpenAI-compatible function definitions
-- **Chat provider**: `chatProvider.js` — Cloud.ru (with SSE streaming) + Ollama API abstraction, retry on 429/5xx
+- **Chat provider**: `chatProvider.js` — Cloud.ru (with SSE streaming), retry on 429/5xx
 - **Host bridge**: `hostBridge.js` — promise wrapper around `CSInterface.evalScript`, single-load host script caching
 - **Host**: `host/index.jsx` — ExtendScript functions for all AE operations (shapes, 3D, masks, markers, import, etc.)
 - **Cloud API**: Cloud.ru Foundation Models `chat/completions` with tool calling and SSE streaming
-- **Vision modules**: `lib/captureMacOS.js`, `lib/ollamaVision.js` — loaded but not connected to agent loop
+- **Capture**: `lib/captureMacOS.js` — macOS screen capture for frame preview
 
 ---
 
@@ -61,25 +61,27 @@ Details: [configuration.md](configuration.md), [secret-handling.md](secret-handl
 
 ## UI features
 
+- **2-tab layout**: Chat / Presets & Logs — single session per project
 - Chat with collapsible tool call cards (args + results)
 - Markdown rendering (headers, bold, code blocks, lists, inline images)
-- Session management (create, rename, clear, switch)
 - Quick action buttons (Wiggle, Counter, Slide In, Bounce, Preview)
 - Preset toolbar (Fade/Pop/Slide with duration, delay, strength)
+- Tool Call Log — preset-only results (not agent tool calls)
 - Streaming text preview during generation
+- Shared footer: Undo, Clear, Export, Errors, Report
 - Batch-undo (N x Cmd+Z for all mutating tool calls)
 - Stop (cancel running agent)
-- Export sessions to JSON
-- Report generation (LLM-analyzed session logs)
-- Auto-resize textarea, session metadata, token usage display
+- Export session to JSON
+- Report generation (LLM-analyzed session log)
+- Auto-resize textarea, model selector, token usage display
 
 ---
 
 ## Persistence
 
 - **localStorage** key: `ae-motion-agent-state`
-- Stores: sessions array, activeSessionId, nextSessionIndex
-- Each session: id, title, createdAt, updatedAt, model, messages[]
+- Stores: single session object (id, title, createdAt, updatedAt, model, messages[])
+- Migration from old multi-session format on load
 - Details: [runtime-state-schema.md](runtime-state-schema.md)
 
 ---
