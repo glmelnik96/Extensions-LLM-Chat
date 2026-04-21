@@ -11,6 +11,7 @@
       <div class="tab-bar">
         <button class="tab-btn active" data-tab="chat">Chat</button>
         <button class="tab-btn" data-tab="presets">Presets &amp; Logs</button>
+        <button class="tab-btn" data-tab="export">Export</button>
         <div class="tab-bar-right">
           <select id="model-select" class="btn model-selector">
             <optgroup label="Cloud.ru">
@@ -121,6 +122,106 @@
         </div>
       </div>
 
+      <!-- Tab: Export -->
+      <div class="tab-panel" data-tab="export">
+        <div class="export-panel">
+
+          <div class="section-label">HTML Animation Export</div>
+
+          <div class="export-row">
+            <label class="export-field-label" for="export-format-select">Format</label>
+            <select id="export-format-select" class="preset-input export-select">
+              <option value="css-svg">CSS + inline SVG (zero-dep, full feature coverage)</option>
+              <option value="gsap-svg">GSAP + inline SVG (timeline control)</option>
+              <option value="lottie-json">Lottie JSON / bodymovin v5.7 (MVP — no fx/masks/gradients)</option>
+              <option value="json-raw">Raw JSON (compData dump — diagnostic)</option>
+            </select>
+          </div>
+
+          <div class="export-row">
+            <label class="export-field-label" for="export-name">Animation name</label>
+            <input id="export-name" class="preset-input export-input" type="text" placeholder="my-animation" value="" />
+          </div>
+
+          <div class="export-row">
+            <label class="export-field-label" for="export-out-dir">Output directory</label>
+            <input id="export-out-dir" class="preset-input export-input export-dir-input" type="text" placeholder="/path/to/folder" value="" />
+            <button id="export-browse-btn" class="btn btn-secondary export-browse" type="button" title="Browse for output directory">Browse</button>
+          </div>
+
+          <div class="export-support" id="export-support">
+            <div class="export-support-title">Что поддерживается HTML-экспортом</div>
+            <table class="export-support-table">
+              <thead>
+                <tr><th>Фича AE</th><th class="col-status">Статус</th><th>Как</th></tr>
+              </thead>
+              <tbody>
+                <tr class="row-ok"><td>Transform (position/scale/rotation/opacity)</td><td>✅ Полностью</td><td>CSS @keyframes с per-stop cubic-bezier easing</td></tr>
+                <tr class="row-ok"><td>Hold / Toggle Keyframes</td><td>✅ Полностью</td><td><code>animation-timing-function: step-end</code></td></tr>
+                <tr class="row-ok"><td>Expressions (включая wiggle)</td><td>✅ Запекаются</td><td>Sample at 60 fps, max 600 кадров на свойство</td></tr>
+                <tr class="row-ok"><td>Layer timing (inPoint / outPoint)</td><td>✅ Полностью</td><td><code>animation-delay</code> + <code>duration</code> + <code>fill-mode: both</code></td></tr>
+                <tr class="row-ok"><td>Blend modes (15 режимов)</td><td>✅ Полностью</td><td><code>mix-blend-mode</code>: multiply/screen/overlay/darken/lighten/hard-light/soft-light/difference/exclusion/hue/saturation/color/luminosity/color-dodge/color-burn. Add→screen, AE-only→warn</td></tr>
+                <tr class="row-ok"><td>Effect: <b>Fill</b> (+ animated color)</td><td>✅ Полностью</td><td>CSS @keyframes <code>fill</code> со step-end для toggle-keys</td></tr>
+                <tr class="row-ok"><td>Effect: <b>Invert</b></td><td>✅ Полностью</td><td><code>filter: invert(100%)</code></td></tr>
+                <tr class="row-ok"><td>Effect: <b>Drop Shadow</b> (+ animated)</td><td>✅ Полностью</td><td>CSS <code>filter: drop-shadow(...)</code> + union-time @keyframes с per-stop значениями</td></tr>
+                <tr class="row-ok"><td>Effect: <b>Gaussian Blur</b> (+ animated)</td><td>✅ Полностью</td><td><code>filter: blur(Xpx)</code> + @keyframes на animated radius</td></tr>
+                <tr class="row-ok"><td>Effect: <b>Brightness &amp; Contrast</b> (+ animated)</td><td>✅ Полностью</td><td><code>filter: brightness() contrast()</code> с union keyframes</td></tr>
+                <tr class="row-ok"><td>Effect: <b>Hue/Saturation</b> (+ animated)</td><td>✅ Полностью</td><td><code>filter: hue-rotate() saturate()</code> с union keyframes</td></tr>
+                <tr class="row-partial"><td>Effect: <b>Tint</b> (+ animated)</td><td>⚠️ Аппроксимация</td><td><code>filter: grayscale sepia hue-rotate</code>, animated. Точный Black→White mapping — roadmap</td></tr>
+                <tr class="row-ok"><td>Masks (lottie-web approach): Shape + animated shape</td><td>✅ Полностью</td><td>Pure Add/opaque → SVG <code>&lt;clipPath&gt;</code> (fast); остальные → <code>&lt;mask&gt;</code>. Shape animation через SMIL <code>&lt;animate d&gt;</code>. Работает для text/shape/av/solid layers</td></tr>
+                <tr class="row-ok"><td>Masks: Add mode (additive reveal)</td><td>✅ Полностью</td><td>White path на чёрной основе, reveals content inside path</td></tr>
+                <tr class="row-ok"><td>Masks: Subtract mode (punch-out)</td><td>✅ Полностью</td><td>White comp-rect base + black path punch-out (lottie pattern)</td></tr>
+                <tr class="row-ok"><td>Masks: Inverted flag</td><td>✅ Полностью</td><td>Full-comp white rect + path в противоположном цвете. Композится с mode корректно</td></tr>
+                <tr class="row-ok"><td>Masks: Feather</td><td>✅ Полностью</td><td>SVG <code>&lt;feGaussianBlur&gt;</code> applied to mask path</td></tr>
+                <tr class="row-ok"><td>Masks: Mask Opacity (static + animated)</td><td>✅ Полностью</td><td><code>fill-opacity</code> на path; animated — SMIL <code>&lt;animate fill-opacity&gt;</code></td></tr>
+                <tr class="row-ok"><td>Masks: Mask Expansion (static)</td><td>✅ Полностью</td><td>SVG <code>&lt;feMorphology&gt;</code> erode/dilate (geometric)</td></tr>
+                <tr class="row-partial"><td>Masks: Mask Expansion animated (reveal)</td><td>⚠️ Аппрокс.</td><td>Negative→positive expansion ⇒ fade-reveal через <code>fill-opacity</code>. Per-frame feMorphology — roadmap</td></tr>
+                <tr class="row-ok"><td>Masks: несколько на слое (Add + Subtract)</td><td>✅ Полностью</td><td>Композируются в один <code>&lt;mask&gt;</code>: base + white/black sub-paths</td></tr>
+                <tr class="row-partial"><td>Masks: Intersect / Lighten / Darken / Difference</td><td>⚠️ Simplified</td><td>Нестандартные modes downgrade до Add с warning. Lottie тоже не реализует Darken/Lighten/Difference</td></tr>
+                <tr class="row-ok"><td>Shape layer: rect/ellipse/path + fill + stroke</td><td>✅ Полностью</td><td>fill-opacity, stroke-opacity, line-cap/line-join</td></tr>
+                <tr class="row-ok"><td>Shape: <b>Multi-fill / multi-stroke stacking</b></td><td>✅ Полностью</td><td>Все Fill/Stroke в Contents стекаются как последовательные SVG-элементы в AE paint-order</td></tr>
+                <tr class="row-ok"><td>Shape: <b>Gradient fills / strokes</b> (linear + radial)</td><td>✅ Полностью</td><td>SVG <code>&lt;linearGradient&gt;</code>/<code>&lt;radialGradient&gt;</code> с userSpaceOnUse + per-stop color</td></tr>
+                <tr class="row-ok"><td>Shape: <b>Trim Paths</b></td><td>✅ Полностью</td><td><code>pathLength=100</code> + <code>stroke-dasharray</code>/<code>stroke-dashoffset</code></td></tr>
+                <tr class="row-ok"><td>Shape: <b>Stroke dash patterns</b></td><td>✅ Полностью</td><td><code>stroke-dasharray</code> + <code>stroke-dashoffset</code></td></tr>
+                <tr class="row-ok"><td>Shape: <b>Polystar</b> (polygon + star)</td><td>✅ Полностью</td><td>Cubic-bezier path math (AE2Canvas pattern)</td></tr>
+                <tr class="row-ok"><td>Shape: <b>Round Corners</b></td><td>✅ Полностью</td><td>rx/ry на rect; bezier recompute на path</td></tr>
+                <tr class="row-ok"><td>Shape: <b>Repeater</b> (copies)</td><td>✅ Static bake</td><td>N <code>&lt;use&gt;</code> clones с cumulative transform + start/end opacity ramp</td></tr>
+                <tr class="row-ok"><td>Shape: <b>Per-group transform</b></td><td>✅ Полностью</td><td>Nested <code>&lt;g transform="matrix(...)"&gt;</code> per Vector Group's Transform (static)</td></tr>
+                <tr class="row-ok"><td>Transform: <b>Separate Dimensions</b> (Position X/Y)</td><td>✅ Полностью</td><td>Union time points между X/Y tracks, independent easing per axis</td></tr>
+                <tr class="row-ok"><td>Transform: <b>Auto-orient (path)</b></td><td>✅ Полностью</td><td><code>atan2(Δy,Δx)</code> velocity-based rotation merged в CSS @keyframes</td></tr>
+                <tr class="row-ok"><td>Transform: <b>Spatial Bezier (curved motion)</b></td><td>✅ Полностью</td><td>6-sample subdivision между position keyframes с non-zero to/ti tangents</td></tr>
+                <tr class="row-ok"><td>Transform: <b>Layer parenting chain</b></td><td>✅ Полностью</td><td>Composed world matrix per keyframe time, emitted as <code>matrix(a,b,c,d,e,f)</code></td></tr>
+                <tr class="row-ok"><td>Text: шрифт/размер/заливка/justify + stroke</td><td>✅ Полностью</td><td>+ paint-order, faux bold/italic, letter-spacing (tracking)</td></tr>
+                <tr class="row-ok"><td>Text: <b>Text on Path</b></td><td>✅ Полностью</td><td>SVG <code>&lt;textPath href&gt;</code> ссылается на mask path + firstMargin/reverse</td></tr>
+                <tr class="row-partial"><td>Text: <b>Text animators (per-char)</b></td><td>⚠️ Stagger MVP</td><td><code>&lt;tspan&gt;</code> per char + staggered opacity @keyframes. Полная Range Selector математика — roadmap</td></tr>
+                <tr class="row-ok"><td>Track Mattes (alpha / inverted alpha / luma / inverted luma)</td><td>✅ Полностью</td><td>SVG <code>&lt;mask&gt;</code>+<code>mask-type</code>, inverted через feFuncA/feColorMatrix</td></tr>
+                <tr class="row-ok"><td>Изображения и видео (footage)</td><td>✅ Полностью</td><td>Копируются в <code>assets/</code>, эмитятся через <code>&lt;image&gt;</code> / <code>&lt;video&gt;</code></td></tr>
+                <tr class="row-ok"><td>Disabled layers (выкл. eye)</td><td>✅ Skip</td><td>Не попадают в экспорт</td></tr>
+                <tr class="row-ok"><td>Export format: <b>Lottie JSON (bodymovin)</b></td><td>✅ MVP</td><td>Shape/text/transform/easing → bodymovin schema. Gradients/effects/masks/repeater — НЕ мапятся (используйте CSS+SVG)</td></tr>
+                <tr class="row-ok"><td>Ease-and-Wizz palette (25 Penner easings)</td><td>✅ Available</td><td><code>HtmlExporter.easings['outCubic']</code> etc. для brand-preset authoring</td></tr>
+                <tr class="row-no"><td>Pre-compositions (nested comps)</td><td>❌ Не работает</td><td>Workaround: flatten или Pre-compose "Move all attributes"</td></tr>
+                <tr class="row-no"><td>3D layers / Cameras / Lights</td><td>❌ Не работает</td><td>Flatten в 2D до экспорта</td></tr>
+                <tr class="row-no"><td>Time remapping</td><td>❌ Не работает</td><td>—</td></tr>
+                <tr class="row-no"><td>Motion Blur / Frame Blending</td><td>❌ Не работает</td><td>—</td></tr>
+                <tr class="row-no"><td>Effects вне списка (Levels, Glow, Fractal Noise, CC*, Lumetri, 3rd-party)</td><td>❌ Игнорируются</td><td>Warning в Tool Log</td></tr>
+              </tbody>
+            </table>
+            <div class="export-hints-sub" id="export-hints-format"></div>
+            <div class="export-support-meta">
+              Экспорт пишет в выбранную папку: <code>name.html</code> (или <code>name.json</code> для Lottie / Raw JSON) + <b>diagnostic.json</b> (structured-диагностика + список слоёв + warnings) + <b>assets/</b> (копии footage, если были). Detеrministic: одинаковый вход → одинаковый выход.
+              <br><br><b>Выбор формата:</b> CSS+SVG — для баннеров и кросс-браузерной прод-ready анимации; GSAP — если нужен timeline-контроль; Lottie — для интеграции через lottie-web/LottieFiles (учтите: эффекты/маски/gradients не мапятся); Raw JSON — для диффа и debugging.
+            </div>
+          </div>
+
+          <div class="export-row export-row-actions">
+            <button id="export-run-btn" class="btn btn-primary export-run" type="button" title="Extract current comp and write HTML files">Export</button>
+          </div>
+
+          <div id="export-status" class="export-status">Ready</div>
+
+        </div>
+      </div>
+
       <!-- Shared footer -->
       <div class="panel-footer">
         <button id="undo-btn" class="btn btn-warning" title="Undo ALL agent actions from last request">Undo</button>
@@ -146,6 +247,7 @@
     <script src="./chatProvider.js"></script>
     <script src="./hostBridge.js"></script>
     <script src="./agentToolLoop.js"></script>
+    <script src="./htmlExporter.js"></script>
 
     <!-- Main runtime (must be last) -->
     <script src="./main.js"></script>
