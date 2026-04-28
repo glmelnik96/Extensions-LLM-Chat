@@ -376,63 +376,6 @@
         }
       }
     },
-    {
-      type: 'function',
-      function: {
-        name: 'apply_fade_preset',
-        description: 'Apply deterministic fade motion preset on layer Opacity with fixed keyframe/easing recipe.',
-        parameters: {
-          type: 'object',
-          properties: {
-            layer_index: { type: 'number', description: '1-based layer index' },
-            layer_id: { type: 'number', description: 'Persistent layer ID (preferred over index)' },
-            duration: { type: 'number', description: 'Fade duration in seconds. Allowed range: 0.05..5.' },
-            delay: { type: 'number', description: 'Start delay in seconds from current comp time. Allowed range: 0..10.' },
-            direction: { type: 'string', enum: ['in', 'out'], description: 'Fade direction. in: 0→100 opacity, out: 100→0 opacity.' }
-          },
-          required: ['layer_index']
-        }
-      }
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'apply_pop_preset',
-        description: 'Apply deterministic pop motion preset on Scale + Opacity with fixed keyframe/easing recipe.',
-        parameters: {
-          type: 'object',
-          properties: {
-            layer_index: { type: 'number', description: '1-based layer index' },
-            layer_id: { type: 'number', description: 'Persistent layer ID (preferred over index)' },
-            duration: { type: 'number', description: 'Pop duration in seconds. Allowed range: 0.08..5.' },
-            delay: { type: 'number', description: 'Start delay in seconds from current comp time. Allowed range: 0..10.' },
-            direction: { type: 'string', enum: ['in', 'out'], description: 'Pop direction. in: reveal, out: exit.' },
-            intensity: { type: 'number', description: 'Pop intensity multiplier. Allowed range: 0.2..1.5.' }
-          },
-          required: ['layer_index']
-        }
-      }
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'apply_slide_preset',
-        description: 'Apply deterministic slide motion preset on Position + Opacity with fixed keyframe/easing recipe.',
-        parameters: {
-          type: 'object',
-          properties: {
-            layer_index: { type: 'number', description: '1-based layer index' },
-            layer_id: { type: 'number', description: 'Persistent layer ID (preferred over index)' },
-            duration: { type: 'number', description: 'Slide duration in seconds. Allowed range: 0.08..6.' },
-            delay: { type: 'number', description: 'Start delay in seconds from current comp time. Allowed range: 0..10.' },
-            direction: { type: 'string', enum: ['left', 'right', 'up', 'down'], description: 'Slide source direction.' },
-            amplitude: { type: 'number', description: 'Slide distance in pixels. Allowed range: 8..2000.' }
-          },
-          required: ['layer_index']
-        }
-      }
-    },
-
     // ── Shape content tools ──────────────────────────────────────────
     {
       type: 'function',
@@ -773,17 +716,18 @@
       type: 'function',
       function: {
         name: 'set_effect_property',
-        description: 'Set a value on a specific property within an effect.',
+        description: 'Set a value on a specific property within an effect. Prefer property_name over property_index — names are stable across AE versions; numeric indices are brittle and easy to confuse with adjacent toggles.',
         parameters: {
           type: 'object',
           properties: {
             layer_index: { type: 'number', description: '1-based layer index' },
             layer_id: { type: 'number', description: 'Persistent layer ID' },
             effect_index: { type: 'number', description: '1-based effect index' },
-            property_index: { type: 'number', description: '1-based property index within the effect' },
-            value: { description: 'The value to set' }
+            property_name: { type: 'string', description: 'Property display name within the effect (e.g. "Color", "Opacity", "Amount", "Radius"). PREFERRED — pass exact display name as shown in AE Effect Controls panel.' },
+            property_index: { type: 'number', description: '1-based property index within the effect. Use only as fallback when name is unknown.' },
+            value: { description: 'The value to set. Type must match the property: number for sliders/toggles, [r,g,b] or [r,g,b,a] (0..1) for colors, [x,y] for points.' }
           },
-          required: ['layer_index', 'effect_index', 'property_index', 'value']
+          required: ['layer_index', 'effect_index', 'value']
         }
       }
     },
@@ -882,59 +826,6 @@
             layer_id: { type: 'number', description: 'Persistent layer ID' }
           },
           required: ['layer_index']
-        }
-      }
-    },
-
-    // ── Brand presets (Cloud.ru) ────────────────────────────────────────
-    {
-      type: 'function',
-      function: {
-        name: 'apply_brand_logo_reveal',
-        description: 'Create Cloud.ru brand logo reveal animation: animated icon shape + "Cloud.ru" text with elastic overshoot. Optionally adds subline and background bar.',
-        parameters: {
-          type: 'object',
-          properties: {
-            duration: { type: 'number', description: 'Total animation duration in seconds (default 2.2, range 0.5..10).' },
-            with_subline: { type: 'boolean', description: 'Add subline text below logo (default false).' },
-            subline_text: { type: 'string', description: 'Subline text content (default "Умное облако с ИИ-помощником").' },
-            with_background: { type: 'boolean', description: 'Add dark bar behind subline (default false, requires with_subline).' }
-          },
-          required: []
-        }
-      }
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'apply_brand_lower_third',
-        description: 'Create Cloud.ru brand lower third: animated dark bars with white flash, speaker name and title text. Bars wipe in with overshoot, hold, then wipe out.',
-        parameters: {
-          type: 'object',
-          properties: {
-            name_text: { type: 'string', description: 'Speaker name (default "Speaker Name").' },
-            title_text: { type: 'string', description: 'Speaker job title (default "Job Title").' },
-            display_duration: { type: 'number', description: 'Total display duration in seconds including enter/exit (default 5, range 3..30).' }
-          },
-          required: []
-        }
-      }
-    },
-    {
-      type: 'function',
-      function: {
-        name: 'apply_brand_text_card',
-        description: 'Create Cloud.ru brand text card: 2-4 text lines on animated dark bars. Bars wipe in with stagger, hold, then wipe out.',
-        parameters: {
-          type: 'object',
-          properties: {
-            line1: { type: 'string', description: 'First text line (required).' },
-            line2: { type: 'string', description: 'Second text line (required).' },
-            line3: { type: 'string', description: 'Third text line (optional).' },
-            line4: { type: 'string', description: 'Fourth text line (optional).' },
-            display_duration: { type: 'number', description: 'Total display duration in seconds (default 7, range 3..30).' }
-          },
-          required: ['line1', 'line2']
         }
       }
     },

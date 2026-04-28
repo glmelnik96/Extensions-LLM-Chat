@@ -10,15 +10,11 @@ Format of panel state and session data in the AE Motion Agent.
 
 | Field | Persisted | Description |
 |-------|-----------|-------------|
-| `sessions` | yes | Array of session objects |
-| `activeSessionId` | yes | ID of the active session |
-| `nextSessionIndex` | yes | Counter for new session titles |
+| `session` | yes | Single active session object |
 | `isRequestInFlight` | no | Whether an agent request is running |
 | `currentAbortHandle` | no | Abort handle for cancellation |
 | `lastMutatingToolCount` | no | Count of mutating tools in last request (for undo) |
 | `lastModelStatus` | no | Last model status for status bar |
-| `selectedPresetKey` | no | Currently selected preset in toolbar |
-| `isPresetInFlight` | no | Whether a preset is being applied |
 
 ---
 
@@ -28,22 +24,27 @@ Key: `ae-motion-agent-state`
 
 ```json
 {
-  "sessions": [...],
-  "activeSessionId": "session_...",
-  "nextSessionIndex": 2
+  "session": {
+    "id": "session_...",
+    "title": "Session",
+    "createdAt": 1713012345678,
+    "updatedAt": 1713012345678,
+    "model": "cloudru/Qwen/Qwen3-Coder-Next",
+    "messages": []
+  }
 }
 ```
+
+> Legacy format `{ sessions: [...], activeSessionId, nextSessionIndex }` is auto-migrated on load (the active session is preserved as the single `session`).
 
 ---
 
 ## Session format
 
-Each element in `sessions[]`:
-
 | Field | Type | Description |
 |-------|------|-------------|
 | `id` | string | Unique ID (e.g. `session_1713012345678_abc123`) |
-| `title` | string | Display name ("Chat 1", etc.) |
+| `title` | string | Display name |
 | `createdAt` | number | `Date.now()` at creation |
 | `updatedAt` | number | Updated on message changes |
 | `model` | string | Model ID (e.g. `cloudru/Qwen/Qwen3-Coder-Next`) |

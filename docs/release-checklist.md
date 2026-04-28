@@ -20,14 +20,13 @@ Pre-release validation for the AE Motion Agent CEP extension.
 - [ ] Tool errors shown in cards, panel remains responsive
 - [ ] Undo reverts all mutating actions
 - [ ] Stop cancels running agent
-- [ ] Sessions: new, switch, rename, clear, clear all, persistence after reload
-- [ ] Preset toolbar: dropdown, apply preset to selected layers
+- [ ] Session persistence after reload
 - [ ] Quick actions: buttons trigger correct prompts
 - [ ] Export: saves JSON to Desktop
 - [ ] Report: generates LLM-analyzed report to Desktop
 - [ ] Streaming: text appears incrementally during generation
 
-See [qa-test-plan.md](qa-test-plan.md) for full smoke list, [manual-test-v3.md](manual-test-v3.md) for 35-test detailed checklist.
+See [qa-test-plan.md](qa-test-plan.md) for full smoke list.
 
 ---
 

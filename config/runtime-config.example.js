@@ -9,14 +9,9 @@
       // baseUrl: 'https://foundation-models.api.cloud.ru/v1',
       // defaultModel: 'openai/gpt-oss-120b',
       // fallbackModel: 'Qwen/Qwen3-Coder-Next',
-      // ollamaBaseUrl: 'http://127.0.0.1:11434',
-      // ollamaVisionModel: 'llava-phi3:latest',
-      // ollamaVisionFallbackModel: 'moondream:latest',
-      // captureEnabled: true,
-      // captureTimeoutMs: 15000,
-      // previewCaptureInset: { leftFrac: 0.24, topFrac: 0.13, widthFrac: 0.5, heightFrac: 0.45 },
-      // ollamaVisionTimeoutMs: 90000,
-      // ollamaVisionMaxEdgePx: 1024,
+      // cloudChatTimeoutMs: 120000,
+      // agentMaxSteps: 150,
+      // agentTemperature: 0.3,
     })
   }
 })()

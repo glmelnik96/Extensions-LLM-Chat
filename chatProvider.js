@@ -1,6 +1,5 @@
 /**
- * Chat Provider — unified abstraction over Cloud.ru and Ollama chat APIs.
- * Both providers are normalized to the OpenAI chat/completions response shape.
+ * Chat Provider — Cloud.ru chat/completions wrapper (OpenAI-compatible shape).
  */
 (function () {
   'use strict'
@@ -41,15 +40,12 @@
   }
 
   /**
-   * Parse a model string like "cloudru/Qwen/Qwen3-Coder-Next" or "ollama/qwen2.5:14b".
-   * Returns { provider: 'cloudru'|'ollama', model: 'Qwen/Qwen3-Coder-Next' }
+   * Parse a model string like "cloudru/Qwen/Qwen3-Coder-Next".
+   * Returns { provider: 'cloudru', model: 'Qwen/Qwen3-Coder-Next' }
    */
   function parseModelId (modelId) {
     if (!modelId || typeof modelId !== 'string') {
       return { provider: 'cloudru', model: getConfig().defaultModel || 'openai/gpt-oss-120b' }
-    }
-    if (modelId.indexOf('ollama/') === 0) {
-      return { provider: 'ollama', model: modelId.substring(7) }
     }
     if (modelId.indexOf('cloudru/') === 0) {
       return { provider: 'cloudru', model: modelId.substring(8) }
@@ -144,127 +140,6 @@
         unsubscribeAbort()
       })
     })
-  }
-
-  // ── Ollama provider ──────────────────────────────────────────────────
-
-  function invokeOllama (model, messages, options) {
-    var cfg = getConfig()
-    var baseUrl = cfg.ollamaBaseUrl || 'http://127.0.0.1:11434'
-    var url = baseUrl + '/api/chat'
-    var abortHandle = ensureAbortHandleApi(options && options.abortHandle)
-
-    var body = {
-      model: model,
-      messages: messages,
-      stream: false,
-      options: {
-        temperature: (options && typeof options.temperature === 'number') ? options.temperature : 0.3
-      }
-    }
-
-    // Ollama tool calling support.
-    if (options && options.tools && options.tools.length > 0) {
-      body.tools = options.tools
-    }
-
-    var timeoutMs = (cfg.ollamaChatTimeoutMs) || 120000
-
-    return new Promise(function (resolve, reject) {
-      var controller = new AbortController()
-      var didTimeout = false
-      var didUserAbort = false
-      var unsubscribeAbort = function () {}
-      var timer = setTimeout(function () {
-        didTimeout = true
-        controller.abort()
-      }, timeoutMs)
-
-      if (abortHandle) {
-        if (abortHandle.aborted) {
-          clearTimeout(timer)
-          reject(new Error('Request cancelled by user.'))
-          return
-        }
-        unsubscribeAbort = abortHandle.onAbort(function () {
-          didUserAbort = true
-          controller.abort()
-        })
-      }
-
-      fetch(url, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(body),
-        signal: controller.signal
-      }).then(function (res) {
-        if (!res.ok) {
-          return res.text().then(function (txt) {
-            throw new Error('Ollama HTTP ' + res.status + ': ' + txt.substring(0, 500))
-          })
-        }
-        return res.json()
-      }).then(function (data) {
-        // Normalize Ollama response to OpenAI shape.
-        var normalized = normalizeOllamaResponse(data)
-        resolve(normalized)
-      }).catch(function (err) {
-        if (didTimeout) {
-          reject(new Error('Ollama chat timeout after ' + timeoutMs + 'ms'))
-          return
-        }
-        if (didUserAbort || (abortHandle && abortHandle.aborted)) {
-          reject(new Error('Request cancelled by user.'))
-          return
-        }
-        reject(err)
-      }).then(function () {
-        clearTimeout(timer)
-        unsubscribeAbort()
-      }, function () {
-        clearTimeout(timer)
-        unsubscribeAbort()
-      })
-    })
-  }
-
-  /**
-   * Normalize Ollama /api/chat response to OpenAI chat/completions shape.
-   *
-   * Ollama: { message: { role, content, tool_calls? }, done: true }
-   * OpenAI: { choices: [{ message: { role, content, tool_calls? }, finish_reason }] }
-   */
-  function normalizeOllamaResponse (data) {
-    if (!data || !data.message) {
-      throw new Error('Ollama: invalid response shape')
-    }
-
-    var msg = data.message
-    var finishReason = 'stop'
-
-    // Normalize tool_calls if present.
-    if (msg.tool_calls && msg.tool_calls.length > 0) {
-      finishReason = 'tool_calls'
-      // Ollama tool_calls have function.arguments as object; OpenAI expects string.
-      for (var i = 0; i < msg.tool_calls.length; i++) {
-        var tc = msg.tool_calls[i]
-        if (!tc.id) tc.id = 'call_ollama_' + i + '_' + Date.now()
-        if (tc.function && typeof tc.function.arguments === 'object') {
-          tc.function.arguments = JSON.stringify(tc.function.arguments)
-        }
-        if (!tc.type) tc.type = 'function'
-      }
-    }
-
-    return {
-      choices: [{
-        index: 0,
-        message: msg,
-        finish_reason: finishReason
-      }],
-      model: data.model || '',
-      usage: data.eval_count ? { total_tokens: data.eval_count } : null
-    }
   }
 
   // ── Retry helper ─────────────────────────────────────────────────────
@@ -438,11 +313,8 @@
    */
   function invoke (modelId, messages, options) {
     var parsed = parseModelId(modelId)
-    var useStreaming = options && typeof options.onTextChunk === 'function' && parsed.provider === 'cloudru'
+    var useStreaming = options && typeof options.onTextChunk === 'function'
     return withRetry(function () {
-      if (parsed.provider === 'ollama') {
-        return invokeOllama(parsed.model, messages, options)
-      }
       if (useStreaming) {
         return invokeCloudRuStreaming(parsed.model, messages, options)
       }
@@ -461,43 +333,12 @@
     })
   }
 
-  /**
-   * Check if Ollama is reachable.
-   */
-  function checkOllamaHealth () {
-    var cfg = getConfig()
-    var baseUrl = cfg.ollamaBaseUrl || 'http://127.0.0.1:11434'
-    return fetch(baseUrl + '/api/tags', { method: 'GET' })
-      .then(function (res) { return res.ok })
-      .catch(function () { return false })
-  }
-
-  /**
-   * List available Ollama models.
-   */
-  function listOllamaModels () {
-    var cfg = getConfig()
-    var baseUrl = cfg.ollamaBaseUrl || 'http://127.0.0.1:11434'
-    return fetch(baseUrl + '/api/tags', { method: 'GET' })
-      .then(function (res) {
-        if (!res.ok) return []
-        return res.json()
-      })
-      .then(function (data) {
-        if (!data || !data.models) return []
-        return data.models.map(function (m) { return m.name })
-      })
-      .catch(function () { return [] })
-  }
-
   // Export
   if (typeof window !== 'undefined') {
     window.CHAT_PROVIDER = {
       invoke: invoke,
       invokeWithFallback: invokeWithFallback,
-      parseModelId: parseModelId,
-      checkOllamaHealth: checkOllamaHealth,
-      listOllamaModels: listOllamaModels
+      parseModelId: parseModelId
     }
   }
 })()

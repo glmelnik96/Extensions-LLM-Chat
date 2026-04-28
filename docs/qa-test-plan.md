@@ -81,15 +81,7 @@
 
 ---
 
-## 11. Preset toolbar
-
-28. Dropdown пресетов открывается, выбор меняет название.
-29. **Apply preset** на выделенных слоях — пресет применён.
-30. Без выделенных слоёв — ошибка, панель стабильна.
-
----
-
-## 12. Export / Report
+## 11. Export / Report
 
 31. **Export** — JSON файл на Desktop.
 32. **Report** — LLM-обработанный отчёт + raw JSON на Desktop.

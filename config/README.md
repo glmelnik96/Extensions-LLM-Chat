@@ -26,10 +26,10 @@ Do not commit `secrets.local.js` or `runtime-config.js` if they contain secrets 
 
 ## Config shape
 
-- **example.config.js** — defaults: models, Ollama URLs, capture, empty `apiKey` (overridden by secrets).
+- **example.config.js** — defaults: Cloud.ru base URL, models, agent settings, empty `apiKey` (overridden by secrets).
 - **runtime-config.js** — optional `Object.assign` onto the above (no `apiKey`).
 - **secrets.local.js** — `window.EXTENSIONS_LLM_CHAT_SECRETS = { apiKey: '…' }`.
 
 Fields are documented in `example.config.js` and **docs/configuration.md**.
 
-**CEP Node:** Screen capture needs Node in the manifest and Screen Recording for After Effects. See **docs/dev-artifacts/engineering-notes.md**.
+**CEP Node:** Frame preview (`capture_comp_frame`) uses ExtendScript File I/O via `host/index.jsx` — no extra Node modules required. The `--enable-nodejs` and `--mixed-context` flags in `CSXS/manifest.xml` are still needed for `main.js` to use `require('fs')` when exporting sessions/reports to Desktop.

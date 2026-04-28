@@ -8,13 +8,12 @@ Runtime architecture of the AE Motion Agent CEP extension.
 
 - **Panel**: HTML/CSS/JS CEP panel (`index.html`, `styles.css`, `main.js`)
 - **Agent loop**: `agentToolLoop.js` — LLM ↔ tool execution cycle with abort and streaming support
-- **System prompt**: `agentSystemPrompt.js` — agent persona, 47 tool documentation, workflow rules, known limitations
-- **Tool registry**: `toolRegistry.js` — 47 OpenAI-compatible function definitions
+- **System prompt**: `agentSystemPrompt.js` — agent persona, 45 tool documentation, workflow rules, known limitations
+- **Tool registry**: `toolRegistry.js` — 45 OpenAI-compatible function definitions
 - **Chat provider**: `chatProvider.js` — Cloud.ru (with SSE streaming), retry on 429/5xx
 - **Host bridge**: `hostBridge.js` — promise wrapper around `CSInterface.evalScript`, single-load host script caching
 - **Host**: `host/index.jsx` — ExtendScript functions for all AE operations (shapes, 3D, masks, markers, import, etc.)
 - **Cloud API**: Cloud.ru Foundation Models `chat/completions` with tool calling and SSE streaming
-- **Capture**: `lib/captureMacOS.js` — macOS screen capture for frame preview
 
 ---
 
@@ -40,17 +39,17 @@ Details: [configuration.md](configuration.md), [secret-handling.md](secret-handl
 
 ---
 
-## Tool categories (47 tools)
+## Tool categories (45 tools)
 
 | Category | Tools |
 |----------|-------|
 | Read/inspect | `get_detailed_comp_summary`, `get_host_context`, `get_property_value`, `get_expression`, `get_keyframes`, `get_layer_properties`, `get_effect_properties`, `get_mask_info`, `get_markers`, `list_project_items` |
 | Layer ops | `create_layer`, `delete_layer`, `duplicate_layer`, `reorder_layer`, `set_layer_parent`, `set_layer_timing`, `rename_layer`, `set_layer_3d` |
 | Shape content | `add_shape_rectangle`, `add_shape_ellipse`, `add_shape_path` |
-| Animation | `add_keyframes`, `delete_keyframes`, `set_keyframe_easing`, `set_property_value`, `apply_expression`, `apply_expression_batch`, `apply_fade_preset`, `apply_pop_preset`, `apply_slide_preset` |
+| Animation | `add_keyframes`, `delete_keyframes`, `set_keyframe_easing`, `set_property_value`, `apply_expression`, `apply_expression_batch` |
 | Effects | `add_effect`, `remove_effect`, `set_effect_property` |
 | 3D/Camera/Light | `set_camera_properties`, `set_light_properties` |
-| Masks | `add_mask`, `set_mask_properties` |
+| Masks | `add_mask`, `set_mask_properties`, `create_masks_from_text` |
 | Markers | `add_marker`, `delete_marker` |
 | Import | `import_file`, `add_item_to_comp` |
 | Composition | `create_comp`, `precompose_layers`, `set_comp_settings` |
@@ -61,19 +60,17 @@ Details: [configuration.md](configuration.md), [secret-handling.md](secret-handl
 
 ## UI features
 
-- **2-tab layout**: Chat / Presets & Logs — single session per project
+- **Single chat panel** — single session per project
 - Chat with collapsible tool call cards (args + results)
 - Markdown rendering (headers, bold, code blocks, lists, inline images)
 - Quick action buttons (Wiggle, Counter, Slide In, Bounce, Preview)
-- Preset toolbar (Fade/Pop/Slide with duration, delay, strength)
-- Tool Call Log — preset-only results (not agent tool calls)
 - Streaming text preview during generation
-- Shared footer: Undo, Clear, Export, Errors, Report
+- Footer: Undo, Clear, Export, Errors, Report
 - Batch-undo (N x Cmd+Z for all mutating tool calls)
 - Stop (cancel running agent)
 - Export session to JSON
 - Report generation (LLM-analyzed session log)
-- Auto-resize textarea, model selector, token usage display
+- Auto-resize textarea, model selector in chat header, token usage display
 
 ---
 

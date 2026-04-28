@@ -32,14 +32,9 @@
   var state = {
     session: null,           // single session object
     isRequestInFlight: false,
-    isPresetInFlight: false,
-    selectedPresetKey: 'fade_in',
-    selectedBrandPresetKey: 'logo_reveal',
     currentAbortHandle: null,
     lastMutatingToolCount: 0,
-    lastModelStatus: { status: 'unknown', label: 'model: unknown' },
-    activeTab: 'chat',
-    toolLog: []              // compact log entries for Presets & Logs tab
+    lastModelStatus: { status: 'unknown', label: 'model: unknown' }
   }
 
   // ── DOM refs ───────────────────────────────────────────────────────────
@@ -57,398 +52,12 @@
     els.sendBtn = document.getElementById('send-btn')
     els.undoBtn = document.getElementById('undo-btn')
     els.cancelBtn = document.getElementById('cancel-btn')
-    els.presetDropdownBtn = document.getElementById('preset-dropdown-btn')
-    els.presetDropdownMenu = document.getElementById('preset-dropdown-menu')
-    els.presetDuration = document.getElementById('preset-duration')
-    els.presetDelay = document.getElementById('preset-delay')
-    els.presetStrength = document.getElementById('preset-strength')
-    els.presetStrengthLabel = document.getElementById('preset-strength-label')
-    els.applyPresetBtn = document.getElementById('apply-preset-btn')
     els.statusText = document.getElementById('status-text')
     els.modelStatus = document.getElementById('model-status')
-    els.toolLog = document.getElementById('tool-log')
-    els.brandDropdownBtn = document.getElementById('brand-dropdown-btn')
-    els.brandDropdownMenu = document.getElementById('brand-dropdown-menu')
-    els.brandField1 = document.getElementById('brand-field1')
-    els.brandField1Label = document.getElementById('brand-field1-label')
-    els.brandField1Wrap = document.getElementById('brand-field1-wrap')
-    els.brandField2 = document.getElementById('brand-field2')
-    els.brandField2Label = document.getElementById('brand-field2-label')
-    els.brandField2Wrap = document.getElementById('brand-field2-wrap')
-    els.brandDuration = document.getElementById('brand-duration')
-    els.applyBrandBtn = document.getElementById('apply-brand-btn')
-    // Export tab refs
-    els.exportFormatSelect = document.getElementById('export-format-select')
-    els.exportName = document.getElementById('export-name')
-    els.exportOutDir = document.getElementById('export-out-dir')
-    els.exportBrowseBtn = document.getElementById('export-browse-btn')
-    els.exportRunBtn = document.getElementById('export-run-btn')
-    els.exportStatus = document.getElementById('export-status')
-    els.exportHintsFormat = document.getElementById('export-hints-format')
-  }
-
-  var PRESET_LABELS = {
-    fade_in: 'Fade In',
-    fade_out: 'Fade Out',
-    pop_in: 'Pop In',
-    pop_out: 'Pop Out',
-    slide_left: 'Slide Left',
-    slide_right: 'Slide Right',
-    slide_up: 'Slide Up',
-    slide_down: 'Slide Down'
-  }
-
-  function closePresetDropdown () {
-    if (els.presetDropdownMenu) els.presetDropdownMenu.style.display = 'none'
-  }
-
-  function openPresetDropdown () {
-    if (els.presetDropdownMenu) els.presetDropdownMenu.style.display = ''
-  }
-
-  function togglePresetDropdown () {
-    if (!els.presetDropdownMenu) return
-    if (els.presetDropdownMenu.style.display === 'none') openPresetDropdown()
-    else closePresetDropdown()
-  }
-
-  function updatePresetDropdownUi () {
-    if (els.presetDropdownBtn) {
-      els.presetDropdownBtn.textContent = PRESET_LABELS[state.selectedPresetKey] || 'Preset'
-    }
-    if (els.presetDropdownMenu) {
-      var options = els.presetDropdownMenu.querySelectorAll('.preset-option-btn')
-      for (var i = 0; i < options.length; i++) {
-        var key = options[i].getAttribute('data-preset') || ''
-        if (key === state.selectedPresetKey) options[i].classList.add('active')
-        else options[i].classList.remove('active')
-      }
-    }
-  }
-
-  function updatePresetStrengthUi () {
-    if (!els.presetStrength) return
-    var key = String(state.selectedPresetKey || '')
-    var isFade = key.indexOf('fade_') === 0
-    var isPop = key.indexOf('pop_') === 0
-    var isSlide = key.indexOf('slide_') === 0
-    if (isFade) {
-      els.presetStrength.disabled = true
-      els.presetStrength.value = ''
-      els.presetStrength.title = 'Not used for fade preset'
-      if (els.presetStrengthLabel) els.presetStrengthLabel.textContent = 'Strength'
-      return
-    }
-    els.presetStrength.disabled = false
-    if (isPop) {
-      if (!els.presetStrength.value) els.presetStrength.value = '1'
-      els.presetStrength.title = 'Intensity (0.2..1.5) for pop preset'
-      if (els.presetStrengthLabel) els.presetStrengthLabel.textContent = 'Intensity'
-      return
-    }
-    if (isSlide) {
-      if (!els.presetStrength.value) els.presetStrength.value = '120'
-      els.presetStrength.title = 'Amplitude in px (8..2000) for slide preset'
-      if (els.presetStrengthLabel) els.presetStrengthLabel.textContent = 'Amplitude (px)'
-    }
-  }
-
-  function setPresetUiBusy (busy) {
-    state.isPresetInFlight = !!busy
-    if (busy) closePresetDropdown()
-    if (els.applyPresetBtn) els.applyPresetBtn.disabled = !!busy
-    if (els.presetDropdownBtn) els.presetDropdownBtn.disabled = !!busy
-    if (els.presetDuration) els.presetDuration.disabled = !!busy
-    if (els.presetDelay) els.presetDelay.disabled = !!busy
-    if (els.presetStrength && !els.presetStrength.disabled) els.presetStrength.disabled = !!busy
-    if (!busy) updatePresetStrengthUi()
-  }
-
-  // ── Brand preset UI ──────────────────────────────────────────────────
-
-  var BRAND_PRESET_LABELS = (window.BRAND_PRESETS_CONFIG && window.BRAND_PRESETS_CONFIG.labels) || {
-    logo_reveal: 'Logo Reveal',
-    lower_third: 'Lower Third',
-    text_card: 'Text Card'
-  }
-
-  function closeBrandDropdown () {
-    if (els.brandDropdownMenu) els.brandDropdownMenu.style.display = 'none'
-  }
-
-  function toggleBrandDropdown () {
-    if (!els.brandDropdownMenu) return
-    if (els.brandDropdownMenu.style.display === 'none') els.brandDropdownMenu.style.display = ''
-    else closeBrandDropdown()
-  }
-
-  function updateBrandDropdownUi () {
-    if (els.brandDropdownBtn) {
-      els.brandDropdownBtn.textContent = BRAND_PRESET_LABELS[state.selectedBrandPresetKey] || 'Brand Preset'
-    }
-    if (els.brandDropdownMenu) {
-      var opts = els.brandDropdownMenu.querySelectorAll('.preset-option-btn')
-      for (var i = 0; i < opts.length; i++) {
-        var key = opts[i].getAttribute('data-brand-preset') || ''
-        if (key === state.selectedBrandPresetKey) opts[i].classList.add('active')
-        else opts[i].classList.remove('active')
-      }
-    }
-  }
-
-  function updateBrandFieldsUi () {
-    var key = state.selectedBrandPresetKey
-    if (!els.brandField1) return
-
-    if (key === 'logo_reveal') {
-      els.brandField1Wrap.classList.add('hidden')
-      els.brandField2Wrap.classList.remove('hidden')
-      els.brandField2Label.textContent = 'Subline'
-      els.brandField2.placeholder = 'optional subline'
-      els.brandField2.value = ''
-      els.brandDuration.value = '2.2'
-    } else if (key === 'lower_third') {
-      els.brandField1Wrap.classList.remove('hidden')
-      els.brandField2Wrap.classList.remove('hidden')
-      els.brandField1Label.textContent = 'Name'
-      els.brandField1.placeholder = 'Speaker Name'
-      els.brandField1.value = ''
-      els.brandField2Label.textContent = 'Title'
-      els.brandField2.placeholder = 'Job Title'
-      els.brandField2.value = ''
-      els.brandDuration.value = '5'
-    } else if (key === 'text_card') {
-      els.brandField1Wrap.classList.remove('hidden')
-      els.brandField2Wrap.classList.remove('hidden')
-      els.brandField1Label.textContent = 'Line 1'
-      els.brandField1.placeholder = 'First line'
-      els.brandField1.value = ''
-      els.brandField2Label.textContent = 'Line 2'
-      els.brandField2.placeholder = 'Second line'
-      els.brandField2.value = ''
-      els.brandDuration.value = '7'
-    }
-  }
-
-  function buildBrandPresetCall () {
-    var key = state.selectedBrandPresetKey
-    var dur = parseFloat(els.brandDuration ? els.brandDuration.value : '5')
-    if (!isFinite(dur)) dur = 5
-    var f1 = (els.brandField1 && els.brandField1.value) ? els.brandField1.value.trim() : ''
-    var f2 = (els.brandField2 && els.brandField2.value) ? els.brandField2.value.trim() : ''
-
-    if (key === 'logo_reveal') {
-      var args = { duration: dur }
-      if (f2) { args.with_subline = true; args.subline_text = f2 }
-      return { toolName: 'apply_brand_logo_reveal', args: args }
-    }
-    if (key === 'lower_third') {
-      return {
-        toolName: 'apply_brand_lower_third',
-        args: { name_text: f1 || 'Speaker Name', title_text: f2 || 'Job Title', display_duration: dur }
-      }
-    }
-    if (key === 'text_card') {
-      return {
-        toolName: 'apply_brand_text_card',
-        args: { line1: f1 || 'Line 1', line2: f2 || 'Line 2', display_duration: dur }
-      }
-    }
-    return null
-  }
-
-  function handleApplyBrandPreset () {
-    if (state.isRequestInFlight || state.isPresetInFlight) {
-      setStatus('Busy: wait for current operation to finish')
-      return
-    }
-    if (!window.HOST_BRIDGE || typeof window.HOST_BRIDGE.executeToolCall !== 'function') {
-      setStatus('Brand preset unavailable: host bridge not ready')
-      return
-    }
-    var call = buildBrandPresetCall()
-    if (!call) { setStatus('Invalid brand preset selection'); return }
-
-    state.isPresetInFlight = true
-    if (els.applyBrandBtn) els.applyBrandBtn.disabled = true
-    setStatus('Creating brand preset...')
-
-    window.HOST_BRIDGE.executeToolCall(call.toolName, call.args)
-      .then(function (res) {
-        if (res && res.ok) {
-          setStatus('Brand preset created: ' + (res.layers ? res.layers.length : '?') + ' layers')
-          addToolLogEntry(call.toolName, 'ok', res.message || '')
-          pushSystemMessage(res.message || 'Brand preset applied.')
-          state.lastMutatingToolCount = (res.layers && res.layers.length) || 1
-        } else {
-          var errMsg = (res && res.message) ? res.message : 'Unknown error'
-          setStatus('Brand preset error: ' + errMsg)
-          addToolLogEntry(call.toolName, 'error', errMsg)
-        }
-        return refreshActiveCompNote(true)
-      })
-      .catch(function (err) {
-        var msg = err && err.message ? err.message : String(err)
-        setStatus('Brand preset failed: ' + msg)
-        addToolLogEntry(call.toolName, 'error', msg)
-      })
-      .then(function () {
-        state.isPresetInFlight = false
-        if (els.applyBrandBtn) els.applyBrandBtn.disabled = false
-      })
-  }
-
-  function parsePresetNumberInput (el) {
-    if (!el) return null
-    var raw = String(el.value || '').trim()
-    if (!raw.length) return null
-    var n = parseFloat(raw)
-    if (!isFinite(n)) return null
-    return n
-  }
-
-  function buildPresetCallFromUi () {
-    var key = String(state.selectedPresetKey || '')
-    var duration = parsePresetNumberInput(els.presetDuration)
-    var delay = parsePresetNumberInput(els.presetDelay)
-    var strength = parsePresetNumberInput(els.presetStrength)
-    var payload = {}
-    if (duration !== null) payload.duration = duration
-    if (delay !== null) payload.delay = delay
-
-    if (key === 'fade_in') {
-      payload.direction = 'in'
-      return { toolName: 'apply_fade_preset', args: payload }
-    }
-    if (key === 'fade_out') {
-      payload.direction = 'out'
-      return { toolName: 'apply_fade_preset', args: payload }
-    }
-    if (key === 'pop_in') {
-      payload.direction = 'in'
-      if (strength !== null) payload.intensity = strength
-      return { toolName: 'apply_pop_preset', args: payload }
-    }
-    if (key === 'pop_out') {
-      payload.direction = 'out'
-      if (strength !== null) payload.intensity = strength
-      return { toolName: 'apply_pop_preset', args: payload }
-    }
-    if (key === 'slide_left') {
-      payload.direction = 'left'
-      if (strength !== null) payload.amplitude = strength
-      return { toolName: 'apply_slide_preset', args: payload }
-    }
-    if (key === 'slide_right') {
-      payload.direction = 'right'
-      if (strength !== null) payload.amplitude = strength
-      return { toolName: 'apply_slide_preset', args: payload }
-    }
-    if (key === 'slide_up') {
-      payload.direction = 'up'
-      if (strength !== null) payload.amplitude = strength
-      return { toolName: 'apply_slide_preset', args: payload }
-    }
-    if (key === 'slide_down') {
-      payload.direction = 'down'
-      if (strength !== null) payload.amplitude = strength
-      return { toolName: 'apply_slide_preset', args: payload }
-    }
-    return null
-  }
-
-  function pushSystemMessage (text) {
-    var session = ensureSession()
-    session.messages.push({ role: 'system', text: text })
-    session.updatedAt = Date.now()
-    renderTranscript()
-    persistState()
-  }
-
-  function handleApplyPresetFromUi () {
-    if (state.isRequestInFlight || state.isPresetInFlight) {
-      setStatus('Busy: wait for current operation to finish')
-      return
-    }
-    if (!window.HOST_BRIDGE || typeof window.HOST_BRIDGE.executeToolCall !== 'function') {
-      setStatus('Preset apply unavailable: host bridge not ready')
-      return
-    }
-
-    var presetCall = buildPresetCallFromUi()
-    if (!presetCall) {
-      setStatus('Preset apply unavailable: invalid preset selection')
-      return
-    }
-
-    setPresetUiBusy(true)
-    setStatus('Applying preset...')
-
-    window.HOST_BRIDGE.executeToolCall('get_host_context', {})
-      .then(function (ctx) {
-        var selected = (ctx && ctx.selectedLayers && ctx.selectedLayers.length) ? ctx.selectedLayers : []
-        if (selected.length === 0) {
-          throw new Error('Select at least one layer in the active composition.')
-        }
-
-        var applyQueue = Promise.resolve()
-        var okCount = 0
-        var errCount = 0
-        var firstErr = null
-        for (var i = 0; i < selected.length; i++) {
-          (function (layerInfo) {
-            applyQueue = applyQueue.then(function () {
-              var args = {}
-              for (var k in presetCall.args) args[k] = presetCall.args[k]
-              if (typeof layerInfo.id === 'number') args.layer_id = layerInfo.id
-              else args.layer_index = layerInfo.index
-              return window.HOST_BRIDGE.executeToolCall(presetCall.toolName, args)
-                .then(function (res) {
-                  if (res && res.ok) {
-                    okCount++
-                    addToolLogEntry(presetCall.toolName, 'ok', res.message || '')
-                  } else {
-                    errCount++
-                    var errMsg = (res && res.message) ? res.message : 'Unknown host error'
-                    if (!firstErr) firstErr = errMsg
-                    addToolLogEntry(presetCall.toolName, 'error', errMsg)
-                  }
-                })
-                .catch(function (err) {
-                  errCount++
-                  var errMsg = err.message || String(err)
-                  if (!firstErr) firstErr = errMsg
-                  addToolLogEntry(presetCall.toolName, 'error', errMsg)
-                })
-            })
-          })(selected[i])
-        }
-
-        return applyQueue.then(function () {
-          state.lastMutatingToolCount = okCount
-          if (errCount === 0) {
-            setStatus('Preset applied to ' + okCount + ' layer(s)')
-            pushSystemMessage('Preset "' + presetCall.toolName + '" applied to ' + okCount + ' selected layer(s).')
-          } else {
-            setStatus('Preset applied with errors: ' + okCount + ' ok, ' + errCount + ' failed')
-            pushSystemMessage('Preset "' + presetCall.toolName + '" finished: ' + okCount + ' ok, ' + errCount + ' failed. ' + (firstErr || ''))
-          }
-          return refreshActiveCompNote(true)
-        })
-      })
-      .catch(function (err) {
-        var msg = err && err.message ? err.message : String(err)
-        setStatus('Preset apply failed: ' + msg)
-        pushSystemMessage('Preset apply failed: ' + msg)
-      })
-      .then(function () {
-        setPresetUiBusy(false)
-      })
   }
 
   function normalizeModelId (modelId) {
     if (!modelId || typeof modelId !== 'string') return DEFAULT_MODEL
-    if (modelId.indexOf('ollama/') === 0) return DEFAULT_MODEL
     return modelId
   }
 
@@ -523,55 +132,6 @@
     persistState()
     renderTranscript()
     return state.session
-  }
-
-  // ── Tab switching ──────────────────────────────────────────────────────
-  function switchTab (tabName) {
-    state.activeTab = tabName
-    var tabs = document.querySelectorAll('.tab-btn')
-    var panels = document.querySelectorAll('.tab-panel')
-    for (var i = 0; i < tabs.length; i++) {
-      var t = tabs[i].getAttribute('data-tab')
-      if (t === tabName) tabs[i].classList.add('active')
-      else tabs[i].classList.remove('active')
-    }
-    for (var j = 0; j < panels.length; j++) {
-      var p = panels[j].getAttribute('data-tab')
-      if (p === tabName) panels[j].classList.add('active')
-      else panels[j].classList.remove('active')
-    }
-    // When switching to chat, scroll to bottom
-    if (tabName === 'chat') scrollToBottom()
-  }
-
-  // ── Tool Log (compact log for Presets & Logs tab) ──────────────────────
-  function addToolLogEntry (name, status, msg) {
-    var now = new Date()
-    var timeStr = String(now.getHours()).padStart(2, '0') + ':' +
-                  String(now.getMinutes()).padStart(2, '0') + ':' +
-                  String(now.getSeconds()).padStart(2, '0')
-    state.toolLog.push({ time: timeStr, name: name, status: status, msg: msg || '' })
-    // Keep last 200 entries
-    if (state.toolLog.length > 200) state.toolLog = state.toolLog.slice(-200)
-    renderToolLog()
-  }
-
-  function renderToolLog () {
-    if (!els.toolLog) return
-    // Only render last 100 entries for performance
-    var entries = state.toolLog.slice(-100)
-    var html = ''
-    for (var i = 0; i < entries.length; i++) {
-      var e = entries[i]
-      html += '<div class="tool-log-entry">' +
-        '<span class="tool-log-time">' + e.time + '</span>' +
-        '<span class="tool-log-name">' + e.name + '</span>' +
-        '<span class="tool-log-status ' + e.status + '">' + e.status + '</span>' +
-        '<span class="tool-log-msg">' + (e.msg || '').replace(/</g, '&lt;').substring(0, 80) + '</span>' +
-        '</div>'
-    }
-    els.toolLog.innerHTML = html
-    els.toolLog.scrollTop = els.toolLog.scrollHeight
   }
 
   // ── Render: chat transcript ────────────────────────────────────────────
@@ -1106,10 +666,8 @@
     if (!confirm('Clear all messages? This cannot be undone.')) return
     state.session.messages = []
     state.session.updatedAt = Date.now()
-    state.toolLog = []
     persistState()
     renderTranscript()
-    renderToolLog()
   }
 
   function handleExportSessions () {
@@ -1435,15 +993,6 @@
 
   // ── Event binding ──────────────────────────────────────────────────────
   function bindEvents () {
-    // Tab switching
-    var tabBtns = document.querySelectorAll('.tab-btn')
-    for (var ti = 0; ti < tabBtns.length; ti++) {
-      tabBtns[ti].addEventListener('click', function () {
-        var tab = this.getAttribute('data-tab')
-        if (tab) switchTab(tab)
-      })
-    }
-
     // Footer buttons
     if (els.clearSessionBtn) els.clearSessionBtn.addEventListener('click', handleClearSession)
     if (els.exportSessionsBtn) els.exportSessionsBtn.addEventListener('click', handleExportSessions)
@@ -1464,66 +1013,6 @@
     })
     if (els.modelSelect) els.modelSelect.addEventListener('change', handleModelChange)
 
-    // Preset dropdown
-    if (els.presetDropdownBtn) {
-      els.presetDropdownBtn.addEventListener('click', function (e) {
-        e.preventDefault()
-        e.stopPropagation()
-        if (!state.isPresetInFlight) togglePresetDropdown()
-      })
-    }
-    if (els.presetDropdownMenu) {
-      var optionButtons = els.presetDropdownMenu.querySelectorAll('.preset-option-btn')
-      for (var pi = 0; pi < optionButtons.length; pi++) {
-        optionButtons[pi].addEventListener('click', function (e) {
-          e.preventDefault()
-          e.stopPropagation()
-          var key = this.getAttribute('data-preset') || ''
-          if (!key) return
-          state.selectedPresetKey = key
-          updatePresetDropdownUi()
-          updatePresetStrengthUi()
-          closePresetDropdown()
-        })
-      }
-    }
-    document.addEventListener('click', function (e) {
-      if (!els.presetDropdownMenu || !els.presetDropdownBtn) return
-      var menu = els.presetDropdownMenu
-      var btn = els.presetDropdownBtn
-      if (!menu.contains(e.target) && !btn.contains(e.target)) closePresetDropdown()
-    })
-    if (els.applyPresetBtn) els.applyPresetBtn.addEventListener('click', handleApplyPresetFromUi)
-
-    // Brand preset dropdown
-    if (els.brandDropdownBtn) {
-      els.brandDropdownBtn.addEventListener('click', function (e) {
-        e.preventDefault()
-        e.stopPropagation()
-        if (!state.isPresetInFlight) toggleBrandDropdown()
-      })
-    }
-    if (els.brandDropdownMenu) {
-      var brandOpts = els.brandDropdownMenu.querySelectorAll('.preset-option-btn')
-      for (var bi = 0; bi < brandOpts.length; bi++) {
-        brandOpts[bi].addEventListener('click', function (e) {
-          e.preventDefault()
-          e.stopPropagation()
-          var key = this.getAttribute('data-brand-preset') || ''
-          if (!key) return
-          state.selectedBrandPresetKey = key
-          updateBrandDropdownUi()
-          updateBrandFieldsUi()
-          closeBrandDropdown()
-        })
-      }
-    }
-    document.addEventListener('click', function (e) {
-      if (!els.brandDropdownMenu || !els.brandDropdownBtn) return
-      if (!els.brandDropdownMenu.contains(e.target) && !els.brandDropdownBtn.contains(e.target)) closeBrandDropdown()
-    })
-    if (els.applyBrandBtn) els.applyBrandBtn.addEventListener('click', handleApplyBrandPreset)
-
     // Enter to send (Shift+Enter for newline) + auto-resize.
     if (els.userInput) {
       els.userInput.addEventListener('keydown', function (e) {
@@ -1538,7 +1027,7 @@
       })
     }
 
-    // Quick actions — send without switching tab (user can switch manually).
+    // Quick actions
     var quickBtns = document.querySelectorAll('.quick-action-btn')
     for (var qi = 0; qi < quickBtns.length; qi++) {
       quickBtns[qi].addEventListener('click', function () {
@@ -1550,145 +1039,10 @@
       })
     }
 
-    // Export tab
-    if (els.exportBrowseBtn) els.exportBrowseBtn.addEventListener('click', handleExportBrowse)
-    if (els.exportRunBtn) els.exportRunBtn.addEventListener('click', handleExportRun)
-    if (els.exportFormatSelect) els.exportFormatSelect.addEventListener('change', updateExportFormatHint)
-
     // Persist on page unload.
     window.addEventListener('beforeunload', persistState)
     window.addEventListener('pagehide', persistState)
     window.addEventListener('focus', function () { refreshActiveCompNote(true) })
-  }
-
-  // ── Export tab handlers ────────────────────────────────────────────────
-
-  var EXPORT_FORMAT_HINTS = {
-    'css-svg': 'CSS + SVG: нулевые зависимости, лучший выбор для 150 KB баннеров. Поддерживает: transform/opacity keyframes (cubic-bezier + step-end для hold), gradient fills (linear/radial), shape primitives (rect/ellipse/polystar + round corners + trim paths + dashes + multi-fill/stroke + per-group transform + repeater), track mattes (alpha/luma + inverted), parent chain composition, curved motion (spatial bezier), auto-orient, separate dimensions, animated эффекты (drop-shadow/blur/brightness/hue/saturation/tint), масок (clipPath/mask + feather + expansion), текст (+ text-on-path + per-char stagger).',
-    'gsap-svg': 'GSAP + SVG: точный timeline-контроль, staggers, сложные easing. ~18 KB gzipped. Для Яндекс/VK — инлайньте gsap.min.js вместо CDN. Feature coverage — аналогично CSS+SVG для геометрии; timeline использует GSAP API.',
-    'json-raw': 'Raw JSON: дамп извлечённого compData без генерации HTML. Полезен для intermediate representation, диффов между прогонами, или для чтения в другом инструменте.',
-    'lottie-json': 'Lottie JSON (bodymovin schema v5.7): shape (rect/ellipse/polystar/path) + solid fill/stroke + transform + easing bezier + spatial tangents. Verified against lottie-web 5.12 runtime — 8/8 shape тест-кейсов рендерятся корректно. НЕ мапятся: gradients (используется first stop color как solid), CSS filters/effects, masks, track mattes, repeater, text animators. Text: структура экспортируется, но lottie-web требует отдельной регистрации шрифтов для рендера. Для полного feature-parity → CSS+SVG.'
-  }
-
-  function updateExportFormatHint () {
-    if (!els.exportHintsFormat || !els.exportFormatSelect) return
-    var fmt = els.exportFormatSelect.value
-    var txt = EXPORT_FORMAT_HINTS[fmt] || ''
-    els.exportHintsFormat.textContent = txt
-  }
-
-  function setExportStatus (msg, kind) {
-    if (!els.exportStatus) return
-    els.exportStatus.textContent = msg
-    els.exportStatus.classList.remove('ok', 'error', 'working')
-    if (kind) els.exportStatus.classList.add(kind)
-  }
-
-  function handleExportBrowse () {
-    if (!window.HOST_BRIDGE || typeof window.HOST_BRIDGE.evalHostFunction !== 'function') {
-      setExportStatus('Host bridge unavailable — enter the path manually.', 'error')
-      return
-    }
-    var current = (els.exportOutDir && els.exportOutDir.value) || ''
-    var arg = JSON.stringify(current)
-    setExportStatus('Opening folder picker...', 'working')
-    window.HOST_BRIDGE.evalHostFunction('extensionsLlmChat_selectExportFolder(' + arg + ')')
-      .then(function (res) {
-        if (res && res.ok && res.path) {
-          if (els.exportOutDir) els.exportOutDir.value = res.path
-          setExportStatus('Selected: ' + res.path, 'ok')
-          return
-        }
-        if (res && res.cancelled) {
-          setExportStatus('Picker cancelled', '')
-          return
-        }
-        setExportStatus('Folder picker failed — enter path manually.', 'error')
-      })
-      .catch(function (err) {
-        setExportStatus('Folder picker error: ' + (err && err.message ? err.message : String(err)), 'error')
-      })
-  }
-
-  function writeExportFiles (outDir, files) {
-    var fs = require('fs')
-    var path = require('path')
-    if (!fs.existsSync(outDir)) fs.mkdirSync(outDir, { recursive: true })
-    var written = []
-    for (var i = 0; i < files.length; i++) {
-      var full = path.join(outDir, files[i].name)
-      var parentDir = path.dirname(full)
-      if (!fs.existsSync(parentDir)) fs.mkdirSync(parentDir, { recursive: true })
-      if (files[i].copyFrom) {
-        // Binary asset (image, video) — copy from source path
-        if (!fs.existsSync(files[i].copyFrom)) {
-          throw new Error('Missing source asset: ' + files[i].copyFrom)
-        }
-        fs.copyFileSync(files[i].copyFrom, full)
-      } else {
-        fs.writeFileSync(full, files[i].content, 'utf8')
-      }
-      written.push(full)
-    }
-    return written
-  }
-
-  function handleExportRun () {
-    if (state.isPresetInFlight || state.isRequestInFlight) {
-      setExportStatus('Another operation is in progress. Wait for it to finish.', 'error')
-      return
-    }
-    if (!window.HOST_BRIDGE || typeof window.HOST_BRIDGE.evalHostFunction !== 'function') {
-      setExportStatus('Host bridge unavailable.', 'error')
-      return
-    }
-    if (!window.HtmlExporter || typeof window.HtmlExporter.generate !== 'function') {
-      setExportStatus('HtmlExporter module not loaded.', 'error')
-      return
-    }
-    var format = els.exportFormatSelect ? els.exportFormatSelect.value : 'css-svg'
-    var outDir = els.exportOutDir ? String(els.exportOutDir.value || '').replace(/^\s+|\s+$/g, '') : ''
-    var name = els.exportName ? String(els.exportName.value || '').replace(/^\s+|\s+$/g, '') : ''
-    if (!outDir) {
-      setExportStatus('Select an output directory first.', 'error')
-      return
-    }
-    setExportStatus('Extracting composition from AE...', 'working')
-    window.HOST_BRIDGE.evalHostFunction('extensionsLlmChat_extractCompForHtml()')
-      .then(function (compData) {
-        if (!compData || !compData.ok) {
-          var msg = (compData && compData.message) || 'Host extraction failed'
-          setExportStatus('Extract failed: ' + msg, 'error')
-          return null
-        }
-        if (!name) name = compData.comp && compData.comp.name ? compData.comp.name : 'animation'
-        setExportStatus('Generating ' + format + ' artifact...', 'working')
-        var result = window.HtmlExporter.generate(format, compData, { name: name })
-        if (!result || !result.files || result.files.length === 0) {
-          setExportStatus('Generator returned no files.', 'error')
-          return null
-        }
-        try {
-          var written = writeExportFiles(outDir, result.files)
-          var warnMsg = result.warnings && result.warnings.length ? ' (warnings: ' + result.warnings.length + ')' : ''
-          setExportStatus('Wrote ' + written.length + ' file(s) → ' + written[0] + warnMsg, 'ok')
-          if (result.warnings && result.warnings.length) {
-            for (var wi = 0; wi < result.warnings.length; wi++) {
-              addToolLogEntry('html-export', 'warn', result.warnings[wi])
-            }
-          }
-          addToolLogEntry('html-export', 'ok', 'Wrote ' + written.length + ' file(s) to ' + outDir)
-          return result
-        } catch (writeErr) {
-          setExportStatus('File write failed: ' + (writeErr && writeErr.message ? writeErr.message : String(writeErr)), 'error')
-          addToolLogEntry('html-export', 'error', String(writeErr))
-          return null
-        }
-      })
-      .catch(function (err) {
-        setExportStatus('Export error: ' + (err && err.message ? err.message : String(err)), 'error')
-        addToolLogEntry('html-export', 'error', String(err))
-      })
   }
 
   // ── Init ───────────────────────────────────────────────────────────────
@@ -1713,11 +1067,6 @@
     }
 
     bindEvents()
-    updatePresetDropdownUi()
-    updatePresetStrengthUi()
-    updateBrandDropdownUi()
-    updateBrandFieldsUi()
-    updateExportFormatHint()
     setStatus('Ready')
     refreshActiveCompNote(true)
 
