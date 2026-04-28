@@ -1,8 +1,8 @@
 # Local Knowledge Base
 
-**Scope:** This file describes only the knowledge-base folder (corpus, projections, index). Runtime prompt content lives in **prompt-library/** and **systemPrompt.js**; see docs/local-knowledge-base.md for the full reference.
+**Scope:** This file describes only the knowledge-base folder (corpus, projections, index). Runtime prompt content lives in **`agentSystemPrompt.js`**; the chat agent selects KB snippets by keyword match in **`main.js`** and injects them into the system prompt before each request.
 
-Repository-resident knowledge base for the multi-pass pipeline. One shared corpus, three role-specific projections. No remote dependency at runtime.
+Repository-resident reference material for the AE expression agent. One shared corpus, three role-oriented projections.
 
 ## Source priority
 
@@ -12,18 +12,10 @@ Repository-resident knowledge base for the multi-pass pipeline. One shared corpu
 ## Layout
 
 - **corpus/** — Curated topic content. `adobe/` = primary, `docsforadobe/` = secondary mirror.
-- **projections/** — Which corpus topics/snippets feed each role: `generator/`, `validator/`, `repair/`.
-- **index/** — Runtime index (`corpusIndex.js`) used by the extension to resolve projections and snippets.
-- **assembly/** — Reserved for assembly helpers if needed; main assembly lives in extension `pipelineAssembly.js`.
+- **projections/** — Topic groupings retained for reference: `generator/`, `validator/`, `repair/`. The current chat-only runtime uses keyword matching, not these projections directly.
+- **index/** — `corpusIndex.js` snippet manifest (kept for reference; chat runtime currently does keyword-based matching in `main.js`).
+- **assembly/** — Reserved for future assembly helpers; not loaded by the runtime.
 
-## Three projections
+## How the chat agent uses this
 
-All three are derived from the same corpus, filtered by role:
-
-- **Generator**: Intent interpretation, target-fit guidance, common AE expression patterns, examples for first draft.
-- **Validator**: Correctness and compatibility constraints, target-mismatch detection, property suitability, Source Text caveats, semantic review rules.
-- **Repair**: Fix recipes, issue-targeted snippets, patch-oriented transformations, “do not rewrite unnecessarily” guidance.
-
-## Usage
-
-The extension loads `knowledge-base/index/corpusIndex.js` and uses it to get grounding snippets per projection. See **docs/local-knowledge-base.md** and archived stage-grounding policy **docs/legacy-archive-on-user-request-only/multi-pass-copilot-legacy/legacy-grounding-policy-by-pipeline-stage.md**.
+`main.js` performs simple keyword detection on each user message and injects matching corpus snippets into the system prompt for that turn. There is no multi-pass pipeline anymore; the projections and assembly folders are kept as authoring references for future curation work.

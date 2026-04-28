@@ -111,12 +111,59 @@
   }
 
   /**
+   * Validate that critical tool calls include their required arguments.
+   * Returns null when args look ok, or an error string for the agent.
+   * Catches the common LLM failure of emitting `{}` for tools that require
+   * a property path / keyframes payload (host call would otherwise return
+   * a confusing "Property null not found" message).
+   */
+  function _validateRequiredArgs (toolName, args) {
+    function isStr (v) { return typeof v === 'string' && v.length > 0 }
+    function isArr (v) { return v && typeof v === 'object' && typeof v.length === 'number' && v.length > 0 }
+    switch (toolName) {
+      case 'add_keyframes':
+        if (!isStr(args.property_path)) return 'add_keyframes: missing required `property_path` (e.g. "Transform>Scale", "Transform>Position", "Transform>Opacity").'
+        if (!isArr(args.keyframes)) return 'add_keyframes: missing required `keyframes` array (each item: { time, value, in_type?, out_type? }).'
+        return null
+      case 'apply_expression':
+        if (!isStr(args.property_path)) return 'apply_expression: missing required `property_path`.'
+        if (typeof args.expression !== 'string') return 'apply_expression: missing required `expression` string.'
+        return null
+      case 'set_property_value':
+        if (!isStr(args.property_path)) return 'set_property_value: missing required `property_path`.'
+        if (args.value === undefined) return 'set_property_value: missing required `value`.'
+        return null
+      case 'set_text_document':
+        // Text document update needs at least one field to change. The host
+        // accepts a layer fallback, so we only reject completely-empty calls.
+        var hasAnyField = isStr(args.text) || typeof args.font_size === 'number' || isArr(args.fill_color) || isStr(args.justification) || isStr(args.font)
+        if (!hasAnyField) return 'set_text_document: provide at least one field — `text`, `font_size`, `fill_color`, `justification`, or `font`.'
+        return null
+      case 'set_effect_property':
+        if (typeof args.effect_index !== 'number') return 'set_effect_property: missing required `effect_index`.'
+        if (!isStr(args.property_name) && typeof args.property_index !== 'number') return 'set_effect_property: provide `property_name` (preferred, e.g. "Color", "Distance") or `property_index`.'
+        if (args.value === undefined) return 'set_effect_property: missing required `value`.'
+        return null
+    }
+    return null
+  }
+
+  /**
    * Execute an agent tool call by mapping tool name + args to a host function call.
    * Returns a promise that resolves with the host result object.
    */
   function executeToolCall (toolName, args) {
     if (!args) args = {}
     var call = null
+
+    // ── Pre-validation: catch obviously-empty calls before they hit the host
+    // and return a clear error the agent can self-correct from. The schema
+    // already declares these as required, but Cloud.ru tool-call generation
+    // sometimes emits {} anyway.
+    var validationError = _validateRequiredArgs(toolName, args)
+    if (validationError) {
+      return Promise.resolve({ ok: false, message: validationError })
+    }
 
     switch (toolName) {
       // Read tools
@@ -282,39 +329,6 @@
         }
         call = 'extensionsLlmChat_applyExpressionBatch(' + toESLiteral(batchTargets) + ')'
         break
-      case 'apply_fade_preset':
-        call = 'extensionsLlmChat_applyFadePreset(' +
-          toESLiteral(args.layer_index) + ',' +
-          toESLiteral(args.layer_id || null) + ',' +
-          toESLiteral({
-            duration: args.duration,
-            delay: args.delay,
-            direction: args.direction
-          }) + ')'
-        break
-      case 'apply_pop_preset':
-        call = 'extensionsLlmChat_applyPopPreset(' +
-          toESLiteral(args.layer_index) + ',' +
-          toESLiteral(args.layer_id || null) + ',' +
-          toESLiteral({
-            duration: args.duration,
-            delay: args.delay,
-            direction: args.direction,
-            intensity: args.intensity
-          }) + ')'
-        break
-      case 'apply_slide_preset':
-        call = 'extensionsLlmChat_applySlidePreset(' +
-          toESLiteral(args.layer_index) + ',' +
-          toESLiteral(args.layer_id || null) + ',' +
-          toESLiteral({
-            duration: args.duration,
-            delay: args.delay,
-            direction: args.direction,
-            amplitude: args.amplitude
-          }) + ')'
-        break
-
       // Shape content tools
       case 'add_shape_rectangle':
         call = 'extensionsLlmChat_addShapeRect(' +
@@ -492,8 +506,9 @@
           toESLiteral(args.layer_index) + ',' +
           toESLiteral(args.layer_id || null) + ',' +
           toESLiteral(args.effect_index) + ',' +
-          toESLiteral(args.property_index) + ',' +
-          toESLiteral(args.value) + ')'
+          toESLiteral(typeof args.property_index === 'number' ? args.property_index : null) + ',' +
+          toESLiteral(args.value) + ',' +
+          toESLiteral(args.property_name || null) + ')'
         break
 
       // Composition tools
@@ -553,35 +568,6 @@
           toESLiteral(args.layer_index) + ',' +
           toESLiteral(args.layer_id || null) + ',' +
           toESLiteral(args.blend_mode) + ')'
-        break
-
-      // Brand presets (Cloud.ru)
-      case 'apply_brand_logo_reveal':
-        call = 'extensionsLlmChat_applyBrandLogoReveal(' +
-          toESLiteral({
-            duration: args.duration,
-            with_subline: args.with_subline,
-            subline_text: args.subline_text,
-            with_background: args.with_background
-          }) + ')'
-        break
-      case 'apply_brand_lower_third':
-        call = 'extensionsLlmChat_applyBrandLowerThird(' +
-          toESLiteral({
-            name_text: args.name_text,
-            title_text: args.title_text,
-            display_duration: args.display_duration
-          }) + ')'
-        break
-      case 'apply_brand_text_card':
-        call = 'extensionsLlmChat_applyBrandTextCard(' +
-          toESLiteral({
-            line1: args.line1,
-            line2: args.line2,
-            line3: args.line3,
-            line4: args.line4,
-            display_duration: args.display_duration
-          }) + ')'
         break
 
       default:

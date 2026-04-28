@@ -49,9 +49,6 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 | `set_property_value` | Set a static value on any property |
 | `apply_expression` | Apply an AE expression to any expressable property. Returns expression errors for agent self-correction. |
 | `apply_expression_batch` | Apply expressions to multiple layer properties in one tool call with per-target success/error details. |
-| `apply_fade_preset` | Deterministic fade preset with fixed keyframe/easing recipe |
-| `apply_pop_preset` | Deterministic pop preset with fixed keyframe/easing recipe |
-| `apply_slide_preset` | Deterministic slide preset with fixed keyframe/easing recipe |
 
 #### Effects
 | Tool | Description |
@@ -103,18 +100,17 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 | `capture_comp_frame` | Save current frame as PNG and return the file path for inline display |
 
 ### UI
-- **2-tab layout**: Chat / Presets & Logs — single session per project
+
+- **Single chat panel** — single session per project
 - Chat interface with tool-call visualization (collapsible cards showing args + results)
 - **Markdown rendering** in agent responses (headers, bold, italic, code blocks, lists, inline images)
 - **Frame preview** — `capture_comp_frame` results shown as inline images in chat
 - **No-composition warning** — system message when no active comp is detected before sending
-- Model selector in tab bar
-- **Preset toolbar** (Presets tab): deterministic preset dropdown (`fade`/`pop`/`slide`) + parameter fields + `Apply preset`
+- Model selector in chat header
 - **Quick action buttons**: Wiggle, Counter, Slide In, Bounce, Preview — one-click common operations
-- **Tool Call Log** (Presets tab): shows only preset apply results (not agent tool calls)
 - **Streaming text preview** — agent response text appears in real-time during generation
 - **Textarea auto-resize** — input grows up to ~8 lines as you type
-- **Shared footer**: Undo, Clear, Export, Errors, Report — always visible across tabs
+- **Footer**: Undo, Clear, Export, Errors, Report
 - **Undo button** — reverts ALL agent actions from last request (batch-undo via N x Cmd+Z)
 - **Stop button** — cancel a running agent mid-execution
 - **Step progress indicator** — shows `Step N/maxSteps` and tool call count during execution
@@ -171,7 +167,7 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 
 All phases from the initial roadmap have been implemented:
 
-- **Phase 0** — Technical debt: dead code removed, 7 files archived to `legacy-archive/`
+- **Phase 0** — Technical debt: dead code removed (former `legacy-archive/` and `prompt-library/` cleared from the chat-only build)
 - **Phase 1** — Shape content creation: `add_shape_rectangle`, `add_shape_ellipse`, `add_shape_path`
 - **Phase 2** — 3D/Camera/Light: `set_layer_3d`, `set_camera_properties`, `set_light_properties`
 - **Phase 3** — Frame preview: `capture_comp_frame` + inline image rendering in chat
@@ -216,11 +212,11 @@ Shape modifiers via the same `addProperty()` API — natural extension of Phase 
 
 ### File Structure (agent modules)
 ```
-agentSystemPrompt.js  — Agent persona, workflow rules, expression guidance, 47 tool documentation, known limitations
+agentSystemPrompt.js  — Agent persona, workflow rules, expression guidance, 45 tool documentation, known limitations
 agentToolLoop.js      — LLM <> tool execution cycle with abort, streaming, expression validation
 chatProvider.js       — Cloud.ru API with retry, SSE streaming
-hostBridge.js         — Tool name -> ExtendScript mapping (single-load host script)
-toolRegistry.js       — 47 OpenAI-compatible tool definitions
+hostBridge.js         — Tool name -> ExtendScript mapping (single-load host script) + pre-call required-args validation
+toolRegistry.js       — 45 OpenAI-compatible tool definitions
 host/index.jsx        — ExtendScript functions (AE operations, shapes, 3D, masks, markers, import)
 main.js               — UI, sessions, markdown, pruning, cancel, batch-undo, KB injection, quick actions
 ```

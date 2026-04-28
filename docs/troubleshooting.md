@@ -52,14 +52,6 @@ Common issues with the AE Motion Agent panel.
 
 ---
 
-## Preset toolbar issues
-
-- **Dropdown doesn't open**: Reload CEP panel, check for JS errors in DevTools.
-- **No selected layers**: "Apply preset" requires at least one selected layer in the active composition.
-- **Range errors**: Duration, delay, intensity/amplitude are validated by the host. Out-of-range values return `ok: false`.
-
----
-
 ## Streaming not working
 
 - SSE streaming requires Cloud.ru provider.
