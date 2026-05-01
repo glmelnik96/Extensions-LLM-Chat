@@ -1,21 +1,16 @@
 # Local Knowledge Base
 
-**Scope:** This file describes only the knowledge-base folder (corpus, projections, index). Runtime prompt content lives in **`agentSystemPrompt.js`**; the chat agent selects KB snippets by keyword match in **`main.js`** and injects them into the system prompt before each request.
-
-Repository-resident reference material for the AE expression agent. One shared corpus, three role-oriented projections.
-
-## Source priority
-
-- **Primary**: Adobe Help Center / official After Effects Expression Language Reference.
-- **Secondary**: docsforadobe After Effects Expression Reference (mirror and convenience).
+Reference material on After Effects expressions kept inside the repo.
 
 ## Layout
 
-- **corpus/** — Curated topic content. `adobe/` = primary, `docsforadobe/` = secondary mirror.
-- **projections/** — Topic groupings retained for reference: `generator/`, `validator/`, `repair/`. The current chat-only runtime uses keyword matching, not these projections directly.
-- **index/** — `corpusIndex.js` snippet manifest (kept for reference; chat runtime currently does keyword-based matching in `main.js`).
-- **assembly/** — Reserved for future assembly helpers; not loaded by the runtime.
+- **corpus/adobe/** — Adobe Help Center / official Expression Language Reference (primary source).
+- **corpus/docsforadobe/** — Mirror of docsforadobe Expression Reference (secondary).
 
-## How the chat agent uses this
+These markdown files are **authoring references for humans** — the chat runtime does not read them at run time. They exist so you can quickly look up wiggle / sourceText / sourceRectAtTime semantics while editing the prompt or expression-related code.
 
-`main.js` performs simple keyword detection on each user message and injects matching corpus snippets into the system prompt for that turn. There is no multi-pass pipeline anymore; the projections and assembly folders are kept as authoring references for future curation work.
+## How the chat agent injects KB snippets
+
+The chat agent uses a small inline list of snippets defined directly in `main.js` (search for `KB_SNIPPETS`). When a user message contains keywords like `wiggle`, `sourceText`, `valueAtTime`, etc., the matching snippet is appended to the system prompt for that single turn.
+
+If you want to teach the agent a new pattern, add an entry to `KB_SNIPPETS` in `main.js`. Folders under `corpus/` are unrelated to runtime — they are only useful for grounding your own additions.

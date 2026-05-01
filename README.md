@@ -1,6 +1,10 @@
 # AE Motion Agent — CEP Panel for After Effects
 
+> **Status: MVP ready (2026-05-01).** Chat-only после cleanup'а 30 апреля и 10 архитектурных улучшений 1 мая. Подтверждено end-to-end manual-тестами T1-T10. Дальнейшая работа — фиксы качества/скорости.
+
 AI-агент для моушен-дизайна в Adobe After Effects. Панель принимает запросы на естественном языке (русском или английском) и выполняет их через 45 инструментов: создание слоёв, shape content, анимация, эффекты, 3D/камера/свет, маски, маркеры, импорт файлов, превью кадра и многое другое.
+
+**MVP-набор улучшений** (детали — `.omc/plans/improvements-2026-04-30.md`): модульный system prompt с lazy-loading (−42% токенов на простых запросах), параллельные read-only tools, idempotency через `client_op_id`, type hints в `_KNOWN_PATHS`, расширенный expression validator (8 паттернов), validation warnings → tool result, capability handshake, persistent capture frames в `~/AE-agent-captures/<дата>/`, tool latency stats в Report, KB cleanup.
 
 ---
 
