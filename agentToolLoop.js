@@ -135,76 +135,139 @@
   }
 
   /**
-   * Execute tool calls one at a time (AE ExtendScript is single-threaded).
+   * Read-only tools that can run in parallel within a single tool_calls batch.
+   * Mutating tools must remain sequential because AE ExtendScript is single-threaded
+   * (concurrent setValue/setValueAtTime calls race the AE undo group and timeline state).
+   */
+  var READ_ONLY_TOOLS = {
+    get_detailed_comp_summary: 1,
+    get_host_context: 1,
+    get_property_value: 1,
+    get_expression: 1,
+    get_keyframes: 1,
+    get_layer_properties: 1,
+    get_effect_properties: 1,
+    get_mask_info: 1,
+    get_markers: 1,
+    list_project_items: 1,
+    capture_comp_frame: 1
+  }
+
+  /**
+   * Build a thunk that executes one tool call and resolves with the
+   * { id, content } result entry. The thunk runs static validation before
+   * the host call and attaches any warnings to the result so the model sees
+   * them on the next turn (#5: validation feedback to agent).
+   */
+  function buildToolCallThunk (tc, log, onToolCall) {
+    return function () {
+      var toolName = tc.function.name
+      var args = {}
+      try {
+        args = typeof tc.function.arguments === 'string'
+          ? JSON.parse(tc.function.arguments)
+          : (tc.function.arguments || {})
+      } catch (e) {
+        args = {}
+      }
+
+      var logEntry = {
+        id: tc.id || ('call_' + Date.now()),
+        name: toolName,
+        args: args,
+        result: null,
+        status: 'running',
+        startTime: Date.now()
+      }
+      log.push(logEntry)
+      onToolCall(logEntry)
+
+      // Static expression validation before sending to AE.
+      var validationWarnings = []
+      if ((toolName === 'apply_expression' || toolName === 'apply_expression_batch') && window.validateExpression) {
+        var exprText = args.expression || ''
+        if (toolName === 'apply_expression_batch' && args.targets) {
+          exprText = args.targets.map(function (t) { return t.expression || '' }).join('\n')
+        }
+        validationWarnings = window.validateExpression(exprText) || []
+        if (validationWarnings.length > 0) {
+          logEntry.validationWarnings = validationWarnings
+        }
+      }
+
+      function attachWarnings (result) {
+        if (validationWarnings.length > 0) {
+          // Mutate so the JSON sent to the model includes the warnings inline.
+          result.validationWarnings = validationWarnings
+        }
+        return result
+      }
+
+      return window.HOST_BRIDGE.executeToolCall(toolName, args)
+        .then(function (hostResult) {
+          var withWarnings = attachWarnings(hostResult || { ok: false, message: 'Empty host result.' })
+          logEntry.result = withWarnings
+          logEntry.status = withWarnings.ok ? 'ok' : 'error'
+          logEntry.endTime = Date.now()
+          onToolCall(logEntry)
+          return { id: logEntry.id, content: JSON.stringify(withWarnings) }
+        })
+        .catch(function (err) {
+          var errResult = attachWarnings({ ok: false, message: (err && err.message) || String(err) })
+          logEntry.result = errResult
+          logEntry.status = 'error'
+          logEntry.endTime = Date.now()
+          onToolCall(logEntry)
+          return { id: logEntry.id, content: JSON.stringify(errResult) }
+        })
+    }
+  }
+
+  /**
+   * Execute the tool_calls of a single round. Contiguous runs of read-only
+   * tools execute in parallel via Promise.all; mutating tools execute one
+   * at a time. Result order matches the input tool_calls order so the
+   * tool_call_id pairing in the conversation history stays correct.
    */
   function executeToolCallsSequentially (toolCalls, log, onToolCall) {
-    var results = []
+    var resultsByIndex = new Array(toolCalls.length)
     var chain = Promise.resolve()
+    var i = 0
 
-    for (var i = 0; i < toolCalls.length; i++) {
-      (function (tc) {
-        chain = chain.then(function () {
-          var toolName = tc.function.name
-          var args = {}
-          try {
-            args = typeof tc.function.arguments === 'string'
-              ? JSON.parse(tc.function.arguments)
-              : (tc.function.arguments || {})
-          } catch (e) {
-            args = {}
-          }
-
-          var logEntry = {
-            id: tc.id || ('call_' + Date.now()),
-            name: toolName,
-            args: args,
-            result: null,
-            status: 'running',
-            startTime: Date.now()
-          }
-          log.push(logEntry)
-          onToolCall(logEntry)
-
-          // Phase 10: Static expression validation before sending to AE
-          if ((toolName === 'apply_expression' || toolName === 'apply_expression_batch') && window.validateExpression) {
-            var exprText = args.expression || ''
-            if (toolName === 'apply_expression_batch' && args.targets) {
-              exprText = args.targets.map(function (t) { return t.expression || '' }).join('\n')
-            }
-            var warnings = window.validateExpression(exprText)
-            if (warnings.length > 0) {
-              logEntry.validationWarnings = warnings
-            }
-          }
-
-          return window.HOST_BRIDGE.executeToolCall(toolName, args)
-            .then(function (hostResult) {
-              logEntry.result = hostResult
-              logEntry.status = hostResult.ok ? 'ok' : 'error'
-              logEntry.endTime = Date.now()
-              onToolCall(logEntry)
-
-              results.push({
-                id: logEntry.id,
-                content: JSON.stringify(hostResult)
-              })
-            })
-            .catch(function (err) {
-              logEntry.result = { ok: false, message: err.message }
-              logEntry.status = 'error'
-              logEntry.endTime = Date.now()
-              onToolCall(logEntry)
-
-              results.push({
-                id: logEntry.id,
-                content: JSON.stringify({ ok: false, message: err.message })
-              })
-            })
-        })
-      })(toolCalls[i])
+    while (i < toolCalls.length) {
+      var name = toolCalls[i].function && toolCalls[i].function.name
+      if (READ_ONLY_TOOLS[name]) {
+        // Collect contiguous read-only run.
+        var batch = []
+        while (i < toolCalls.length && READ_ONLY_TOOLS[toolCalls[i].function && toolCalls[i].function.name]) {
+          batch.push({ thunk: buildToolCallThunk(toolCalls[i], log, onToolCall), index: i })
+          i++
+        }
+        ;(function (b) {
+          chain = chain.then(function () {
+            return Promise.all(b.map(function (item) {
+              return item.thunk().then(function (r) { resultsByIndex[item.index] = r })
+            }))
+          })
+        })(batch)
+      } else {
+        // Mutating call — serialize.
+        ;(function (tc, idx) {
+          var thunk = buildToolCallThunk(tc, log, onToolCall)
+          chain = chain.then(thunk).then(function (r) { resultsByIndex[idx] = r })
+        })(toolCalls[i], i)
+        i++
+      }
     }
 
-    return chain.then(function () { return results })
+    return chain.then(function () {
+      // Filter out any holes (shouldn't happen, but defensive).
+      var out = []
+      for (var k = 0; k < resultsByIndex.length; k++) {
+        if (resultsByIndex[k]) out.push(resultsByIndex[k])
+      }
+      return out
+    })
   }
 
   // Export

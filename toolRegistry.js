@@ -114,7 +114,8 @@
             duration: { type: 'number', description: 'Duration in seconds (defaults to comp duration)' },
             text: { type: 'string', description: 'Initial text content for text layers' },
             font: { type: 'string', description: 'Font name for text layers' },
-            font_size: { type: 'number', description: 'Font size for text layers' }
+            font_size: { type: 'number', description: 'Font size for text layers' },
+            client_op_id: { type: 'string', description: 'Optional unique id for idempotency. If you retry the same logical operation, reuse the same id and the tool will return the original result instead of double-creating.' }
           },
           required: ['layer_type']
         }
@@ -524,7 +525,8 @@
             feather: { type: 'number', description: 'Mask feather in px' },
             opacity: { type: 'number', description: 'Mask opacity 0-100' },
             expansion: { type: 'number', description: 'Mask expansion in px' },
-            inset: { type: 'number', description: 'Inset from layer edges in px (for default rect mask)' }
+            inset: { type: 'number', description: 'Inset from layer edges in px (for default rect mask)' },
+            client_op_id: { type: 'string', description: 'Optional unique id for idempotency. Reuse on retry to avoid double-creating the mask.' }
           },
           required: ['layer_index']
         }
@@ -581,7 +583,8 @@
             target: { type: 'string', enum: ['layer', 'comp'], description: '"layer" (default) or "comp"' },
             time: { type: 'number', description: 'Time in seconds (default: current time)' },
             comment: { type: 'string', description: 'Marker comment text' },
-            duration: { type: 'number', description: 'Marker duration in seconds' }
+            duration: { type: 'number', description: 'Marker duration in seconds' },
+            client_op_id: { type: 'string', description: 'Optional unique id for idempotency. Reuse on retry to avoid duplicate markers at the same time.' }
           },
           required: []
         }
@@ -690,7 +693,8 @@
           properties: {
             layer_index: { type: 'number', description: '1-based layer index' },
             layer_id: { type: 'number', description: 'Persistent layer ID' },
-            effect_match_name: { type: 'string', description: 'Effect matchName or display name' }
+            effect_match_name: { type: 'string', description: 'Effect matchName or display name' },
+            client_op_id: { type: 'string', description: 'Optional unique id for idempotency. Reuse on retry to avoid stacking duplicate effects.' }
           },
           required: ['layer_index', 'effect_match_name']
         }
@@ -745,7 +749,8 @@
             width: { type: 'number', description: 'Pixels (default 1920)' },
             height: { type: 'number', description: 'Pixels (default 1080)' },
             duration: { type: 'number', description: 'Seconds (default 10)' },
-            frame_rate: { type: 'number', description: 'FPS (default 30)' }
+            frame_rate: { type: 'number', description: 'FPS (default 30)' },
+            client_op_id: { type: 'string', description: 'Optional unique id for idempotency. Reuse on retry to avoid duplicate compositions.' }
           },
           required: ['name']
         }

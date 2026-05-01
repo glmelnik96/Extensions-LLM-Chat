@@ -2,6 +2,8 @@
 
 Pre-release validation for the AE Motion Agent CEP extension.
 
+> **MVP cut:** 2026-05-01. Cleanup на chat-only + 10 улучшений. Подтверждено T1-T10 manual-тестами. Далее — патчи качества/скорости.
+
 ---
 
 ## Structure

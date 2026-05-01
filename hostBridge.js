@@ -152,9 +152,44 @@
    * Execute an agent tool call by mapping tool name + args to a host function call.
    * Returns a promise that resolves with the host result object.
    */
+  // ── Idempotency cache (#6) ────────────────────────────────────────────
+  // Tools that create new objects in AE are eligible for client_op_id
+  // dedup so a retry after a network error doesn't double-create.
+  var IDEMPOTENT_TOOLS = {
+    create_layer: 1,
+    create_comp: 1,
+    add_effect: 1,
+    add_mask: 1,
+    add_marker: 1
+  }
+  var _idempotencyCache = {}
+
+  function _idempotencyKey (toolName, opId) {
+    return toolName + '|' + String(opId)
+  }
+
+  function _clearIdempotencyCache () {
+    _idempotencyCache = {}
+  }
+
   function executeToolCall (toolName, args) {
     if (!args) args = {}
     var call = null
+
+    // ── Idempotency check: if this tool supports client_op_id and we've
+    // already seen this op in the current session, return the cached result.
+    if (IDEMPOTENT_TOOLS[toolName] && typeof args.client_op_id === 'string' && args.client_op_id.length > 0) {
+      var cacheKey = _idempotencyKey(toolName, args.client_op_id)
+      if (_idempotencyCache.hasOwnProperty(cacheKey)) {
+        var cached = _idempotencyCache[cacheKey]
+        // Return a shallow clone with a flag so the agent can tell.
+        var clone = {}
+        for (var k in cached) { if (cached.hasOwnProperty(k)) clone[k] = cached[k] }
+        clone.deduplicated = true
+        clone.message = (clone.message || '') + ' [returned from idempotency cache, op_id=' + args.client_op_id + ']'
+        return Promise.resolve(clone)
+      }
+    }
 
     // ── Pre-validation: catch obviously-empty calls before they hit the host
     // and return a clear error the agent can self-correct from. The schema
@@ -482,10 +517,13 @@
         call = 'extensionsLlmChat_addItemToComp(' + toESLiteral(args.project_item_index) + ')'
         break
 
-      // Capture tool
+      // Capture tool: persistent path under user's home so frames survive
+      // OS temp cleanup and stay viewable in chat history (#12). The host
+      // function expands ~ via Folder("~"), creates the dir, and prunes
+      // old captures (keeps newest 50).
       case 'capture_comp_frame':
-        var tmpPath = '/tmp/ae-motion-agent-frame-' + Date.now() + '.png'
-        call = 'extensionsLlmChat_saveCompFramePng(' + toESLiteral(tmpPath) + ')'
+        var captureName = 'frame-' + Date.now() + '.png'
+        call = 'extensionsLlmChat_saveCompFramePng(' + toESLiteral(captureName) + ', true)'
         break
 
       // Effect tools
@@ -574,7 +612,17 @@
         return Promise.reject(new Error('Unknown tool: ' + toolName))
     }
 
-    return evalHostFunction(call)
+    var hostPromise = evalHostFunction(call)
+    // Cache successful idempotent results so a retry with the same
+    // client_op_id returns the original instead of double-creating.
+    if (IDEMPOTENT_TOOLS[toolName] && typeof args.client_op_id === 'string' && args.client_op_id.length > 0) {
+      var cKey = _idempotencyKey(toolName, args.client_op_id)
+      hostPromise = hostPromise.then(function (res) {
+        if (res && res.ok === true) _idempotencyCache[cKey] = res
+        return res
+      })
+    }
+    return hostPromise
   }
 
   // Export
@@ -583,7 +631,11 @@
       evalHostFunction: evalHostFunction,
       executeToolCall: executeToolCall,
       ensureHostScriptLoaded: ensureHostScriptLoaded,
-      toESLiteral: toESLiteral
+      toESLiteral: toESLiteral,
+      // Allow the panel to clear the idempotency cache when the user
+      // intentionally starts fresh (Clear button) — otherwise repeated
+      // op_ids from a new session would surface stale results.
+      clearIdempotencyCache: _clearIdempotencyCache
     }
   }
 })()

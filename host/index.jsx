@@ -597,17 +597,25 @@ function extensionsLlmChat_getHostContext () {
 
 /**
  * Save the active composition's current frame as PNG (requires CompItem.saveFrameToPng).
- * @param {string} absolutePath POSIX path to output .png file
+ *
+ * Two modes:
+ *   - Legacy: pathOrName is a full path → saves there.
+ *   - Persistent (#12): pathOrName is a bare filename + persistent === true →
+ *     saves under ~/AE-agent-captures/<date>/, auto-prunes old captures so
+ *     the folder stays bounded.
+ *
+ * @param {string}  pathOrName Full path or filename (when `persistent` true)
+ * @param {boolean} persistent If true, store under ~/AE-agent-captures/<date>/
  */
-function extensionsLlmChat_saveCompFramePng (absolutePath) {
+function extensionsLlmChat_saveCompFramePng (pathOrName, persistent) {
   var result = {
     ok: false,
     message: '',
-    path: '',
+    path: ''
   };
 
   try {
-    if (typeof absolutePath !== 'string' || !absolutePath.length) {
+    if (typeof pathOrName !== 'string' || !pathOrName.length) {
       result.message = 'No output path for saveCompFramePng.';
       return resultToJson(result);
     }
@@ -627,20 +635,35 @@ function extensionsLlmChat_saveCompFramePng (absolutePath) {
       return resultToJson(result);
     }
 
-    var outFile = new File(absolutePath);
-    try {
-      var parent = outFile.parent;
-      if (parent && !parent.exists) {
-        parent.create();
-      }
-    } catch (eMk) {}
+    var outFile;
+    if (persistent === true) {
+      // Persistent path: ~/AE-agent-captures/YYYY-MM-DD/<filename>
+      var home = Folder.userData ? Folder('~').fsName : '~';
+      var d = new Date();
+      var datedFolder = String(d.getFullYear()) + '-' +
+        ('0' + (d.getMonth() + 1)).slice(-2) + '-' +
+        ('0' + d.getDate()).slice(-2);
+      var rootFolder = new Folder('~/AE-agent-captures');
+      if (!rootFolder.exists) { try { rootFolder.create(); } catch (eR) {} }
+      var dayFolder = new Folder('~/AE-agent-captures/' + datedFolder);
+      if (!dayFolder.exists) { try { dayFolder.create(); } catch (eD) {} }
+      outFile = new File(dayFolder.fsName + '/' + pathOrName);
+      // Prune old captures: keep newest 50 across all dated subfolders.
+      try { _pruneOldCaptures(rootFolder, 50); } catch (ePrune) {}
+    } else {
+      outFile = new File(pathOrName);
+      try {
+        var parent = outFile.parent;
+        if (parent && !parent.exists) parent.create();
+      } catch (eMk) {}
+    }
 
     comp.saveFrameToPng(comp.time, outFile);
     result.ok = true;
     try {
-      result.path = outFile.fsName ? String(outFile.fsName) : String(absolutePath);
+      result.path = outFile.fsName ? String(outFile.fsName) : String(pathOrName);
     } catch (ePath) {
-      result.path = String(absolutePath);
+      result.path = String(pathOrName);
     }
     try {
       result.fileSize = outFile.length;
@@ -978,6 +1001,82 @@ var _KNOWN_PATHS = {
   'Transform>Opacity':      ['ADBE Transform Group', 'ADBE Opacity'],
   'Text>Source Text':       ['ADBE Text Properties', 'ADBE Text Document'],
 };
+
+/**
+ * Expected value-type per known property path. Used by _validateValueForPath
+ * to return clear errors before AE setValue rejects with a cryptic message.
+ *
+ *   array2  — [x, y]
+ *   array3  — [x, y, z]   (3D position when 3D layer enabled)
+ *   array2or3 — accept either (Position auto-extends with 3D)
+ *   number  — finite scalar
+ *   percent — finite scalar; AE accepts any number, but Opacity is 0..100
+ *   angle   — finite scalar in degrees (no clamp; AE wraps)
+ *   text    — string (Source Text)
+ */
+var _PATH_VALUE_TYPES = {
+  'Transform>Anchor Point': 'array2or3',
+  'Transform>Position':     'array2or3',
+  'Transform>Scale':        'array2or3',
+  'Transform>Rotation':     'angle',
+  'Transform>X Rotation':   'angle',
+  'Transform>Y Rotation':   'angle',
+  'Transform>Opacity':      'percent',
+  'Text>Source Text':       'text'
+};
+
+/**
+ * Validate that `value` looks right for `propertyPath`. Returns null when
+ * the value is acceptable (or the path has no known type hint), or a
+ * human-readable error message otherwise.
+ *
+ * Defensive — never throws; lets the host call proceed if it can't decide.
+ */
+function _validateValueForPath (propertyPath, value) {
+  var t = _PATH_VALUE_TYPES[propertyPath];
+  if (!t) return null;
+  function isFiniteNum (v) { return typeof v === 'number' && isFinite(v); }
+  function isArrOf (v, n) {
+    if (!(v instanceof Array)) return false;
+    if (v.length !== n) return false;
+    for (var i = 0; i < n; i++) { if (!isFiniteNum(v[i])) return false; }
+    return true;
+  }
+  if (t === 'array2') {
+    if (!isArrOf(value, 2)) return propertyPath + ' expects [x, y] (2 numbers); got ' + _describeValue(value) + '.';
+    return null;
+  }
+  if (t === 'array3') {
+    if (!isArrOf(value, 3)) return propertyPath + ' expects [x, y, z] (3 numbers); got ' + _describeValue(value) + '.';
+    return null;
+  }
+  if (t === 'array2or3') {
+    if (!(isArrOf(value, 2) || isArrOf(value, 3))) {
+      return propertyPath + ' expects [x, y] for 2D or [x, y, z] for 3D layers; got ' + _describeValue(value) + '.';
+    }
+    return null;
+  }
+  if (t === 'number' || t === 'angle') {
+    if (!isFiniteNum(value)) return propertyPath + ' expects a finite number; got ' + _describeValue(value) + '.';
+    return null;
+  }
+  if (t === 'percent') {
+    if (!isFiniteNum(value)) return propertyPath + ' expects a number (0..100 for opacity); got ' + _describeValue(value) + '.';
+    return null;
+  }
+  if (t === 'text') {
+    if (typeof value !== 'string') return propertyPath + ' expects a string; got ' + _describeValue(value) + '.';
+    return null;
+  }
+  return null;
+}
+
+function _describeValue (v) {
+  if (v === null) return 'null';
+  if (v === undefined) return 'undefined';
+  if (v instanceof Array) return 'array(length=' + v.length + ')';
+  return typeof v + '(' + (typeof v === 'string' ? '"' + v.substr(0, 20) + (v.length > 20 ? '…' : '') + '"' : String(v)) + ')';
+}
 
 /**
  * Resolve a property on a layer given a path string like "Transform>Position",
@@ -1730,6 +1829,10 @@ function extensionsLlmChat_setPropertyValue (layerIndex, layerId, propertyPath, 
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
     if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    // Pre-flight type check for known paths so the agent gets a clear
+    // diagnostic instead of a cryptic AE error.
+    var typeErr = _validateValueForPath(propertyPath, value);
+    if (typeErr) { result.message = typeErr; return resultToJson(result); }
     var prop = _resolveProperty(layer, propertyPath);
     if (!prop || !(prop instanceof Property)) {
       result.message = 'Property not found or is a group.'; return resultToJson(result);
@@ -3168,4 +3271,85 @@ function _getTemporalEaseDims (prop, keyIndex) {
     if (v instanceof Array) return v.length;
   } catch (e4) {}
   return 1;
+}
+
+// ============================================================================
+// Capability handshake — lets the client detect a stale/incomplete host script
+// ============================================================================
+
+function extensionsLlmChat_getCapabilities () {
+  var result = { ok: true, version: '2026-04-30-chat-cleanup', helpers: {}, message: '' };
+  var globalScope = (typeof $ !== 'undefined' && $.global) ? $.global : this;
+  var probeList = [
+    '_resolveLayer', '_resolveProperty', '_layerTypeString',
+    '_getTemporalEaseDims', 'resultToJson',
+    '_beginToolUndo', '_endToolUndo', '_validateValueForPath',
+    '_PATH_VALUE_TYPES', '_KNOWN_PATHS',
+    'extensionsLlmChat_resolveActiveComp',
+    'extensionsLlmChat_getActiveCompNote',
+    'extensionsLlmChat_getDetailedCompSummary',
+    'extensionsLlmChat_getHostContext',
+    'extensionsLlmChat_createLayer',
+    'extensionsLlmChat_setPropertyValue',
+    'extensionsLlmChat_addKeyframes',
+    'extensionsLlmChat_setKeyframeEasing',
+    'extensionsLlmChat_setEffectPropertyValue',
+    'extensionsLlmChat_setTextDocument',
+    'extensionsLlmChat_addEffect',
+    'extensionsLlmChat_addMask',
+    'extensionsLlmChat_saveCompFramePng'
+  ];
+  for (var i = 0; i < probeList.length; i++) {
+    var name = probeList[i];
+    var present = false;
+    try {
+      var ref = globalScope[name];
+      // Functions evaluate as function; constants like _PATH_VALUE_TYPES as object.
+      present = (typeof ref === 'function') || (typeof ref === 'object' && ref !== null);
+    } catch (e) { present = false; }
+    result.helpers[name] = present;
+  }
+  return resultToJson(result);
+}
+
+/**
+ * Prune ~/AE-agent-captures so it stays bounded. Walks all dated subfolders,
+ * collects every .png, sorts by modified date desc, deletes everything past
+ * the keep limit. Empty dated folders are removed afterwards.
+ */
+function _pruneOldCaptures (rootFolder, keepCount) {
+  if (!rootFolder || !rootFolder.exists) return;
+  if (typeof keepCount !== 'number' || keepCount < 1) keepCount = 50;
+  var allFiles = [];
+  var subfolders;
+  try { subfolders = rootFolder.getFiles(function (f) { return (f instanceof Folder); }); } catch (eS) { subfolders = []; }
+  if (!(subfolders instanceof Array)) return;
+  for (var s = 0; s < subfolders.length; s++) {
+    var sub = subfolders[s];
+    var pngs;
+    try { pngs = sub.getFiles('*.png'); } catch (eP) { pngs = []; }
+    if (pngs instanceof Array) {
+      for (var p = 0; p < pngs.length; p++) {
+        try { allFiles.push({ file: pngs[p], modified: pngs[p].modified }); } catch (eM) {}
+      }
+    }
+  }
+  if (allFiles.length <= keepCount) return;
+  allFiles.sort(function (a, b) {
+    var at = a.modified ? a.modified.getTime() : 0;
+    var bt = b.modified ? b.modified.getTime() : 0;
+    return bt - at;
+  });
+  for (var i = keepCount; i < allFiles.length; i++) {
+    try { allFiles[i].file.remove(); } catch (eDel) {}
+  }
+  // Sweep empty dated subfolders.
+  for (var k = 0; k < subfolders.length; k++) {
+    var folder = subfolders[k];
+    var remaining;
+    try { remaining = folder.getFiles(); } catch (eR) { remaining = []; }
+    if (remaining instanceof Array && remaining.length === 0) {
+      try { folder.remove(); } catch (eRem) {}
+    }
+  }
 }

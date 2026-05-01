@@ -447,30 +447,92 @@
     return parts.join('\n\n')
   }
 
-  // ── Expression Validation (Phase 10) ──────────────────────────────────
+  // ── Expression Validation (Phase 10, extended 2026-04-30) ────────────
+  // Static checks that ship pre-flight warnings to the agent so it can
+  // fix common JS-in-AE mistakes without a round trip to AE.
   function validateExpression (exprText) {
     var warnings = []
     if (!exprText || typeof exprText !== 'string') return warnings
 
+    // 1. Text source-text API misuse.
     if (exprText.indexOf('text.sourceText.value') >= 0) {
-      warnings.push('WARN: "text.sourceText.value" is incorrect. Use "text.sourceText" directly.')
+      warnings.push('WARN: "text.sourceText.value" is incorrect. Use "text.sourceText" directly (it is already a TextDocument; do not call .value on it).')
     }
+
+    // 2. Line breaks in SourceText use \r, not \n.
     if (exprText.indexOf('\\n') >= 0 && exprText.indexOf('\\r') < 0 && exprText.toLowerCase().indexOf('sourcetext') >= 0) {
-      warnings.push('WARN: Use "\\r" for line breaks in SourceText, not "\\n".')
+      warnings.push('WARN: Use "\\r" for line breaks in SourceText, not "\\n" — AE does not honor \\n in TextDocument.')
     }
+
+    // 3. Parenthesis balance (catches truncated batch payloads).
     var opens = 0; var closes = 0
     for (var i = 0; i < exprText.length; i++) {
-      if (exprText[i] === '(') opens++
-      if (exprText[i] === ')') closes++
+      if (exprText.charAt(i) === '(') opens++
+      if (exprText.charAt(i) === ')') closes++
     }
-    if (opens !== closes) warnings.push('WARN: Unbalanced parentheses (' + opens + ' open, ' + closes + ' close).')
+    if (opens !== closes) warnings.push('WARN: Unbalanced parentheses (' + opens + ' open, ' + closes + ' close). Likely truncated expression — try a shorter version.')
 
+    // 4. Bracket balance.
     var squareOpen = 0; var squareClose = 0
     for (var j = 0; j < exprText.length; j++) {
-      if (exprText[j] === '[') squareOpen++
-      if (exprText[j] === ']') squareClose++
+      if (exprText.charAt(j) === '[') squareOpen++
+      if (exprText.charAt(j) === ']') squareClose++
     }
     if (squareOpen !== squareClose) warnings.push('WARN: Unbalanced brackets [' + squareOpen + ' open, ' + squareClose + ' close].')
+
+    // 5. Curly brace balance.
+    var braceOpen = 0; var braceClose = 0
+    for (var k = 0; k < exprText.length; k++) {
+      if (exprText.charAt(k) === '{') braceOpen++
+      if (exprText.charAt(k) === '}') braceClose++
+    }
+    if (braceOpen !== braceClose) warnings.push('WARN: Unbalanced braces {' + braceOpen + ' open, ' + braceClose + ' close}.')
+
+    // 6. `if (cond) val1 else val2` used as an expression (invalid JS — needs ternary).
+    //    Match on a literal `else` adjacent to a value expression rather than a block.
+    //    Heuristic: an `if` followed by `(...) <something-without-braces> else` where
+    //    the next character after the if-condition's closing `)` is NOT `{`.
+    if (/\bif\s*\([^){]*\)\s*(?!\{)[^;{}]+\s+else\s+/.test(exprText)) {
+      warnings.push('WARN: `if (cond) v1 else v2` is invalid as a JS expression. Use the ternary operator: `cond ? v1 : v2`.')
+    }
+
+    // 7. seedRandom with a constant seed and frozen=true (random will not change over time).
+    //    Common LLM mistake: seedRandom(index, true) → random() returns the same number forever.
+    //    Allow seeds that include `time` or arithmetic on time/Math.floor/index+time.
+    var seedMatch = exprText.match(/seedRandom\s*\(\s*([^,]+?)\s*,\s*true\s*\)/)
+    if (seedMatch) {
+      var seedExpr = seedMatch[1]
+      if (seedExpr.indexOf('time') < 0 && seedExpr.indexOf('Math.floor') < 0 && seedExpr.indexOf('frame') < 0) {
+        warnings.push('WARN: seedRandom(' + seedExpr + ', true) freezes the random sequence — output will be a single constant for all frames. Drive the seed from `time` (e.g. `seedRandom(Math.floor(time * 2), true)`) so values change over time.')
+      }
+    }
+
+    // 8. Double-call on effect controller: effect("...")("...").something()
+    //    Common mistake: effect("Slider Control")("Slider")() — extra trailing ().
+    if (/effect\s*\(\s*"[^"]*"\s*\)\s*\(\s*"[^"]*"\s*\)\s*\(\s*\)/.test(exprText)) {
+      warnings.push('WARN: Trailing `()` after effect controller access — `effect("Name")("Property")` already resolves to the value; remove the empty parentheses.')
+    }
+
+    // 9. Trailing `.value` on a property reference inside an expression.
+    //    AE auto-evaluates the property; appending `.value` returns undefined.
+    if (/(thisProperty|thisLayer\.\w+|transform\.\w+)\.value\b/.test(exprText)) {
+      warnings.push('WARN: Avoid `.value` on property references — `thisProperty`, `transform.position`, etc. already evaluate to the current value. `.value` returns undefined.')
+    }
+
+    // 10. Empty body (no value at end). Heuristic: trim, ensure last non-comment
+    //     non-empty token is not a `;` after a statement keyword like `var`/`if`/`for`
+    //     without a final expression. We approximate: the LAST line (after trimming)
+    //     must contain at least one identifier or literal. Skip if expression contains
+    //     a function declaration that returns a value.
+    var trimmed = exprText.replace(/\/\*[\s\S]*?\*\//g, '').replace(/\/\/[^\n]*/g, '').replace(/\s+/g, ' ').replace(/^\s+|\s+$/g, '')
+    if (trimmed.length > 0) {
+      var lastChar = trimmed.charAt(trimmed.length - 1)
+      // If expression ends with `;` AND the last statement is a declaration, AE returns
+      // undefined — usually a sign the model forgot the final value.
+      if (lastChar === ';' && /\bvar\s+\w+\s*=[^;]+;\s*$/.test(trimmed)) {
+        warnings.push('WARN: Expression ends with a `var` declaration — AE expression must evaluate to a value. Add the final value on its own line (e.g. last line: `myVar`).')
+      }
+    }
 
     return warnings
   }
@@ -564,7 +626,18 @@
     apiMessages = pruneConversation(apiMessages, maxConversationTokens)
 
     var kbContext = buildKnowledgeBaseContext(text)
-    var systemPrompt = window.AGENT_SYSTEM_PROMPT || ''
+    // Prefer the modular builder so we only pay tokens for sections relevant
+    // to this request (#1). Falls back to the full prompt if the builder
+    // isn't loaded (older agentSystemPrompt.js or boot order issues).
+    var systemPrompt = ''
+    var promptModulesUsed = ['core']
+    if (window.AGENT_SYSTEM_PROMPT_BUILDER && typeof window.AGENT_SYSTEM_PROMPT_BUILDER.build === 'function') {
+      var built = window.AGENT_SYSTEM_PROMPT_BUILDER.build(text)
+      systemPrompt = built && built.prompt ? built.prompt : (window.AGENT_SYSTEM_PROMPT || '')
+      if (built && built.modules) promptModulesUsed = ['core'].concat(built.modules)
+    } else {
+      systemPrompt = window.AGENT_SYSTEM_PROMPT || ''
+    }
     if (kbContext) systemPrompt += '\n\n## Expression Reference (from documentation)\n\n' + kbContext
 
     window.AGENT_TOOL_LOOP.runAgentLoop({
@@ -613,7 +686,11 @@
             name: tc.name,
             args: tc.args,
             result: tc.result,
-            status: tc.status
+            status: tc.status,
+            // Timing is included so the Report (#9) and any future analytics
+            // can compute per-tool latency without re-running the session.
+            startTime: tc.startTime || null,
+            endTime: tc.endTime || null
           }
         })
       }
@@ -666,6 +743,12 @@
     if (!confirm('Clear all messages? This cannot be undone.')) return
     state.session.messages = []
     state.session.updatedAt = Date.now()
+    // Drop any idempotency keys cached by hostBridge so a fresh session
+    // starting with the same client_op_id values doesn't return stale
+    // host results from the previous run.
+    if (window.HOST_BRIDGE && typeof window.HOST_BRIDGE.clearIdempotencyCache === 'function') {
+      try { window.HOST_BRIDGE.clearIdempotencyCache() } catch (_) {}
+    }
     persistState()
     renderTranscript()
   }
@@ -786,9 +869,78 @@
     'Write in English for developer consumption. Do not add preamble or conclusions beyond the sections above.'
   ].join('\n')
 
+  /**
+   * Aggregate per-tool latency and error rate from a session's tool calls.
+   * Used in the Report (#9) so the LLM analyzing the session sees not just
+   * what happened but also which tools were slow or unreliable.
+   */
+  function computeToolStats (session) {
+    var byTool = {}
+    var msgs = session.messages || []
+    for (var i = 0; i < msgs.length; i++) {
+      var calls = msgs[i].toolCalls || []
+      for (var c = 0; c < calls.length; c++) {
+        var tc = calls[c]
+        var name = tc.name || 'unknown'
+        var bucket = byTool[name] || (byTool[name] = { count: 0, errors: 0, latencies: [] })
+        bucket.count++
+        if (tc.status === 'error' || (tc.result && tc.result.ok === false)) bucket.errors++
+        if (tc.startTime && tc.endTime && tc.endTime > tc.startTime) {
+          bucket.latencies.push(tc.endTime - tc.startTime)
+        }
+      }
+    }
+    var rows = []
+    for (var n in byTool) {
+      if (!byTool.hasOwnProperty(n)) continue
+      var b = byTool[n]
+      var min = null, max = null, sum = 0
+      for (var k = 0; k < b.latencies.length; k++) {
+        var v = b.latencies[k]
+        if (min === null || v < min) min = v
+        if (max === null || v > max) max = v
+        sum += v
+      }
+      var avg = b.latencies.length > 0 ? Math.round(sum / b.latencies.length) : null
+      rows.push({
+        name: n,
+        count: b.count,
+        errors: b.errors,
+        errorRate: b.count > 0 ? Math.round(100 * b.errors / b.count) : 0,
+        avgMs: avg,
+        minMs: min,
+        maxMs: max
+      })
+    }
+    rows.sort(function (a, b) { return b.count - a.count })
+    return rows
+  }
+
+  function formatToolStatsTable (rows) {
+    if (!rows.length) return ''
+    var lines = []
+    lines.push('| Tool | Calls | Errors | Err% | Avg ms | Min ms | Max ms |')
+    lines.push('|---|---:|---:|---:|---:|---:|---:|')
+    for (var i = 0; i < rows.length; i++) {
+      var r = rows[i]
+      lines.push('| ' + r.name + ' | ' + r.count + ' | ' + r.errors + ' | ' + r.errorRate + '% | ' +
+        (r.avgMs !== null ? r.avgMs : '—') + ' | ' +
+        (r.minMs !== null ? r.minMs : '—') + ' | ' +
+        (r.maxMs !== null ? r.maxMs : '—') + ' |')
+    }
+    return lines.join('\n')
+  }
+
   function serializeSessionForReport (session) {
     var lines = []
     lines.push('=== Session: ' + session.title + ' (model: ' + (session.model || 'unknown') + ') ===')
+    var stats = computeToolStats(session)
+    if (stats.length > 0) {
+      lines.push('')
+      lines.push('=== Tool performance (per-tool counts, error rate, latency) ===')
+      lines.push(formatToolStatsTable(stats))
+      lines.push('')
+    }
     var msgs = session.messages || []
     for (var i = 0; i < msgs.length; i++) {
       var m = msgs[i]
@@ -1069,6 +1221,7 @@
     bindEvents()
     setStatus('Ready')
     refreshActiveCompNote(true)
+    checkHostCapabilities()
 
     // Check Cloud.ru connectivity.
     var secrets = (window.EXTENSIONS_LLM_CHAT_SECRETS) || {}
@@ -1078,6 +1231,48 @@
       setModelStatus('ok', 'cloud: ready')
     } else {
       setModelStatus('unknown', 'no API key')
+    }
+  }
+
+  /**
+   * Capability handshake (#10): probe the host script for required helpers
+   * so a stale/incomplete `host/index.jsx` is surfaced before the user hits
+   * a cryptic "Function ... is undefined" error mid-session.
+   */
+  function checkHostCapabilities () {
+    if (!window.HOST_BRIDGE || typeof window.HOST_BRIDGE.evalHostFunction !== 'function') return
+    try {
+      window.HOST_BRIDGE.evalHostFunction('extensionsLlmChat_getCapabilities()')
+        .then(function (caps) {
+          if (!caps || caps.ok === false) {
+            var msg = 'Host capability probe failed: ' + ((caps && caps.message) || 'unknown')
+            setStatus(msg)
+            if (typeof console !== 'undefined') console.warn('[host]', msg)
+            return
+          }
+          var helpers = caps.helpers || {}
+          var missing = []
+          for (var name in helpers) {
+            if (helpers.hasOwnProperty(name) && !helpers[name]) missing.push(name)
+          }
+          if (missing.length > 0) {
+            var warn = 'Host script outdated — missing: ' + missing.join(', ') + '. Reload the panel.'
+            setStatus(warn)
+            setModelStatus('error', 'host: outdated')
+            if (typeof console !== 'undefined') console.warn('[host]', warn)
+          } else if (typeof console !== 'undefined') {
+            console.log('[host] capabilities OK — version ' + (caps.version || 'unknown'))
+          }
+        })
+        .catch(function (err) {
+          var msg = 'Host capability probe error: ' + ((err && err.message) || String(err))
+          if (typeof console !== 'undefined') console.warn('[host]', msg)
+          // Don't surface to status line — the probe is best-effort, and a
+          // failure here doesn't block normal usage. Tools that actually
+          // need a missing helper will fail with their own errors.
+        })
+    } catch (e) {
+      if (typeof console !== 'undefined') console.warn('[host] capability probe threw', e)
     }
   }
 
