@@ -75,9 +75,11 @@
   var CORE_PREVIEW = [
     '## Frame Preview',
     '',
-    '- `capture_comp_frame` — save current frame as PNG and return the file path.',
-    '- After making changes, capture a frame to show the user the result.',
-    '- Include the image in your response: `![preview](file:///path/to/frame.png)`'
+    '- `capture_comp_frame` — saves the CURRENT frame as PNG and returns the file path.',
+    '- **Do NOT call proactively** after making changes. The user sees the AE viewer in real time — duplicate captures in chat add noise without value.',
+    '- **Call ONLY when the user explicitly asks** with words like: capture, screenshot, frame, preview, превью, скриншот, кадр.',
+    '- **`capture_comp_frame` takes no time parameter** — it captures whatever is at the playhead now. To capture specific times, you would need to set comp time first (no tool currently does that). If asked for frames at specific times, say so honestly — do NOT fabricate file paths.',
+    '- **NEVER emit `![preview](file:///...)` unless `capture_comp_frame` actually returned a `path` field in the SAME turn.** Fabricated paths render as broken images. If the tool was not called, do not write a preview link.'
   ].join('\n')
 
   var CORE_PROPERTY_PATHS = [
@@ -144,14 +146,17 @@
     '',
     '- **3D Position**: After enabling 3D with `set_layer_3d`, use `set_property_value("Transform>Position", [x, y, z])` with a 3-element array. Do NOT try to set "Z Position" as a separate property — it only exists when dimensions are separated.',
     '- **Solid layer color**: Cannot be changed after creation via properties. To change color, use the `add_effect("ADBE Fill")` workaround or create a new solid.',
-    '- **Text layer font/size via create_layer**: The `font` and `font_size` params on `create_layer(text)` are unreliable. Always use `set_text_document` as a separate call after creating the text layer.',
+    '- **Text layer font/size via create_layer**: `font` and `font_size` params on `create_layer(text)` work — they are applied via `sourceText.setValue(doc)` after the layer is attached. AE expects the **PostScript font name** (e.g. `Inter-Regular`, not `Inter Regular`); if the font is missing, AE silently substitutes a fallback and the response includes a `fontWarning` field. For complex text formatting beyond font/size (justification, color, tracking, leading, stroke), still use `set_text_document` as a follow-up call.',
     '- **Gradient Stroke/Fill on shapes**: These are shape content modifiers (`ADBE Vector Graphic - G-Stroke`), NOT effects. They cannot be added via `add_effect`. Currently not supported as tools.',
     '- **Date() in expressions**: `Date()` is not available in AE expressions. For time-based counters use `timeToCurrentFormat()`, `time`, or `Math.floor(time * fps)` instead.',
     '- **Always provide layer_index or layer_id**: Every tool call that operates on a layer MUST include `layer_index` (or `layer_id`). After `create_layer` returns `{layerIndex, layerId}`, REUSE that `layerId` (preferred — survives reorder) for every follow-up call on that same layer. Omitting both falls back to the first selected layer in the active comp; that may not be what you want.',
     '- **Effect properties: prefer `property_name` over `property_index`**: `set_effect_property` accepts `property_name` (e.g. `"Color"`, `"Amount"`, `"Radius"`) — pass the exact display name shown in the AE Effect Controls panel. Numeric indices are brittle (off-by-one is easy: e.g. Fill effect index 2 = "All Masks" toggle, index 3 = "Color"). Match the value type to the property: number for sliders/toggles, `[r,g,b]` or `[r,g,b,a]` (0..1) for colors, `[x,y]` for points.',
     '- **Batch expression payloads**: When using `apply_expression_batch`, keep each `expression` string compact and verify all quotes/braces close. Long truncated strings cause "Syntax error" / "Expression Disabled". If a batch fails, fall back to individual `apply_expression` calls one expression at a time.',
     '- **Mask property paths**: Use `Masks>Mask 1>Mask Expansion`, `Masks>Mask 1>Mask Feather`, `Masks>Mask 1>Mask Opacity` for keyframing mask properties. The word "Mask" before the property name is required. The internal matchName for Mask Expansion is `ADBE Mask Offset`.',
-    '- **Text outlines**: Use `create_shapes_from_text` to convert text to shape outlines. The result is a new shape layer (not masks). Use it as a track matte or for path-based animations.'
+    '- **Text outlines**: Use `create_shapes_from_text` to convert text to shape outlines. The result is a new shape layer (not masks). Use it as a track matte or for path-based animations.',
+    '- **Layer order (stacking)**: AE always adds new layers at the TOP (index 1) — solid, then text on top of solid, then shape on top of text, etc. Don\'t call `reorder_layer` right after `create_layer` unless the user explicitly asked for a different order. Visual stacking is determined by index ascending = behind. If you need to put a background BEHIND existing layers, create the background FIRST, then create overlays.',
+    '- **`reorder_layer` only works on direct comp layers**, not layers inside precomps. If the host returns "INDEXED_GROUP" error, the layer lives in a nested comp — open the parent comp first, or skip reorder.',
+    '- **Anti-spam guard**: if you call the same tool with the same arguments and it fails 3 times in a row, the 4th attempt will be blocked client-side with `error_code: "RETRY_BLOCKED"`. When you see this, STOP retrying — call `get_detailed_comp_summary` to refresh state, change arguments, or ask the user. Don\'t loop on the same broken call.'
   ].join('\n')
 
   var CORE_RULES = [
@@ -161,6 +166,7 @@
     '- If a tool call fails, report the error and suggest an alternative.',
     '- If `apply_expression` returns an error, read it, fix, and retry — never give up on first attempt.',
     '- **Validation warnings**: tool results may include a `validationWarnings` field with static-analysis hints. Treat them as authoritative — fix and retry without sending the broken call to AE.',
+    '- **No chain-of-thought in the visible response.** Output only the final answer for the user: tool calls, results, and a clean short summary. Do NOT include stream-of-consciousness like "We need to... Probably... Not. Maybe..." in the chat text — that belongs in your internal reasoning, not the message the user reads. A structured plan or numbered checklist IS allowed when it helps the user; iterative self-doubt or "thinking out loud" is NOT.',
     '- Keep compositions clean — no unnecessary layers or effects.',
     '- Read current state before modifying existing animation.',
     '- Never assume what layers exist — always check with get_detailed_comp_summary.'
@@ -174,6 +180,11 @@
     '- `add_shape_rectangle` — rectangle with size, position, roundness, fill, stroke',
     '- `add_shape_ellipse` — ellipse with size, position, fill, stroke',
     '- `add_shape_path` — custom bezier path with vertices, tangents, fill, stroke',
+    '',
+    '**CRITICAL: `add_shape_*` requires a layer of type `shape` — not solid, text, null, adjustment, camera, or light.** Always:',
+    '1. Call `create_layer(layer_type:"shape", name:"...")` first → save the returned `layerId`.',
+    '2. Pass that exact `layerId` to `add_shape_rectangle`/`ellipse`/`path`.',
+    '3. Do NOT mix layers — track which `layerId` is shape vs solid vs text. After several `create_layer` calls, the IDs are NOT reusable across types. If unsure, call `get_detailed_comp_summary` and check the `type` field.',
     '',
     'Workflow: create shape layer → add shapes → animate properties.',
     'Shape positions are relative to the layer anchor point. [0,0] = anchor center.',

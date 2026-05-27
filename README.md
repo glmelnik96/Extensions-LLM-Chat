@@ -1,88 +1,111 @@
 # AE Motion Agent — CEP Panel for After Effects
 
-> **Status: MVP ready (2026-05-01).** Chat-only после cleanup'а 30 апреля и 10 архитектурных улучшений 1 мая. Подтверждено end-to-end manual-тестами T1-T10. Дальнейшая работа — фиксы качества/скорости.
+> **Status: MVP shipped 2026-04-30 + iterations 2-4 of stability fixes (2026-05-12).** Chat-only AI agent for motion-design work inside Adobe After Effects 26+. Cloud.ru Foundation Models (`gpt-oss-120b` / `Qwen3-Coder-Next`) drive 45 tools mapped to ExtendScript.
 
-AI-агент для моушен-дизайна в Adobe After Effects. Панель принимает запросы на естественном языке (русском или английском) и выполняет их через 45 инструментов: создание слоёв, shape content, анимация, эффекты, 3D/камера/свет, маски, маркеры, импорт файлов, превью кадра и многое другое.
+**Tagline:** «buddy for motion design, not autopilot». The agent helps with hard expression logic, parameter dependencies, and AE quirks — not auto-generate entire animations from one sentence.
 
-**MVP-набор улучшений** (детали — `.omc/plans/improvements-2026-04-30.md`): модульный system prompt с lazy-loading (−42% токенов на простых запросах), параллельные read-only tools, idempotency через `client_op_id`, type hints в `_KNOWN_PATHS`, расширенный expression validator (8 паттернов), validation warnings → tool result, capability handshake, persistent capture frames в `~/AE-agent-captures/<дата>/`, tool latency stats в Report, KB cleanup.
+---
+
+## 🧑‍💻 New agent or contributor? Start here
+
+Read **[AGENTS.md](AGENTS.md)** — the project HANDOFF. It has the 30-second project map, mental model, iteration history, Cloud.ru tool-call quirks you will hit, and where to find what.
 
 ---
 
 ## Возможности
+
+AI-агент принимает запросы на естественном языке (русском или английском) и выполняет их через 45 инструментов: создание слоёв, shape content, анимация, эффекты, 3D/камера/свет, маски, маркеры, импорт файлов, превью кадра и многое другое.
 
 ### 45 инструментов
 
 | Категория | Инструменты |
 |-----------|------------|
 | Чтение | comp summary, host context, свойства, выражения, кейфреймы, свойства слоя/эффекта, маски, маркеры, элементы проекта |
-| Слои | create, delete, duplicate, reorder, parent, timing, rename, 3D toggle |
+| Слои | create, delete, duplicate, reorder, parent, timing, rename, 3D toggle, set_blend_mode |
 | Shape content | rectangle, ellipse, custom path (с fill и stroke) |
 | Анимация | keyframes (add/delete/easing), свойства, expressions (single + batch) |
-| Эффекты | add, remove, set property |
+| Эффекты | add, remove, set property (через `property_name`) |
 | 3D / камера / свет | camera properties, light properties |
-| Маски | add mask, set properties |
+| Маски | add mask, set properties, create_masks_from_text |
 | Маркеры | add, delete |
 | Импорт | import file, add to comp |
 | Композиция | create, precompose, settings |
 | Текст | set text document |
-| Превью | capture comp frame |
+| Превью | capture comp frame (opt-in) |
 
 Полная таблица: [docs/capabilities-and-roadmap.md](docs/capabilities-and-roadmap.md).
 
 ### UI
 
-- **Чат** с карточками tool calls и markdown-рендерингом (включая inline-изображения)
-- **Streaming** — текст ответа агента появляется в реальном времени
-- **Quick actions** — кнопки Wiggle, Counter, Slide In, Bounce, Preview
-- **Footer**: Undo, Clear, Export сессии, Errors, Report
-- **Undo** — откат всех действий агента за один клик (batch-undo)
+- **Чат** с карточками tool calls (collapsible, args + результат JSON) и markdown-рендерингом
+- **Streaming** — ответ агента появляется в реальном времени (SSE)
+- **Quick actions** — кнопки Wiggle, Counter, Slide In, Bounce, Preview над input
+- **Footer**: Undo, Clear, Export, Errors, Report
+- **Undo** — batch-undo всех мутирующих действий последнего запроса (N × Cmd+Z)
 - **Stop** — отмена работающего агента
-- **Export** — сохранение сессии в JSON на Desktop
-- **Report** — LLM-анализ сессии → структурированный баг-репорт на Desktop
-- Автоматическое растягивание textarea, прогресс (Step N), счётчик токенов, tooltips
+- **Export** — сессия в JSON на Desktop
+- **Errors** — только ошибочные tool calls в JSON
+- **Report** — LLM-анализ сессии + tool latency table на Desktop
+- Auto-resize textarea, model selector в chat header, token usage display
 
-### Надёжность
+### Архитектура надёжности (после MVP + итераций 1-4)
 
-- SSE streaming с инкрементальным парсингом tool_call аргументов
-- Retry API-запросов при 429/5xx (3 попытки, exponential backoff)
-- Статическая валидация выражений перед отправкой в AE
-- Knowledge base injection (подстановка документации по ключевым словам)
-- Детекция ошибок выражений → агент исправляет автоматически
-- Pruning истории диалога для контроля токенов
+- **Модульный system prompt** — CORE (~2.8k токенов) + lazy modules по keyword. ~40% экономии токенов на простых запросах.
+- **Параллельные read-only tools** — contiguous reads в одном round'е через `Promise.all`. Mutating tools остаются sequential (AE single-threaded).
+- **Pre-call validation** — `_validateRequiredArgs` ловит Cloud.ru `args:{}` для tool'ов с required-полями.
+- **Anti-spam guard** — 4-й identical-failing call блокируется client-side (`RETRY_BLOCKED`). Разрывает спирали типа 137-call.
+- **Idempotency через `client_op_id`** — `create_*`, `add_effect/mask/marker` кешируют successful results.
+- **Capability handshake** — host script probed at startup (20 функций/констант); stale script → visible warning.
+- **Type hints для known property paths** — `Transform>Position expects [x,y]` вместо cryptic AE-ошибки.
+- **Static expression validator** — 8 паттернов (`if/else as expression`, `seedRandom(constant, true)`, unbalanced brackets, `.value` misuse, и т.д.). Warnings прокидываются модели через tool result.
+- **Harmony name normalize** — `<|channel|>commentary` leak в `function.name` (gpt-oss-120b) автоматически очищается.
+- **Persistent capture frames** — `~/AE-agent-captures/<дата>/`, auto-prune до 50.
+- **Anti-fabrication preview rule** — модель НЕ может эмиттить `![preview](file:///...)` без реального вызова `capture_comp_frame`.
+- **No-CoT rule** — chain-of-thought leakage suppressed в финальном ответе.
+- **`max_tokens: 32768`** — fits long tool_call chains без truncation.
+- **API retry on 429/5xx** — 3 попытки, exponential backoff.
+- **Conversation pruning** — старые сообщения подрезаются под token budget.
 
 ---
 
 ## Сценарии использования
 
-### Создание анимации с нуля
+### Hard expression logic
+> "Сделай счётчик от 0 до 100 за 2 секунды с easing — не linear"
+
+```
+Math.round(ease(time, 0, 2, 0, 100)).toString()
+```
+
+### Linked parameters
+> "Привяжи Opacity текстового слоя к Scale shape-слоя так, чтобы при scale 100% opacity была 100%, при scale 0% — 0%"
+
+`apply_expression` с `linear(thisComp.layer("Shape").transform.scale[0], 0, 100, 0, 100)`.
+
+### Animation from scratch
 > "Создай синий фон, белый текст HELLO WORLD с анимацией появления слева и fade-in, добавь тень"
 
-Агент создаёт слои, добавляет keyframes с easing, применяет эффект Drop Shadow.
+Агент создаёт слои, добавляет keyframes с easing, применяет эффект Drop Shadow через `property_name`.
 
 ### Shape graphics
 > "Создай красный круг диаметром 150px и анимируй scale от 0 до 100% с overshoot"
 
-Shape layer с ellipse + scale keyframes.
+`create_layer(shape)` + `add_shape_ellipse` + scale keyframes с custom easing.
 
-### 3D сцена
+### 3D scene
 > "Создай 3 слоя на разной глубине и камеру с depth of field"
 
-3D layers + camera + Z позиции.
+3D layers + camera + Z-позиции + DOF.
 
-### Expressions
+### Quick wiggle
 > "Добавь wiggle(3, 25) к позиции выделенных слоёв"
 
 Или через кнопку **Wiggle** в Quick Actions.
 
-### Маски
-> "Сделай reveal: текст появляется через расширяющуюся маску"
+### Masks
+> "Сделай reveal: текст появляется через расширяющуюся маску слева направо"
 
-Mask + animated expansion keyframes.
-
-### Превью
-> "Покажи как выглядит композиция"
-
-`capture_comp_frame` → inline-изображение в чате.
+`add_mask` + animated `Masks>Mask 1>Mask Expansion`.
 
 ---
 
@@ -90,7 +113,6 @@ Mask + animated expansion keyframes.
 
 ### 1. Разместить расширение
 
-Скопировать проект в:
 ```
 ~/Library/Application Support/Adobe/CEP/extensions/Extensions LLM Chat
 ```
@@ -102,22 +124,21 @@ curl -sL "https://raw.githubusercontent.com/Adobe-CEP/CEP-Resources/master/CEP_1
   -o "$HOME/Library/Application Support/Adobe/CEP/extensions/Extensions LLM Chat/lib/CSInterface.js"
 ```
 
-Если 404, попробовать CEP_9.x. Или скачать вручную с [Adobe CEP-Resources](https://github.com/Adobe-CEP/CEP-Resources).
+Если 404, попробовать `CEP_9.x` / `CEP_8.x` или скачать вручную с [Adobe CEP-Resources](https://github.com/Adobe-CEP/CEP-Resources).
 
 ### 3. Настроить API-ключ
 
 ```bash
 cd ~/Library/Application\ Support/Adobe/CEP/extensions/Extensions\ LLM\ Chat
 cp config/secrets.local.example.js config/secrets.local.js
+# открыть secrets.local.js и вставить Bearer-токен Cloud.ru в apiKey
 ```
-
-Открыть `config/secrets.local.js`, вставить Bearer-токен Cloud.ru в поле `apiKey` (без префикса `Bearer `).
 
 Опционально: `cp config/runtime-config.example.js config/runtime-config.js` для переопределения `baseUrl` и моделей.
 
 ### 4. Разрешить CEP-расширения
 
-Может понадобиться включить загрузку неподписанных CEP-расширений (зависит от версии AE и macOS).
+Может понадобиться включить загрузку неподписанных CEP-расширений (зависит от версии AE и macOS). См. [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ### 5. Открыть панель
 
@@ -127,46 +148,45 @@ After Effects → меню **Window** → **Extensions** → **Extensions LLM Ch
 
 ## Структура проекта
 
-### Модули агента
+```
+Extensions LLM Chat/
+├── AGENTS.md                  # ← entry point для агентов и контрибьюторов
+├── README.md                  # ← этот файл (user-facing)
+├── index.html                 # панель root
+├── styles.css                 # стили
+├── main.js                    # UI, sessions, markdown, KB injection, quick actions, undo
+├── agentSystemPrompt.js       # модульный system prompt (CORE + lazy modules)
+├── agentToolLoop.js           # LLM ↔ tool execution cycle
+├── chatProvider.js            # Cloud.ru API + SSE
+├── hostBridge.js              # tool name → ExtendScript dispatch (с pipeline защит)
+├── toolRegistry.js            # 45 OpenAI-format tool definitions
+├── host/index.jsx             # ExtendScript: ~3200 lines, 49 функций
+├── CSXS/manifest.xml          # CEP manifest
+├── lib/CSInterface.js         # Adobe CSInterface (downloaded manually)
+├── config/                    # default + runtime + secrets (gitignored)
+├── knowledge-base/            # AE expression reference corpus
+└── docs/                      # детальная документация
+```
 
-| Файл | Назначение |
-|------|------------|
-| `agentSystemPrompt.js` | Системный промпт, документация инструментов |
-| `agentToolLoop.js` | Цикл LLM ↔ выполнение инструментов |
-| `chatProvider.js` | Cloud.ru API (SSE streaming) |
-| `hostBridge.js` | Tool name → ExtendScript mapping |
-| `toolRegistry.js` | 45 определений инструментов (OpenAI format) |
-| `host/index.jsx` | ExtendScript: все операции в After Effects |
-| `main.js` | UI, сессии, markdown, KB injection, quick actions, export/report |
+### Документация
 
-### Остальное
-
-| Путь | Назначение |
-|------|------------|
-| `index.html`, `styles.css` | Разметка и стили панели |
-| `CSXS/manifest.xml` | Манифест CEP |
-| `lib/CSInterface.js` | Adobe CSInterface (устанавливается вручную) |
-| `config/` | Конфиг и API-ключи |
-| `knowledge-base/` | Корпус документации AE expressions |
-| `docs/` | Документация |
-
----
-
-## Конфигурация
-
-Три файла в порядке загрузки:
-
-1. `config/example.config.js` — defaults (tracked)
-2. `config/runtime-config.js` — optional overrides (gitignored)
-3. `config/secrets.local.js` — API key (gitignored)
-
-Подробности: [docs/configuration.md](docs/configuration.md), [docs/secret-handling.md](docs/secret-handling.md).
+- **[AGENTS.md](AGENTS.md)** — HANDOFF для агентов
+- **[docs/README.md](docs/README.md)** — индекс всей документации
+- **[docs/capabilities-and-roadmap.md](docs/capabilities-and-roadmap.md)** — полный список 45 tools + ограничения + roadmap
+- **[docs/final-architecture.md](docs/final-architecture.md)** — runtime архитектура агентного цикла
+- **[docs/host-bridge-notes.md](docs/host-bridge-notes.md)** — детали panel ↔ AE моста
+- **[docs/configuration.md](docs/configuration.md)** — config fields, loading order
+- **[docs/troubleshooting.md](docs/troubleshooting.md)** — известные паттерны ошибок
+- **[docs/qa-test-plan.md](docs/qa-test-plan.md)** — smoke checklist
+- **[docs/release-checklist.md](docs/release-checklist.md)** — pre-release validation
 
 ---
 
 ## API-провайдер
 
-- **Cloud.ru Foundation Models** — chat/completions с tool calling и SSE streaming
+**Cloud.ru Foundation Models** — OpenAI-compatible chat/completions с tool calling + SSE streaming.
+
+Основная модель: `openai/gpt-oss-120b` (с автопрефиксом `cloudru/`). Fallback: `Qwen/Qwen3-Coder-Next`.
 
 ---
 
@@ -176,37 +196,26 @@ After Effects → меню **Window** → **Extensions** → **Extensions LLM Ch
 - Нет spatial bezier handles (только temporal easing)
 - Работает только с активной композицией
 - Freeform mask paths ограничены (простые формы работают)
-- Модели иногда путают anchor point / position (смягчается промптом)
+- `reorder_layer` падает для слоёв внутри precomp'ов
+- `capture_comp_frame` не принимает `time` параметр — захватывает только current playhead
+- Solid color нельзя поменять после создания (workaround: `add_effect("ADBE Fill")`)
 
 Полный список: [docs/capabilities-and-roadmap.md](docs/capabilities-and-roadmap.md).
 
 ---
 
-## Тестирование
+## Добавление нового инструмента
 
-- Шаблон тестов: [docs/manual-test.md](docs/manual-test.md)
-- Release checklist: [docs/release-checklist.md](docs/release-checklist.md)
+См. [AGENTS.md](AGENTS.md) — раздел "How to add a new tool". 5-step recipe со всеми touch points (`host/index.jsx` → `toolRegistry.js` → `hostBridge.js` → опционально `agentSystemPrompt.js` → `READ_ONLY_TOOLS`).
 
 ---
 
-## Добавление нового инструмента
+## Связанные расширения
 
-1. ExtendScript функция в `host/index.jsx`
-2. Tool definition в `toolRegistry.js`
-3. Case в `hostBridge.js`
-4. Обновить `agentSystemPrompt.js` если нужно
-5. Если read-only — добавить в `READ_ONLY_TOOLS` в `main.js`
-
-Подробнее: [docs/final-architecture.md](docs/final-architecture.md).
+`Cloud.ru Motion Presets` и `Cloud.ru Motion Export` — отдельные CEP-расширения в той же папке `~/Library/Application Support/Adobe/CEP/extensions/`. Они **не** часть этого проекта. Бренд-пресеты и HTML-экспорт были вынесены туда во время chat-only cleanup 2026-04-30.
 
 ---
 
 ## Troubleshooting
 
-[docs/troubleshooting.md](docs/troubleshooting.md)
-
----
-
-## Документация
-
-[docs/README.md](docs/README.md) — индекс всех документов.
+[docs/troubleshooting.md](docs/troubleshooting.md) — common error patterns с конкретными причинами и фиксами.

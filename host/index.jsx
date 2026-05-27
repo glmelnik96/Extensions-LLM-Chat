@@ -1210,11 +1210,45 @@ function extensionsLlmChat_createLayer (layerType, name, opts) {
       layer = comp.layers.addShape();
       layer.name = layerName;
     } else if (layerType === 'text') {
-      var textDoc = new TextDocument(typeof opts.text === 'string' ? opts.text : '');
-      if (typeof opts.fontSize === 'number') textDoc.fontSize = opts.fontSize;
-      if (typeof opts.font === 'string') textDoc.font = opts.font;
+      // AE quirk: TextDocument property setters fail on a standalone doc
+      // ("Unable to set value as it is not associated with a layer"). We must
+      // attach via addText() first, then read the live doc from the layer's
+      // sourceText property and apply font/fontSize via setValue.
+      var initialText = typeof opts.text === 'string' ? opts.text : '';
+      var textDoc = new TextDocument(initialText);
       layer = comp.layers.addText(textDoc);
       layer.name = layerName;
+
+      var hasFontPrefs = (typeof opts.fontSize === 'number') || (typeof opts.font === 'string');
+      if (hasFontPrefs) {
+        try {
+          var srcTextProp = layer.property('Source Text');
+          var liveDoc = srcTextProp.value;
+          var fontWarning = null;
+          if (typeof opts.fontSize === 'number') liveDoc.fontSize = opts.fontSize;
+          if (typeof opts.font === 'string' && opts.font.length) {
+            try {
+              liveDoc.font = opts.font;
+            } catch (eFont) {
+              fontWarning = 'Font "' + opts.font + '" could not be applied: ' + eFont.toString();
+            }
+          }
+          srcTextProp.setValue(liveDoc);
+          // Detect silent font fallback (AE replaces unknown fonts with a default
+          // without throwing). Compare requested font against what AE saved.
+          if (typeof opts.font === 'string' && opts.font.length && !fontWarning) {
+            try {
+              var savedFont = srcTextProp.value.font;
+              if (savedFont && savedFont !== opts.font) {
+                fontWarning = 'Font "' + opts.font + '" not found; AE substituted "' + savedFont + '". Pass exact PostScript name.';
+              }
+            } catch (eRead) {}
+          }
+          if (fontWarning) result.fontWarning = fontWarning;
+        } catch (eApply) {
+          result.fontWarning = 'Could not apply font/size: ' + eApply.toString();
+        }
+      }
     } else if (layerType === 'null') {
       layer = comp.layers.addNull(dur);
       layer.name = layerName;
@@ -1308,10 +1342,30 @@ function extensionsLlmChat_reorderLayer (layerIndex, layerId, newIndex) {
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
     if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
     if (typeof newIndex !== 'number' || newIndex < 1 || newIndex > ctx.comp.numLayers) {
-      result.message = 'Invalid new index: ' + newIndex; return resultToJson(result);
+      result.message = 'Invalid new index: ' + newIndex + '. Comp has ' + ctx.comp.numLayers + ' layers (valid range 1..' + ctx.comp.numLayers + ').';
+      return resultToJson(result);
+    }
+    if (layer.index === newIndex) {
+      // No-op short-circuit: prevents the agent from looping the same reorder.
+      result.ok = true;
+      result.message = 'Layer "' + layer.name + '" is already at index ' + newIndex + '. No reorder needed.';
+      result.noop = true;
+      return resultToJson(result);
     }
     _beginToolUndo('Agent: Reorder layer');
-    layer.moveTo(newIndex);
+    try {
+      layer.moveTo(newIndex);
+    } catch (eMove) {
+      _endToolUndo();
+      var msg = String(eMove && eMove.toString ? eMove.toString() : eMove);
+      // Decorate the cryptic AE error so the agent stops retrying immediately.
+      if (msg.indexOf('INDEXED_GROUP') !== -1) {
+        result.message = 'reorder_layer cannot move this layer: it appears to be inside a precomp or has a non-standard parent. Reorder only direct comp layers, or open the parent comp first. (AE: ' + msg + ')';
+      } else {
+        result.message = 'reorderLayer error: ' + msg;
+      }
+      return resultToJson(result);
+    }
     _endToolUndo();
     result.ok = true;
     result.message = 'Moved "' + layer.name + '" to index ' + newIndex + '.';
@@ -2391,8 +2445,12 @@ function extensionsLlmChat_addShapeRect (layerIndex, layerId, opts) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
-    if (!(layer instanceof ShapeLayer)) { result.message = 'Layer is not a shape layer.'; return resultToJson(result); }
+    if (!layer) { result.message = 'Layer not found. Hint: pass the layer_id returned by create_layer(layer_type:"shape"), or call get_detailed_comp_summary first.'; return resultToJson(result); }
+    if (!(layer instanceof ShapeLayer)) {
+      var t1 = _layerTypeString ? _layerTypeString(layer) : 'unknown';
+      result.message = 'Layer "' + layer.name + '" is type "' + t1 + '", but add_shape_rectangle requires a shape layer. Use create_layer(layer_type:"shape") first, then call add_shape_rectangle with the new layer_id.';
+      return resultToJson(result);
+    }
     if (!opts) opts = {};
 
     _beginToolUndo('Agent: Add rectangle');
@@ -2441,8 +2499,12 @@ function extensionsLlmChat_addShapeEllipse (layerIndex, layerId, opts) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
-    if (!(layer instanceof ShapeLayer)) { result.message = 'Layer is not a shape layer.'; return resultToJson(result); }
+    if (!layer) { result.message = 'Layer not found. Hint: pass the layer_id returned by create_layer(layer_type:"shape"), or call get_detailed_comp_summary to find the right index.'; return resultToJson(result); }
+    if (!(layer instanceof ShapeLayer)) {
+      var typeHint = _layerTypeString ? _layerTypeString(layer) : 'unknown';
+      result.message = 'Layer "' + layer.name + '" is type "' + typeHint + '", but add_shape_ellipse requires a shape layer. Solid/text/null/adjustment/camera/light layers cannot hold shape content. Use create_layer(layer_type:"shape") first, then call add_shape_ellipse with the new layer_id.';
+      return resultToJson(result);
+    }
     if (!opts) opts = {};
 
     _beginToolUndo('Agent: Add ellipse');
@@ -2489,8 +2551,12 @@ function extensionsLlmChat_addShapePath (layerIndex, layerId, opts) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
-    if (!(layer instanceof ShapeLayer)) { result.message = 'Layer is not a shape layer.'; return resultToJson(result); }
+    if (!layer) { result.message = 'Layer not found. Hint: pass the layer_id returned by create_layer(layer_type:"shape").'; return resultToJson(result); }
+    if (!(layer instanceof ShapeLayer)) {
+      var t2 = _layerTypeString ? _layerTypeString(layer) : 'unknown';
+      result.message = 'Layer "' + layer.name + '" is type "' + t2 + '", but add_shape_path requires a shape layer. Use create_layer(layer_type:"shape") first.';
+      return resultToJson(result);
+    }
     if (!opts) opts = {};
     if (!(opts.vertices instanceof Array) || opts.vertices.length < 2) {
       result.message = 'vertices must be an array of at least 2 [x,y] points.';

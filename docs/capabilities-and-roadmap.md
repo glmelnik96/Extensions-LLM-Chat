@@ -5,7 +5,7 @@
 ### Agent Tool System
 The extension works as an AI agent that can inspect, create, and modify After Effects compositions through tool calls. The LLM plans a sequence of actions, executes them one by one via ExtendScript, and reports results.
 
-**Supported tools (47):**
+**Supported tools (45):**
 
 #### Read (inspection)
 | Tool | Description |
@@ -118,15 +118,23 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 - **Tooltips** on all buttons explaining their function
 - Thinking indicator during agent execution with tool call counter
 
-### Reliability
-- **Expression error detection** — `apply_expression` checks `expressionError` after applying and returns the error to the agent for self-correction
-- **Static expression validation** — panel-side checks before sending to AE: `text.sourceText.value` warning, `\n` vs `\r`, unbalanced brackets/parens
-- **Knowledge base injection** — keyword-matched AE expression documentation injected into system prompt for accuracy
-- **API retry with backoff** — automatic retry on 429/5xx errors (3 attempts, exponential backoff)
-- **Streaming API** — SSE streaming with incremental tool_call argument accumulation
-- **Conversation pruning** — old messages automatically trimmed to fit within token budget
-- **Tool call history preservation** — agent remembers its prior tool calls and results across turns in a session
-- **Host script single-load** — ExtendScript loaded once at startup, not re-parsed on every tool call
+### Reliability (after MVP + iterations 1-4)
+- **Static expression validation (8 patterns)** — catches invalid `if/else` (not ternary), frozen `seedRandom(constant, true)`, `.value` on property refs, double-call `effect()()`, unbalanced parens/brackets/braces, `\n` vs `\r` in SourceText, `var ;` at end. Warnings attach to tool result so the model sees them on the next turn.
+- **Pre-call required-args validation** — `_validateRequiredArgs` in `hostBridge.js` catches Cloud.ru's tendency to emit `args:{}` for tools with required fields. Returns fast actionable error before the host runs.
+- **Anti-spam guard** — same `(toolName, args)` failing 3 times → 4th attempt blocked with `error_code: 'RETRY_BLOCKED'`. Stops spirals like the 137-call T10 we observed.
+- **Idempotency via `client_op_id`** — `create_layer`, `create_comp`, `add_effect`, `add_mask`, `add_marker` cache successful results. Retry with same id returns cached `{ deduplicated: true }`.
+- **Capability handshake** — at panel startup, `extensionsLlmChat_getCapabilities()` probes for 20 helpers/functions in host. Missing ones surface as a visible "Host script outdated" warning.
+- **Type hints for known property paths** — `Transform>Position` expects `[x,y]` or `[x,y,z]`; `Transform>Opacity` expects a number. Clear error before AE rejects.
+- **Harmony format normalize** — gpt-oss-120b decoder leaks like `apply_expression<|channel|>commentary` in `function.name` are stripped client-side.
+- **Modular system prompt** — CORE always-loaded (~2.8k tokens) + lazy modules (expressions, effects, 3d, masks, shapes) triggered by keyword. ~40% token savings on simple requests.
+- **Parallel read-only tools** — contiguous reads in one round execute via `Promise.all` (saves multiple round-trips).
+- **API retry with backoff** — 429/5xx → 3 attempts with exponential backoff.
+- **Streaming API** — SSE with incremental tool_call argument parsing.
+- **Conversation pruning** — old messages trimmed to fit token budget.
+- **Tool call history preservation** — full assistant+tool chain preserved across turns.
+- **Host script single-load** — ExtendScript loaded once at startup.
+- **Tool latency stats in Report** — per-tool count, errors, avg/min/max ms in the LLM-analyzed bug report.
+- **Persistent capture frames** — written to `~/AE-agent-captures/<date>/` (not `/tmp`), auto-pruned to newest 50.
 
 ### API Provider
 - **Cloud.ru Foundation Models** — OpenAI-compatible chat/completions with tool calling and SSE streaming
@@ -165,46 +173,51 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 
 ### Completed
 
-All phases from the initial roadmap have been implemented:
+**Pre-MVP phases (April 2026)** — initial agent build:
+- **Phase 0** — Technical debt cleanup (legacy modules removed)
+- **Phase 1-7** — Tool coverage (shapes, 3D, masks, markers, import, frame preview)
+- **Phase 8** — SSE streaming + incremental tool_call parsing
+- **Phase 9** — UX (quick actions, textarea auto-resize, streaming text preview)
+- **Phase 10** — Static expression validation
+- **Phase 11** — Bug fixes (temporal ease dimensions, silent catches, create_masks_from_text, no-comp warning)
 
-- **Phase 0** — Technical debt: dead code removed (former `legacy-archive/` and `prompt-library/` cleared from the chat-only build)
-- **Phase 1** — Shape content creation: `add_shape_rectangle`, `add_shape_ellipse`, `add_shape_path`
-- **Phase 2** — 3D/Camera/Light: `set_layer_3d`, `set_camera_properties`, `set_light_properties`
-- **Phase 3** — Frame preview: `capture_comp_frame` + inline image rendering in chat
-- **Phase 4** — Knowledge base injection: keyword-matched KB snippets injected into system prompt
-- **Phase 5** — Masks: `add_mask`, `set_mask_properties`, `get_mask_info`
-- **Phase 6** — Markers: `add_marker`, `get_markers`, `delete_marker`
-- **Phase 7** — Import/Project items: `list_project_items`, `import_file`, `add_item_to_comp`
-- **Phase 8** — Streaming API: SSE streaming in chatProvider.js with incremental tool_call parsing
-- **Phase 9** — UX: quick action buttons, textarea auto-resize, session metadata, streaming text preview
-- **Phase 10** — Agent intelligence: static expression validation before AE execution
-- **Phase 11** — Bug fixes: temporal ease dimension detection, silent catch reporting in masks/keyframes, create_masks_from_text tool, no-comp warning, system prompt limitations guidance
+**MVP cut (2026-04-30, commit `6da17c7`)** — chat-only architecture + 10 architectural improvements: modular system prompt, parallel read-only tools, idempotency via `client_op_id`, type hints in `_KNOWN_PATHS`, expanded `validateExpression`, validation warnings → tool result, capability handshake, persistent capture frames, tool latency stats, KB cleanup. See `.omc/plans/improvements-2026-04-30.md` for the detailed plan with verification criteria.
 
-### Future Improvements
+**Iteration 2 (2026-05-02)** — Fix A/B/C: text+font in `create_layer`, anti-spam guard, dynamic shape/reorder hints + prompt updates.
 
-**Spatial keyframe control**
-Set spatial bezier handles (roving keyframes, motion path curves). API exists but is fragile — deferred until stable approach found.
+**Iteration 3 (2026-05-12)** — Fix H/I: bumped `max_tokens` 4096→16384 (output truncation), strip harmony-format leak from `function.name`.
 
-**Persistent animation library**
-Save and recall animation patterns across sessions: "Save this as 'bounce reveal'" / "Apply 'bounce reveal' to layer 3".
+**Iteration 4 (2026-05-12)** — Fix J/K/L/M: anti-preview-fabrication rule, shape-tools require `layer_id`/`layer_index`, no-CoT rule, `max_tokens` 16384→32768.
 
-**Before/after comparison**
-Capture a frame before and after agent changes, show side-by-side in chat.
+Iter 2-4 are bundled for the next commit.
 
-**Batch mode**
-"Apply this animation to all text layers" — detect matching layers and batch-apply.
+### Future Improvements (only on user request)
 
-**Context persistence across sessions**
-Remember comp structure between sessions so the agent doesn't need to re-inspect every time.
+**Spatial keyframe control** — Spatial bezier handles (roving keyframes, motion path curves). API is fragile.
 
-**Compound tools (macros)**
-Frequent patterns in one tool call: `create_animated_layer(type, name, animation, params)` — create + position + animate in one step.
+**Persistent animation library** — Save and recall animation patterns: "Save this as 'bounce reveal'" / "Apply 'bounce reveal'".
 
-**Session export/import**
-Export sessions as JSON files, import them back.
+**Before/after comparison** — Capture before + after, show side-by-side. Currently disallowed by Fix J (anti-fabrication).
 
-**Trim Paths / Merge Paths / Repeater**
-Shape modifiers via the same `addProperty()` API — natural extension of Phase 1.
+**Batch mode** — "Apply this animation to all text layers" — detect matching layers and batch-apply.
+
+**Conversation summarization** — Summarize old messages instead of dropping them in `pruneConversation`.
+
+**Structured error codes** — Replace freeform `message` with `{ code, message, recovery }` across all 42 try/catch sites.
+
+**Single source of truth for tools** — Generate registry + bridge cases + host stubs from one `tools.json`.
+
+**TypeScript / strict JSDoc** — Catch typos in `els.xxx` and tool field references.
+
+**Plan-then-execute UI mode** — Outline plan as plain text before executing — opt-in for complex requests.
+
+**Unit tests** — Pure JS functions (`validateExpression`, `pruneConversation`, `parseModelId`, KB matching) testable in Node.
+
+**Editable quick actions / saved prompts library** — Pure UX.
+
+**Trim Paths / Merge Paths / Repeater** — Shape modifiers via `addProperty()`.
+
+See **[../AGENTS.md](../AGENTS.md)** for iteration history and where to leave notes for the next agent working on these.
 
 ---
 

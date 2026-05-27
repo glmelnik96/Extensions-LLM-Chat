@@ -144,6 +144,21 @@
         if (!isStr(args.property_name) && typeof args.property_index !== 'number') return 'set_effect_property: provide `property_name` (preferred, e.g. "Color", "Distance") or `property_index`.'
         if (args.value === undefined) return 'set_effect_property: missing required `value`.'
         return null
+      // Fix K (iter 4): shape-tools must reference a layer. Host fallback
+      // to selected layer was creating silent "hidden" successes when args
+      // came in completely empty (iter 3 retest T10 #8 #9 had `args:{}`
+      // and silently added an ellipse with default 200x200 size to whatever
+      // happened to be selected).
+      case 'add_shape_ellipse':
+      case 'add_shape_rectangle':
+      case 'add_shape_path':
+        if (typeof args.layer_id !== 'number' && typeof args.layer_index !== 'number') {
+          return toolName + ': missing required `layer_id` or `layer_index`. After create_layer(layer_type:"shape") returns {layerId}, pass that exact id. Don\'t rely on selection-fallback for shape content — it leads to silent insertion into the wrong layer.'
+        }
+        if (toolName === 'add_shape_path' && !(args.vertices && args.vertices.length >= 2)) {
+          return 'add_shape_path: missing required `vertices` (array of at least 2 [x,y] points).'
+        }
+        return null
     }
     return null
   }
@@ -172,9 +187,82 @@
     _idempotencyCache = {}
   }
 
+  // ── Anti-spam guard (Fix B) ──────────────────────────────────────────
+  // Track sequential failures per (toolName, args-fingerprint). When the
+  // same call has failed 3+ times in a row with the same arguments, the
+  // 4th attempt is rejected client-side with a clear stop signal. The
+  // counter is reset whenever a successful tool call is observed (so
+  // legitimate iteration on different keyframes / properties never trips
+  // the guard) and at the start of each new agent run.
+  var SPAM_THRESHOLD = 3
+  var _failStreak = {}            // key → { count, lastError }
+  var _lastSuccessfulKey = null   // any success resets streaks for that key
+
+  function _spamKey (toolName, args) {
+    try {
+      // Stable JSON: rely on JSON.stringify (host objects are POJOs from JSON.parse).
+      return toolName + '|' + JSON.stringify(args || {})
+    } catch (_) {
+      return toolName + '|<unstringifiable-args>'
+    }
+  }
+
+  function _resetSpamState () {
+    _failStreak = {}
+    _lastSuccessfulKey = null
+  }
+
+  function _checkSpamGuard (toolName, args) {
+    var key = _spamKey(toolName, args)
+    var entry = _failStreak[key]
+    if (entry && entry.count >= SPAM_THRESHOLD) {
+      return {
+        ok: false,
+        message: 'Tool ' + toolName + ' called ' + (entry.count + 1) + ' times with the same arguments and the same error: "' + (entry.lastError || 'unknown') + '". Stop retrying — investigate (e.g. call get_detailed_comp_summary to refresh layer state, change layer_id, or ask the user for guidance). This call was blocked by the anti-spam guard.',
+        error_code: 'RETRY_BLOCKED',
+        previousFailures: entry.count
+      }
+    }
+    return null
+  }
+
+  function _recordToolOutcome (toolName, args, hostResult) {
+    var key = _spamKey(toolName, args)
+    var ok = hostResult && hostResult.ok === true
+    if (ok) {
+      // Successful call clears streak for THIS key only (other failing keys
+      // remain — the guard is per-call-shape, not global).
+      delete _failStreak[key]
+      _lastSuccessfulKey = key
+      return
+    }
+    var entry = _failStreak[key] || { count: 0, lastError: '' }
+    entry.count++
+    entry.lastError = (hostResult && hostResult.message) ? String(hostResult.message).substr(0, 160) : 'unknown error'
+    _failStreak[key] = entry
+  }
+
   function executeToolCall (toolName, args) {
     if (!args) args = {}
     var call = null
+
+    // Fix I (iteration 3): strip gpt-oss-120b "harmony" format leak.
+    // The model occasionally emits a tool name like
+    // "apply_expression<|channel|>commentary" — channel separator
+    // tokens leak into function.name on long chains. Trim everything
+    // from "<|" onward and from any trailing whitespace.
+    if (typeof toolName === 'string' && toolName.indexOf('<|') !== -1) {
+      toolName = toolName.split('<|')[0].replace(/\s+$/, '')
+    }
+
+    // ── Anti-spam guard (Fix B): block 4th attempt of identical failing call.
+    // Runs BEFORE idempotency so it catches the case of model retrying with
+    // same op_id but call somehow not cached (e.g. failed every time).
+    var spamBlock = _checkSpamGuard(toolName, args)
+    if (spamBlock) {
+      // Don't increment the counter for the block itself — leave it at threshold.
+      return Promise.resolve(spamBlock)
+    }
 
     // ── Idempotency check: if this tool supports client_op_id and we've
     // already seen this op in the current session, return the cached result.
@@ -197,7 +285,9 @@
     // sometimes emits {} anyway.
     var validationError = _validateRequiredArgs(toolName, args)
     if (validationError) {
-      return Promise.resolve({ ok: false, message: validationError })
+      var preValErr = { ok: false, message: validationError }
+      _recordToolOutcome(toolName, args, preValErr)
+      return Promise.resolve(preValErr)
     }
 
     switch (toolName) {
@@ -622,6 +712,16 @@
         return res
       })
     }
+    // Track success/failure for the anti-spam guard. Wrap as the FINAL link
+    // in the chain so cached idempotent ok-results also count as successes
+    // (they reset the streak for that key).
+    hostPromise = hostPromise.then(function (res) {
+      _recordToolOutcome(toolName, args, res)
+      return res
+    }, function (err) {
+      _recordToolOutcome(toolName, args, { ok: false, message: (err && err.message) || String(err) })
+      throw err
+    })
     return hostPromise
   }
 
@@ -635,7 +735,11 @@
       // Allow the panel to clear the idempotency cache when the user
       // intentionally starts fresh (Clear button) — otherwise repeated
       // op_ids from a new session would surface stale results.
-      clearIdempotencyCache: _clearIdempotencyCache
+      clearIdempotencyCache: _clearIdempotencyCache,
+      // Reset the anti-spam streak counters at the start of each new agent
+      // run so a previous run's blocked tool can be re-tried. Called from
+      // agentToolLoop.runAgentLoop().
+      resetSpamGuard: _resetSpamState
     }
   }
 })()

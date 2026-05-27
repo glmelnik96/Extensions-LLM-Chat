@@ -1,93 +1,179 @@
 # Troubleshooting
 
-Common issues with the AE Motion Agent panel.
+Common issues and known error patterns in AE Motion Agent.
 
 ---
 
-## Panel won't open or is blank
+## Panel doesn't open or blank
 
-- **CEP version**: Ensure AE version matches the manifest (`CSXS/manifest.xml`).
-- **Script load order**: Config scripts must load before `main.js` (see `index.html`). If any script fails, panel may be blank — check CEP DevTools (Debug → Show Developer Tools).
-- **CSInterface.js missing**: Download and place in `lib/` — see README installation instructions.
-
----
-
-## "Set API key in config/secrets.local.js"
-
-- **Cause**: No API key found.
-- **Fix**: `cp config/secrets.local.example.js config/secrets.local.js`, paste your Cloud.ru Bearer token (no `Bearer ` prefix). See [secret-handling.md](secret-handling.md).
+- **CEP version mismatch**: AE version must match `CSXS/manifest.xml`. AE 2026 is currently expected.
+- **Script load order**: All config + library + module scripts must load before `main.js` (see order in `index.html`). One failing script blanks the panel — open CEP DevTools (`http://localhost:8088` if `.debug` is present in the panel folder).
+- **CSInterface.js missing**: Download manually to `lib/CSInterface.js` — see README install instructions.
 
 ---
 
-## Send does nothing
+## Status bar says "Set API key in config/secrets.local.js"
 
-- **No API key**: Send is blocked when key is empty — status bar shows config message.
-- **No session**: Create one with the New button.
-- **In flight**: While a request is running, Send is disabled. Wait or click Stop.
+```
+cp config/secrets.local.example.js config/secrets.local.js
+# Edit secrets.local.js, paste Cloud.ru Bearer token (no "Bearer " prefix)
+```
+
+See [secret-handling.md](secret-handling.md).
+
+---
+
+## Send is disabled
+
+- **No API key** — status bar shows the config message.
+- **No active composition** — system message in chat asks to open one.
+- **Request in flight** — Send is disabled until current request finishes. Click Stop to cancel.
 
 ---
 
 ## "Error contacting cloud model"
 
-- **Network**: Check internet and firewall. Ensure API base URL is reachable.
-- **HTTP errors**: 4xx/5xx — verify `baseUrl` and `apiKey` in config. See [configuration.md](configuration.md).
-- **Malformed response**: API returned non-JSON or missing `choices`. Check API status.
-- **Retry**: The panel retries automatically on 429/5xx (3 attempts, exponential backoff).
+- **Network / firewall**: check `baseUrl` reachable.
+- **HTTP 4xx/5xx**: verify `baseUrl` and `apiKey`. See [configuration.md](configuration.md).
+- **Automatic retry**: panel retries on 429/5xx with exponential backoff (3 attempts).
+- **Status spinner stuck**: model may be timing out. Bump `cloudChatTimeoutMs` or stop and retry.
 
 ---
 
-## Agent tool errors
+## Tool errors: known patterns and what they mean
 
-- Read the **tool call card** in chat — it shows the tool name, args, and error message.
-- **Expression errors**: If `apply_expression` returns `ok: false` with `expressionError`, the agent should auto-retry with a corrected expression.
-- **Wrong layer index**: Agent may reference a deleted or wrong layer. Ask it to re-inspect with `get_detailed_comp_summary`.
-- **Property path errors**: "Can't access" usually means wrong property path. Agent should check `get_layer_properties` first.
+These are surfaced in the Tool Call Card and in `~/Desktop/ae-agent-errors-*.json` when you press the Errors button.
+
+### `RETRY_BLOCKED` — anti-spam guard fired
+
+```
+Tool reorder_layer called 4 times with the same arguments and the same error...
+```
+
+**Cause:** the same tool call with identical args failed 3 times in a row. The 4th attempt is blocked client-side to prevent spirals.
+
+**Fix:** call `get_detailed_comp_summary` to refresh layer state, change `layer_id`, or ask the user. The agent should already do this — if not, the system prompt or model context is missing the guidance.
+
+### `Layer "X" is type "solid", but add_shape_ellipse requires a shape layer`
+
+**Cause:** trying to add shape content (ellipse / rectangle / path) to a non-shape layer.
+
+**Fix:** the agent must call `create_layer(layer_type:"shape")` first, then pass the returned `layerId` to `add_shape_*`. The host already includes this hint in the error.
+
+### `... cannot move this layer: it appears to be inside a precomp ...`
+
+**Cause:** `reorder_layer` on a layer inside a nested composition. AE's `layer.moveTo()` requires the layer's parent to be an `INDEXED_GROUP` — precomps don't satisfy this.
+
+**Fix:** open the parent comp first, or skip the reorder.
+
+### `Unable to set value as it is not associated with a layer` (rare after iter 2)
+
+**Cause:** AE quirk — setting `font` or `fontSize` on a standalone `TextDocument` before attaching it via `addText()`.
+
+**Fix:** should not happen after iter 2 Fix A. If it appears, check `extensionsLlmChat_createLayer` for the text branch — must call `addText(doc)` first, then mutate via `sourceText.value` + `setValue(doc)`.
+
+### `Transform>Position expects [x, y] for 2D or [x, y, z] for 3D layers`
+
+**Cause:** wrong value shape for a known property path. Type hints catch this before AE rejects it.
+
+**Fix:** the agent should retry with the correct array shape — the error message includes both formats.
+
+### `Unknown tool: apply_expression<|channel|>commentary`
+
+**Cause:** gpt-oss-120b harmony format leak into `function.name`.
+
+**Fix:** should not happen after iter 3 Fix I — `executeToolCall` strips `<|...|>` suffixes. If it appears, check `hostBridge.js` for the normalizer at the top of `executeToolCall`.
+
+### `add_shape_ellipse: missing required layer_id or layer_index`
+
+**Cause:** model emitted empty `args:{}` for a shape-tool. Without Fix K, host fallback would silently insert into the selected layer.
+
+**Fix:** the model should retry with `layer_id` from `create_layer(layer_type:"shape")`. Error message guides it.
+
+### `fontWarning: Font "Inter-Bold" not found; AE substituted "MyriadPro-Regular"`
+
+**Cause:** requested PostScript font name doesn't exist on the user's system.
+
+**Fix:** **not an error** — operation succeeds with the substituted font. The agent may notify the user. Make sure the font name is the PostScript name (e.g. `Inter-Regular`, not `Inter Regular`).
+
+### `validationWarnings` present in tool result
+
+```json
+{ "ok": true, "validationWarnings": ["WARN: `if (cond) v1 else v2` is invalid as a JS expression..."] }
+```
+
+**Cause:** static `validateExpression` caught a likely-bad pattern in `apply_expression` / `apply_expression_batch` args. The call still went through (AE may be lenient), but the warning indicates a bug.
+
+**Fix:** the agent should rewrite the expression per the warning text and retry.
 
 ---
 
 ## Undo doesn't revert everything
 
-- **Batch undo**: The Undo button sends N × Cmd+Z where N = number of mutating tool calls. If AE's undo history is shorter than expected (e.g., due to AE's own undo limit), not all actions may revert.
-- **Read-only tools** (`get_detailed_comp_summary`, `get_host_context`, etc.) are not counted as mutating.
+- **Batch undo** sends `N × Cmd+Z` where N = number of mutating tool calls in the last request.
+- If AE's undo history is shorter than N (long sessions, low Edit > Preferences > General > Levels of Undo), only the last K actions are undone.
+- **Read-only tools** (`get_*`, `list_*`, `capture_*`) are not counted as mutating.
 
 ---
 
-## Streaming not working
+## Captures: where are they?
 
-- SSE streaming requires Cloud.ru provider.
-- If text doesn't appear incrementally, the `onTextChunk` callback may not be firing — check DevTools console.
+Persistent capture frames (iter 1 #12) are written to `~/AE-agent-captures/<YYYY-MM-DD>/frame-<timestamp>.png`. Auto-pruned to the newest 50 across all date folders.
+
+If the chat shows broken image icons (Markdown `![preview](file:///...)` with no PNG behind it), the model fabricated the link without calling `capture_comp_frame`. This should not happen after iter 4 Fix J. If it does — check `CORE_PREVIEW` in `agentSystemPrompt.js` for the anti-fabrication rule.
+
+---
+
+## Streaming not appearing
+
+- SSE streaming is enabled by default in `chatProvider.invokeCloudRuStreaming`.
+- If text doesn't appear incrementally, the `onTextChunk` callback may not be wired — check `main.js handleSend` → `runAgentLoop({ onTextChunk })`.
+- DevTools console should show no fetch errors during streaming.
 
 ---
 
 ## Export / Report fails
 
-- **Export**: Uses Node.js `require('fs')` — requires CEP mixed-context mode (`--mixed-context` in manifest).
-- **Report**: Requires working Cloud.ru API key (sends session logs to LLM for analysis). Check network and key.
-- **File path**: Both save to `~/Desktop/`. Ensure Desktop directory exists and is writable.
+- Both use Node `require('fs')` — needs `--enable-nodejs` + `--mixed-context` in CEP manifest.
+- **Report** sends session logs to the Cloud.ru model for analysis — requires a working API key.
+- Both write to `~/Desktop/`. Ensure Desktop exists and is writable.
 
 ---
 
-## Screen capture issues
+## Session lost after panel reload
 
-- **Permission**: macOS requires Screen Recording permission for After Effects. System Settings → Privacy & Security → Screen Recording → enable AE.
-- **Comp area capture**: May need Automation permission for System Events.
-- **Timeout**: Increase `captureTimeoutMs` in config for large displays.
-- **Node unavailable**: Capture requires `--enable-nodejs` and `--mixed-context` in manifest.
+- Sessions live in `localStorage` under key `ae-motion-agent-state`.
+- Clearing CEP cache or changing the panel's extension ID resets the storage.
+- Use **Export** button to back up sessions before any clear.
 
 ---
 
-## Session lost after reload
+## Host script "outdated" warning
 
-- Sessions are stored in `localStorage` key `ae-motion-agent-state`. Clearing browser data or changing the CEP origin loses them.
-- Use **Export** button to back up sessions before clearing.
+```
+[host] Host script outdated — missing _getTemporalEaseDims, resultToJson
+```
+
+**Cause:** capability handshake (iter 1 #10) at panel startup probed the host script and found missing helpers. Usually means a partial refactor left helpers behind.
+
+**Fix:** check `host/index.jsx` for the function. The probe list lives in `extensionsLlmChat_getCapabilities` (last function in the file). If a helper was intentionally removed, also remove its name from the probe list.
 
 ---
 
 ## Debug logging
 
 In CEP DevTools console:
-```js
-console.log(JSON.stringify(JSON.parse(localStorage.getItem('ae-motion-agent-state')), null, 2))
-```
 
-This dumps the full session state for inspection.
+```js
+// Full session state:
+console.log(JSON.stringify(JSON.parse(localStorage.getItem('ae-motion-agent-state')), null, 2))
+
+// Composed system prompt for a given message:
+window.AGENT_SYSTEM_PROMPT_BUILDER.build('your prompt here').prompt
+
+// Manually clear idempotency cache:
+window.HOST_BRIDGE.clearIdempotencyCache()
+
+// Manually reset anti-spam streaks:
+window.HOST_BRIDGE.resetSpamGuard()
+```

@@ -38,6 +38,12 @@
   function runAgentLoop (options) {
     if (!options) throw new Error('runAgentLoop: options required')
 
+    // Reset anti-spam streak counters at the start of every user request so
+    // a previous run's blocked call doesn't pre-block the next run.
+    if (window.HOST_BRIDGE && typeof window.HOST_BRIDGE.resetSpamGuard === 'function') {
+      try { window.HOST_BRIDGE.resetSpamGuard() } catch (_) {}
+    }
+
     var modelId = options.modelId
     var systemPrompt = options.systemPrompt || ''
     var conversationMessages = options.messages || []
@@ -81,7 +87,12 @@
       var invokeOptions = {
         tools: tools.length > 0 ? tools : undefined,
         tool_choice: tools.length > 0 ? 'auto' : undefined,
-        max_tokens: 4096,
+        // Fix H (iter 3): bumped 4096→16384 because gpt-oss-120b was
+        // truncating tool_calls JSON mid-stream (T6 stopped at 2/4, T9 at 2/8).
+        // Fix M (iter 4): bumped 16384→32768. Iter-3 retest showed T9
+        // STILL truncated on the 8th set_property_value after Fix H;
+        // 32k is the Cloud.ru upper bound for this model.
+        max_tokens: 32768,
         temperature: temperature,
         abortHandle: abortHandle,
         onTextChunk: onTextChunk
