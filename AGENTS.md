@@ -104,9 +104,9 @@ These are documented thoroughly in `~/.claude/projects/.../memory/feedback_llm_f
 ## First moves for a new agent
 
 1. **Read this file** (you are doing it). Skim `README.md` for user-facing setup.
-2. **Read your memory** — Claude Code has 5 memory files under `~/.claude/projects/-Users-user-Library-Application-Support-Adobe-CEP-extensions-Extensions-LLM-Chat/memory/`:
+2. **Read your memory** — Claude Code has 5 memory files under `~/.claude/projects/<project>/memory/`:
    - `MEMORY.md` (index)
-   - `user_profile.md` (motion designer, Windows + Mac + Android)
+   - `user_profile.md` (motion designer; Windows + Mac + Android)
    - `project_direction.md` (chat-only, post-MVP, patches only)
    - `feedback_llm_failure_modes.md` (Cloud.ru tool-call quirks, mitigations) ← **most useful**
    - `feedback_refactor_lessons.md` (host/index.jsx helper-deletion pitfalls)
