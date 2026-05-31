@@ -16,8 +16,9 @@
 
       /** ── Agent mode settings ─────────────────────────────────────────── */
 
-      /** Maximum tool-call rounds per agent request. */
-      agentMaxSteps: 150,
+      /** Maximum tool-call rounds per agent request. Caps runaway loops/cost;
+       *  observed worst case settled at ~27 rounds, so 60 leaves headroom. */
+      agentMaxSteps: 60,
 
       /** Temperature for agent tool-use calls (lower = more precise tool usage). */
       agentTemperature: 0.3,

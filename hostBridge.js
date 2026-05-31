@@ -54,29 +54,47 @@
    * Execute a host function and return a promise that resolves with the parsed JSON result.
    * The host script is loaded once on first call, then only the function call is sent.
    */
+  // Per-call ceiling for a single ExtendScript evaluation. CSInterface.evalScript
+  // gives no guarantee its callback ever fires (a host-side hang would otherwise
+  // leave the agent loop pending forever). On timeout we reject so the loop
+  // surfaces the failure instead of stalling.
+  var HOST_EVAL_TIMEOUT_MS = 30000
+
   function evalHostFunction (functionCall) {
     return ensureHostScriptLoaded().then(function () {
       return new Promise(function (resolve, reject) {
+        var settled = false
+        var timer = setTimeout(function () {
+          if (settled) return
+          settled = true
+          reject(new Error('Host call timed out after ' + (HOST_EVAL_TIMEOUT_MS / 1000) + 's: ' + functionCall))
+        }, HOST_EVAL_TIMEOUT_MS)
+        function done (fn, value) {
+          if (settled) return
+          settled = true
+          clearTimeout(timer)
+          fn(value)
+        }
         try {
           var cs = new CSInterface()
           cs.evalScript(functionCall, function (resultStr) {
             if (!resultStr || resultStr === 'undefined' || resultStr === 'null') {
-              reject(new Error('Host returned empty result for: ' + functionCall))
+              done(reject, new Error('Host returned empty result for: ' + functionCall))
               return
             }
             try {
               if (resultStr.indexOf('EvalScript error') === 0) {
-                reject(new Error(resultStr))
+                done(reject, new Error(resultStr))
                 return
               }
               var parsed = JSON.parse(resultStr)
-              resolve(parsed)
+              done(resolve, parsed)
             } catch (parseErr) {
-              resolve({ ok: true, message: resultStr, raw: resultStr })
+              done(resolve, { ok: true, message: resultStr, raw: resultStr })
             }
           })
         } catch (e) {
-          reject(new Error('evalHostFunction error: ' + e.message))
+          done(reject, new Error('evalHostFunction error: ' + e.message))
         }
       })
     })
@@ -88,27 +106,9 @@
    * Serialize a JS value as an ExtendScript literal (inline in script string).
    * This avoids needing JSON.parse on the ExtendScript side.
    */
-  function toESLiteral (val) {
-    if (val === null || val === undefined) return 'null'
-    if (typeof val === 'string') return JSON.stringify(val)
-    if (typeof val === 'number') return String(val)
-    if (typeof val === 'boolean') return val ? 'true' : 'false'
-    if (Array.isArray(val)) {
-      var items = []
-      for (var i = 0; i < val.length; i++) items.push(toESLiteral(val[i]))
-      return '[' + items.join(',') + ']'
-    }
-    if (typeof val === 'object') {
-      var parts = []
-      for (var k in val) {
-        if (val.hasOwnProperty(k)) {
-          parts.push(JSON.stringify(k) + ':' + toESLiteral(val[k]))
-        }
-      }
-      return '{' + parts.join(',') + '}'
-    }
-    return String(val)
-  }
+  // Delegates to the extracted, unit-tested serializer in lib/pure/esLiteral.js
+  // (single source of truth, shared with the test harness).
+  var toESLiteral = (window.PURE_ES && window.PURE_ES.toESLiteral)
 
   /**
    * Validate that critical tool calls include their required arguments.
@@ -178,6 +178,12 @@
     add_marker: 1
   }
   var _idempotencyCache = {}
+  // Cached create-results expire after this window. Idempotency exists to dedup
+  // retries after a transient network error (which happen within seconds); a
+  // short TTL preserves that while preventing a stale "success" from being
+  // replayed minutes later after the user has manually deleted/renamed the
+  // object in AE. Entry shape: { result, ts }.
+  var IDEMPOTENCY_TTL_MS = 60000
 
   function _idempotencyKey (toolName, opId) {
     return toolName + '|' + String(opId)
@@ -269,13 +275,19 @@
     if (IDEMPOTENT_TOOLS[toolName] && typeof args.client_op_id === 'string' && args.client_op_id.length > 0) {
       var cacheKey = _idempotencyKey(toolName, args.client_op_id)
       if (_idempotencyCache.hasOwnProperty(cacheKey)) {
-        var cached = _idempotencyCache[cacheKey]
-        // Return a shallow clone with a flag so the agent can tell.
-        var clone = {}
-        for (var k in cached) { if (cached.hasOwnProperty(k)) clone[k] = cached[k] }
-        clone.deduplicated = true
-        clone.message = (clone.message || '') + ' [returned from idempotency cache, op_id=' + args.client_op_id + ']'
-        return Promise.resolve(clone)
+        var entry = _idempotencyCache[cacheKey]
+        if (Date.now() - entry.ts > IDEMPOTENCY_TTL_MS) {
+          // Stale — drop it and fall through to a fresh host call.
+          delete _idempotencyCache[cacheKey]
+        } else {
+          var cached = entry.result
+          // Return a shallow clone with a flag so the agent can tell.
+          var clone = {}
+          for (var k in cached) { if (cached.hasOwnProperty(k)) clone[k] = cached[k] }
+          clone.deduplicated = true
+          clone.message = (clone.message || '') + ' [returned from idempotency cache, op_id=' + args.client_op_id + ']'
+          return Promise.resolve(clone)
+        }
       }
     }
 
@@ -708,7 +720,7 @@
     if (IDEMPOTENT_TOOLS[toolName] && typeof args.client_op_id === 'string' && args.client_op_id.length > 0) {
       var cKey = _idempotencyKey(toolName, args.client_op_id)
       hostPromise = hostPromise.then(function (res) {
-        if (res && res.ok === true) _idempotencyCache[cKey] = res
+        if (res && res.ok === true) _idempotencyCache[cKey] = { result: res, ts: Date.now() }
         return res
       })
     }

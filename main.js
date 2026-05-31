@@ -26,7 +26,7 @@
   // ── Constants ──────────────────────────────────────────────────────────
   var STORAGE_KEY = 'ae-motion-agent-state'
   var DEFAULT_MODEL = 'cloudru/Qwen/Qwen3-Coder-Next'
-  var DEFAULT_AGENT_MAX_STEPS = 150
+  var DEFAULT_AGENT_MAX_STEPS = 60
 
   // ── State ──────────────────────────────────────────────────────────────
   var state = {
@@ -70,21 +70,48 @@
   }
 
   // ── Persistence ────────────────────────────────────────────────────────
+  function isQuotaError (e) {
+    if (!e) return false
+    return e.name === 'QuotaExceededError' ||
+      e.name === 'NS_ERROR_DOM_QUOTA_REACHED' ||
+      e.code === 22 || e.code === 1014 ||
+      /quota/i.test(String(e.message || ''))
+  }
+
+  function buildPersistData () {
+    return {
+      session: state.session ? {
+        id: state.session.id,
+        title: state.session.title,
+        createdAt: state.session.createdAt,
+        updatedAt: state.session.updatedAt,
+        model: state.session.model,
+        messages: state.session.messages
+      } : null
+    }
+  }
+
   function persistState () {
     try {
-      var data = {
-        session: state.session ? {
-          id: state.session.id,
-          title: state.session.title,
-          createdAt: state.session.createdAt,
-          updatedAt: state.session.updatedAt,
-          model: state.session.model,
-          messages: state.session.messages
-        } : null
-      }
-      localStorage.setItem(STORAGE_KEY, JSON.stringify(data))
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(buildPersistData()))
+      return
     } catch (e) {
-      console.warn('persistState error:', e)
+      if (!isQuotaError(e) || !state.session || !state.session.messages || state.session.messages.length <= 2) {
+        console.warn('persistState error:', e)
+        return
+      }
+    }
+    // Quota exceeded: drop the oldest half of the messages (keeping the most
+    // recent context) and retry once so the session isn't silently lost.
+    var msgs = state.session.messages
+    var dropCount = Math.floor(msgs.length / 2)
+    state.session.messages = msgs.slice(dropCount)
+    try {
+      localStorage.setItem(STORAGE_KEY, JSON.stringify(buildPersistData()))
+      setStatus('Session storage full — dropped ' + dropCount + ' oldest message(s) to save.')
+    } catch (e2) {
+      console.warn('persistState retry failed after pruning:', e2)
+      setStatus('Session too large to save — recent changes may not persist.')
     }
   }
 
@@ -338,45 +365,16 @@
   }
 
   // ── Minimal markdown → HTML ─────────────────────────────────────────────
+  // Delegates to the extracted, unit-tested renderer in lib/pure/markdown.js
+  // (single source of truth; hardened against attribute-injection XSS).
   function renderMarkdown (text) {
+    if (window.PURE_MARKDOWN && typeof window.PURE_MARKDOWN.renderMarkdown === 'function') {
+      return window.PURE_MARKDOWN.renderMarkdown(text)
+    }
+    // Defensive fallback: if the pure module failed to load, escape everything
+    // rather than risk emitting unescaped LLM output into innerHTML.
     if (!text) return ''
-    var s = text.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;')
-
-    // Images
-    s = s.replace(/!\[([^\]]*)\]\(([^)]+)\)/g, function (_, alt, src) {
-      var safeSrc = src.replace(/"/g, '&quot;')
-      return '<img class="md-preview-img" src="' + safeSrc + '" alt="' + alt + '" />'
-    })
-
-    // Code blocks
-    s = s.replace(/```(\w*)\n([\s\S]*?)```/g, function (_, lang, code) {
-      return '<pre class="md-code-block"><code>' + code.replace(/\n$/, '') + '</code></pre>'
-    })
-
-    // Inline code
-    s = s.replace(/`([^`]+)`/g, '<code class="md-inline-code">$1</code>')
-
-    // Headers
-    s = s.replace(/^### (.+)$/gm, '<strong class="md-h3">$1</strong>')
-    s = s.replace(/^## (.+)$/gm, '<strong class="md-h2">$1</strong>')
-    s = s.replace(/^# (.+)$/gm, '<strong class="md-h1">$1</strong>')
-
-    // Bold and italic
-    s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
-    s = s.replace(/\*(.+?)\*/g, '<em>$1</em>')
-
-    // Unordered list items
-    s = s.replace(/^- (.+)$/gm, '<li>$1</li>')
-    s = s.replace(/((?:<li>.*<\/li>\n?)+)/g, '<ul>$1</ul>')
-
-    // Numbered list items
-    s = s.replace(/^\d+\. (.+)$/gm, '<li>$1</li>')
-
-    // Paragraphs
-    s = s.replace(/\n\n/g, '</p><p>')
-    s = s.replace(/\n/g, '<br>')
-
-    return '<p>' + s + '</p>'
+    return '<p>' + String(text).replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;') + '</p>'
   }
 
   // ── Conversation pruning ────────────────────────────────────────────────

@@ -10,7 +10,7 @@
 (function () {
   'use strict'
 
-  var DEFAULT_MAX_STEPS = 150
+  var DEFAULT_MAX_STEPS = 60
   var DEFAULT_TEMPERATURE = 0.3
 
   /**
