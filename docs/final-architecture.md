@@ -15,7 +15,7 @@ Runtime architecture of the AE Motion Agent CEP extension. Read **[../AGENTS.md]
 | Host bridge | `hostBridge.js` | Tool name → ExtendScript mapping, anti-spam guard, idempotency cache, pre-validation, harmony normalize |
 | Tool registry | `toolRegistry.js` | 45 OpenAI-format function definitions |
 | Host script | `host/index.jsx` | ~3200 lines ExtendScript — all AE operations |
-| API | Cloud.ru Foundation Models | `gpt-oss-120b` + `Qwen3-Coder-Next` with tool calling and SSE |
+| API | Cloud.ru Foundation Models | `zai-org/GLM-5.1` (reasoning) with tool calling and SSE; separate `reasoning` stream field |
 
 ---
 
@@ -71,7 +71,7 @@ Key invariants:
 - **Sequential within mutating runs**: AE ExtendScript is not reentrant. Mutating tools (`create_layer`, `add_keyframes`, ...) run one at a time.
 - **Parallel within read runs**: contiguous read-only tools (`get_*`, `list_*`, `capture_*`) execute via `Promise.all` — saves round-trips when the model inspects state.
 - **Abort propagation**: `abortHandle.aborted = true` short-circuits the next loop iteration and aborts the in-flight fetch.
-- **`max_tokens: 32768`** in `invokeOptions` — needed to fit long tool_call JSON chains. Iter 3+4 lesson.
+- **`max_tokens: 65536`** in `invokeOptions` — must fit reasoning chain-of-thought (billed as completion tokens) + long tool_call JSON chains + the answer in one turn. Endpoint ceiling for these models is 131072.
 
 ---
 
@@ -112,7 +112,7 @@ The full list (with parameters) is the source of truth in `toolRegistry.js`. Cap
 - Export → session JSON to Desktop
 - Errors → error-only export to Desktop
 - Report → LLM-analyzed summary + tool latency stats to Desktop
-- Auto-resize textarea, model selector in chat header, token usage display, anti-spam visibility (errors with `RETRY_BLOCKED`)
+- Auto-resize textarea, static model badge in chat header (`Cloud.ru · GLM-5.1`), token usage display, anti-spam visibility (errors with `RETRY_BLOCKED`)
 
 ---
 
@@ -125,7 +125,7 @@ The full list (with parameters) is the source of truth in `toolRegistry.js`. Cap
 | Pre-call required-args check | `hostBridge _validateRequiredArgs` | Catches `args:{}` for tools needing fields, returns fast actionable error |
 | Anti-spam guard | `hostBridge _checkSpamGuard` | 4th identical failing call blocked with `RETRY_BLOCKED` code |
 | Idempotency cache | `hostBridge _idempotencyCache` | `client_op_id` dedup for `create_*`, `add_effect`, `add_mask`, `add_marker` |
-| Harmony name normalize | `hostBridge executeToolCall` top | Strips `<|channel|>commentary` etc. from `function.name` (gpt-oss-120b decoder leak) |
+| Harmony name normalize (legacy) | `hostBridge executeToolCall` top | Strips `<|channel|>commentary` etc. from `function.name` (legacy gpt-oss decoder leak insurance; near-dead no-op on GLM-5.1) |
 | Capability handshake | `host/index.jsx extensionsLlmChat_getCapabilities` + `main.checkHostCapabilities` | Surfaces stale/incomplete host script as visible warning |
 | Type hints | `host/index.jsx _validateValueForPath` | Clear "expects [x,y]" instead of cryptic AE error |
 | Persistent capture path | `host/index.jsx extensionsLlmChat_saveCompFramePng` + `_pruneOldCaptures` | `~/AE-agent-captures/<date>/` instead of `/tmp` |

@@ -303,10 +303,10 @@ body {
   color: #dddddd;
 }
 
-.model-selector {
+.model-badge {
   font-size: 10px;
-  min-width: 0;
-  max-width: 160px;
+  color: #aaaaaa;
+  letter-spacing: 0.3px;
 }
 
 /* ── Chat input ──────────────────────────────────────────────────────── */

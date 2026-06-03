@@ -29,7 +29,7 @@ Key: `ae-motion-agent-state`
     "title": "Session",
     "createdAt": 1713012345678,
     "updatedAt": 1713012345678,
-    "model": "cloudru/Qwen/Qwen3-Coder-Next",
+    "model": "zai-org/GLM-5.1",
     "messages": []
   }
 }
@@ -47,7 +47,7 @@ Key: `ae-motion-agent-state`
 | `title` | string | Display name |
 | `createdAt` | number | `Date.now()` at creation |
 | `updatedAt` | number | Updated on message changes |
-| `model` | string | Model ID (e.g. `cloudru/Qwen/Qwen3-Coder-Next`) |
+| `model` | string | Model ID (always `zai-org/GLM-5.1`; old sessions are migrated to it on load via `normalizeModelId`) |
 | `messages` | array | Conversation history |
 
 ---

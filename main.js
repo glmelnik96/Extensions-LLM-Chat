@@ -25,7 +25,8 @@
 
   // ── Constants ──────────────────────────────────────────────────────────
   var STORAGE_KEY = 'ae-motion-agent-state'
-  var DEFAULT_MODEL = 'cloudru/Qwen/Qwen3-Coder-Next'
+  // Predetermined model — no panel selection. See config.defaultModel.
+  var DEFAULT_MODEL = 'zai-org/GLM-5.1'
   var DEFAULT_AGENT_MAX_STEPS = 60
 
   // ── State ──────────────────────────────────────────────────────────────
@@ -48,7 +49,6 @@
     els.chatTranscript = document.getElementById('chat-transcript')
     els.activeCompNote = document.getElementById('active-comp-note')
     els.userInput = document.getElementById('user-input')
-    els.modelSelect = document.getElementById('model-select')
     els.sendBtn = document.getElementById('send-btn')
     els.undoBtn = document.getElementById('undo-btn')
     els.cancelBtn = document.getElementById('cancel-btn')
@@ -56,9 +56,11 @@
     els.modelStatus = document.getElementById('model-status')
   }
 
-  function normalizeModelId (modelId) {
-    if (!modelId || typeof modelId !== 'string') return DEFAULT_MODEL
-    return modelId
+  // The model is predetermined (no per-session selection). Always resolve to
+  // DEFAULT_MODEL so old sessions persisted with a previous model id migrate
+  // transparently to the current one.
+  function normalizeModelId () {
+    return DEFAULT_MODEL
   }
 
   function getAgentMaxSteps (cfg) {
@@ -153,7 +155,7 @@
       title: 'Session',
       createdAt: Date.now(),
       updatedAt: Date.now(),
-      model: normalizeModelId((els.modelSelect && els.modelSelect.value) || DEFAULT_MODEL),
+      model: DEFAULT_MODEL,
       messages: []
     }
     persistState()
@@ -341,6 +343,16 @@
       thinkingEl.appendChild(streamDiv)
     }
     streamDiv.textContent = preview
+    scrollToBottom()
+  }
+
+  // Reasoning models (GLM-5.1 etc.) stream a separate `reasoning` field before
+  // any answer/tool_calls. Surface a lightweight "reasoning" label so the panel
+  // isn't silent during the think phase. The CoT text itself is never shown.
+  function updateThinkingReasoning () {
+    if (!thinkingEl || streamingTextBuffer) return
+    var label = thinkingEl.querySelector('span')
+    if (label) label.textContent = 'Agent reasoning'
     scrollToBottom()
   }
 
@@ -619,7 +631,7 @@
     }
 
     var agentCfg = window.EXTENSIONS_LLM_CHAT_CONFIG || {}
-    var maxConversationTokens = agentCfg.maxConversationTokens || 12000
+    var maxConversationTokens = agentCfg.maxConversationTokens || 120000
     var maxSteps = getAgentMaxSteps(agentCfg)
     apiMessages = pruneConversation(apiMessages, maxConversationTokens)
 
@@ -648,6 +660,9 @@
       abortHandle: state.currentAbortHandle,
       onTextChunk: function (chunk) {
         updateThinkingWithStreamText(chunk)
+      },
+      onReasoningChunk: function () {
+        updateThinkingReasoning()
       },
       onToolCall: function (tc) {
         updateThinkingWithToolCall(tc)
@@ -695,7 +710,7 @@
       session.messages.push(assistantMsg)
       session.updatedAt = Date.now()
 
-      setModelStatus('ok', 'model: ok')
+      setModelStatus('ok', DEFAULT_MODEL.split('/').pop())
       var usageNote = ''
       if (result.usage && result.usage.total_tokens > 0) {
         usageNote = ' | tokens: ' + result.usage.total_tokens
@@ -1019,7 +1034,7 @@
     session.messages.push({ role: 'system', text: '\uD83D\uDCCA Report: analyzing ' + totalChunks + ' chunk(s)...' })
     renderTranscript()
 
-    var modelId = (els.modelSelect && els.modelSelect.value) || DEFAULT_MODEL
+    var modelId = DEFAULT_MODEL
     var chunkReports = []
 
     function processChunk (idx) {
@@ -1112,13 +1127,6 @@
     processChunk(0)
   }
 
-  function handleModelChange () {
-    var session = ensureSession()
-    session.model = normalizeModelId(els.modelSelect.value)
-    session.updatedAt = Date.now()
-    persistState()
-  }
-
   function refreshActiveCompNote (silent) {
     if (!els.activeCompNote) return
     if (!window.HOST_BRIDGE || typeof window.HOST_BRIDGE.evalHostFunction !== 'function') {
@@ -1161,7 +1169,6 @@
         setStatus('Cancelling...')
       }
     })
-    if (els.modelSelect) els.modelSelect.addEventListener('change', handleModelChange)
 
     // Enter to send (Shift+Enter for newline) + auto-resize.
     if (els.userInput) {
@@ -1204,18 +1211,6 @@
     ensureSession()
     renderTranscript()
 
-    // Set model selector to session's model
-    var session = state.session
-    if (session && els.modelSelect) {
-      var opts = els.modelSelect.options
-      for (var i = 0; i < opts.length; i++) {
-        if (opts[i].value === session.model) {
-          els.modelSelect.selectedIndex = i
-          break
-        }
-      }
-    }
-
     bindEvents()
     setStatus('Ready')
     refreshActiveCompNote(true)
@@ -1225,10 +1220,11 @@
     var secrets = (window.EXTENSIONS_LLM_CHAT_SECRETS) || {}
     var cfg = (window.EXTENSIONS_LLM_CHAT_CONFIG) || {}
     var apiKey = secrets.apiKey || cfg.apiKey || ''
+    var modelLabel = DEFAULT_MODEL.split('/').pop()
     if (apiKey) {
-      setModelStatus('ok', 'cloud: ready')
+      setModelStatus('ok', modelLabel)
     } else {
-      setModelStatus('unknown', 'no API key')
+      setModelStatus('unknown', modelLabel + ' (no API key)')
     }
   }
 

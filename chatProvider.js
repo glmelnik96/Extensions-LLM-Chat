@@ -40,12 +40,12 @@
   }
 
   /**
-   * Parse a model string like "cloudru/Qwen/Qwen3-Coder-Next".
-   * Returns { provider: 'cloudru', model: 'Qwen/Qwen3-Coder-Next' }
+   * Parse a model string like "cloudru/zai-org/GLM-5.1" or "zai-org/GLM-5.1".
+   * Returns { provider: 'cloudru', model: 'zai-org/GLM-5.1' }
    */
   function parseModelId (modelId) {
     if (!modelId || typeof modelId !== 'string') {
-      return { provider: 'cloudru', model: getConfig().defaultModel || 'openai/gpt-oss-120b' }
+      return { provider: 'cloudru', model: getConfig().defaultModel || 'zai-org/GLM-5.1' }
     }
     if (modelId.indexOf('cloudru/') === 0) {
       return { provider: 'cloudru', model: modelId.substring(8) }
@@ -185,6 +185,7 @@
     var timeoutMs = (cfg.cloudChatTimeoutMs) || 120000
     var abortHandle = ensureAbortHandleApi(options && options.abortHandle)
     var onTextChunk = (options && options.onTextChunk) || function () {}
+    var onReasoningChunk = (options && options.onReasoningChunk) || function () {}
 
     var body = {
       model: model,
@@ -227,6 +228,7 @@
         var decoder = new TextDecoder()
         var buffer = ''
         var fullContent = ''
+        var fullReasoning = ''
         var toolCalls = {}  // index → { id, type, function: { name, arguments } }
         var finishReason = 'stop'
         var totalUsage = null
@@ -242,6 +244,13 @@
             if (json.choices[0].finish_reason) finishReason = json.choices[0].finish_reason
 
             if (delta) {
+              // Reasoning models (GLM-5.1, Kimi-K2.6, DeepSeek-V4) stream their
+              // chain-of-thought in a SEPARATE `reasoning` field. Keep it out of
+              // `content` so it never lands in the chat; only signal progress.
+              if (delta.reasoning) {
+                fullReasoning += delta.reasoning
+                onReasoningChunk(delta.reasoning)
+              }
               if (delta.content) {
                 fullContent += delta.content
                 onTextChunk(delta.content)
@@ -283,6 +292,7 @@
         return pump().then(function () {
           // Build final response in OpenAI format
           var msg = { role: 'assistant', content: fullContent || null }
+          if (fullReasoning) msg.reasoning = fullReasoning
           var tcArray = []
           for (var k in toolCalls) {
             if (toolCalls.hasOwnProperty(k)) tcArray.push(toolCalls[k])

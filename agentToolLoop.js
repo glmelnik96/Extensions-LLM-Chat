@@ -17,7 +17,7 @@
    * Run the agent tool loop.
    *
    * @param {object} options
-   *   - modelId:     string — model to use (e.g. "cloudru/Qwen/Qwen3-Coder-Next")
+   *   - modelId:     string — model to use (e.g. "zai-org/GLM-5.1")
    *   - systemPrompt: string — system prompt text
    *   - messages:     Array — conversation history (user/assistant messages)
    *   - tools:        Array — OpenAI-compatible tool definitions (default: all from registry)
@@ -53,6 +53,7 @@
     var onToolCall = options.onToolCall || function () {}
     var onStepComplete = options.onStepComplete || function () {}
     var onTextChunk = options.onTextChunk || null
+    var onReasoningChunk = options.onReasoningChunk || null
     var abortHandle = options.abortHandle || null
 
     // Build the full message array for the API.
@@ -87,15 +88,16 @@
       var invokeOptions = {
         tools: tools.length > 0 ? tools : undefined,
         tool_choice: tools.length > 0 ? 'auto' : undefined,
-        // Fix H (iter 3): bumped 4096→16384 because gpt-oss-120b was
-        // truncating tool_calls JSON mid-stream (T6 stopped at 2/4, T9 at 2/8).
-        // Fix M (iter 4): bumped 16384→32768. Iter-3 retest showed T9
-        // STILL truncated on the 8th set_property_value after Fix H;
-        // 32k is the Cloud.ru upper bound for this model.
-        max_tokens: 32768,
+        // Output budget covers reasoning + tool_calls JSON + answer in one turn.
+        // Reasoning models (GLM-5.1 etc.) bill their chain-of-thought as
+        // completion tokens, so this is generous; the endpoint accepts up to
+        // 131072 for these models. (History: Fix H/M raised this from 4096 to
+        // 32768 for gpt-oss; 65536 leaves room for reasoning + long tool chains.)
+        max_tokens: 65536,
         temperature: temperature,
         abortHandle: abortHandle,
-        onTextChunk: onTextChunk
+        onTextChunk: onTextChunk,
+        onReasoningChunk: onReasoningChunk
       }
 
       return window.CHAT_PROVIDER.invoke(modelId, messages, invokeOptions)

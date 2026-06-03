@@ -8,7 +8,7 @@
 
 **AE Motion Agent** (CEP extension folder: `Extensions LLM Chat`) is a chat-only AI agent embedded in Adobe After Effects 26+ via CEP (Common Extensibility Platform).
 
-The user types a natural-language motion-design request → the agent plans a sequence of tool calls → each tool maps to an ExtendScript function that runs inside After Effects → results stream back into the chat. Cloud.ru Foundation Models (`gpt-oss-120b`, `Qwen3-Coder-Next`) provide the LLM via an OpenAI-compatible API with tool calling + SSE.
+The user types a natural-language motion-design request → the agent plans a sequence of tool calls → each tool maps to an ExtendScript function that runs inside After Effects → results stream back into the chat. Cloud.ru Foundation Models (`zai-org/GLM-5.1`, a reasoning model; predetermined, no panel selector) provide the LLM via an OpenAI-compatible API with tool calling + SSE. These models stream chain-of-thought in a separate `reasoning` field (not `content`) — see `docs/superpowers/specs/2026-06-04-model-upgrade-design.md`.
 
 **Tagline for the user:** «buddy for motion design, not autopilot». The agent should help with hard expression logic, parameter dependencies, and AE quirks — not auto-generate entire animations from a single sentence.
 
@@ -234,7 +234,7 @@ For external (Obsidian) context, see also:
 
 **You should escalate (ask user) before:**
 - Adding new tools that mutate AE state outside the current 45
-- Changing the API provider (gpt-oss-120b ↔ another model)
+- Changing the API provider or model (`zai-org/GLM-5.1` ↔ another model)
 - Modifying `_resolveLayer` selection-fallback behavior
 - Changing the localStorage `ae-motion-agent-state` schema (breaks existing sessions)
 - Touching CSXS manifest extension ID (breaks existing localStorage)

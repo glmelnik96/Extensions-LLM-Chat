@@ -7,14 +7,9 @@
   </head>
   <body>
     <div id="app" class="panel-root">
-      <!-- Header (model selector) -->
+      <!-- Header (active model — predetermined, not user-selectable) -->
       <div class="chat-header">
-        <select id="model-select" class="btn model-selector">
-          <optgroup label="Cloud.ru">
-            <option value="cloudru/Qwen/Qwen3-Coder-Next">Qwen3 Coder</option>
-            <option value="cloudru/openai/gpt-oss-120b">GPT-OSS 120B</option>
-          </optgroup>
-        </select>
+        <span class="model-badge">Cloud.ru · GLM-5.1</span>
       </div>
 
       <!-- Chat content -->

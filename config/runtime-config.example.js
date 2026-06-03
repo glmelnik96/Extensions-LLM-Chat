@@ -7,11 +7,12 @@
   if (typeof window !== 'undefined' && window.EXTENSIONS_LLM_CHAT_CONFIG) {
     Object.assign(window.EXTENSIONS_LLM_CHAT_CONFIG, {
       // baseUrl: 'https://foundation-models.api.cloud.ru/v1',
-      // defaultModel: 'openai/gpt-oss-120b',
-      // fallbackModel: 'Qwen/Qwen3-Coder-Next',
-      // cloudChatTimeoutMs: 120000,
-      // agentMaxSteps: 150,
+      // defaultModel: 'zai-org/GLM-5.1',
+      // fallbackModel: 'deepseek-ai/DeepSeek-V4-Pro',
+      // cloudChatTimeoutMs: 300000,
+      // agentMaxSteps: 60,
       // agentTemperature: 0.3,
+      // maxConversationTokens: 120000,
     })
   }
 })()

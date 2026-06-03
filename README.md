@@ -1,6 +1,6 @@
 # AE Motion Agent — CEP Panel for After Effects
 
-> **Status: MVP shipped 2026-04-30 + iterations 2-4 of stability fixes (2026-05-12).** Chat-only AI agent for motion-design work inside Adobe After Effects 26+. Cloud.ru Foundation Models (`gpt-oss-120b` / `Qwen3-Coder-Next`) drive 45 tools mapped to ExtendScript.
+> **Status: MVP shipped 2026-04-30 + iterations 2-4 of stability fixes (2026-05-12) + model upgrade to Cloud.ru reasoning models (2026-06-04).** Chat-only AI agent for motion-design work inside Adobe After Effects 26+. Cloud.ru Foundation Models (`zai-org/GLM-5.1`, reasoning) drive 45 tools mapped to ExtendScript.
 
 **Tagline:** «buddy for motion design, not autopilot». The agent helps with hard expression logic, parameter dependencies, and AE quirks — not auto-generate entire animations from one sentence.
 
@@ -46,7 +46,7 @@ AI-агент принимает запросы на естественном я
 - **Export** — сессия в JSON на Desktop
 - **Errors** — только ошибочные tool calls в JSON
 - **Report** — LLM-анализ сессии + tool latency table на Desktop
-- Auto-resize textarea, model selector в chat header, token usage display
+- Auto-resize textarea, static model badge в chat header (`Cloud.ru · GLM-5.1`), token usage display
 
 ### Архитектура надёжности (после MVP + итераций 1-4)
 
@@ -58,11 +58,12 @@ AI-агент принимает запросы на естественном я
 - **Capability handshake** — host script probed at startup (20 функций/констант); stale script → visible warning.
 - **Type hints для known property paths** — `Transform>Position expects [x,y]` вместо cryptic AE-ошибки.
 - **Static expression validator** — 8 паттернов (`if/else as expression`, `seedRandom(constant, true)`, unbalanced brackets, `.value` misuse, и т.д.). Warnings прокидываются модели через tool result.
-- **Harmony name normalize** — `<|channel|>commentary` leak в `function.name` (gpt-oss-120b) автоматически очищается.
+- **Reasoning field handling** — модель стримит chain-of-thought в отдельном поле `reasoning` (не в `content`); парсер прокидывает его в индикатор «Agent reasoning», в чат он не попадает.
+- **Harmony name normalize** — legacy-страховка от gpt-oss decoder leak (`<|channel|>commentary` в `function.name`) сохранена как дешёвый no-op; на GLM-5.1 практически не срабатывает.
 - **Persistent capture frames** — `~/AE-agent-captures/<дата>/`, auto-prune до 50.
 - **Anti-fabrication preview rule** — модель НЕ может эмиттить `![preview](file:///...)` без реального вызова `capture_comp_frame`.
 - **No-CoT rule** — chain-of-thought leakage suppressed в финальном ответе.
-- **`max_tokens: 32768`** — fits long tool_call chains без truncation.
+- **`max_tokens: 65536`** — покрывает reasoning + tool_call chains + ответ в одном turn без truncation.
 - **API retry on 429/5xx** — 3 попытки, exponential backoff.
 - **Conversation pruning** — старые сообщения подрезаются под token budget.
 
@@ -186,7 +187,7 @@ Extensions LLM Chat/
 
 **Cloud.ru Foundation Models** — OpenAI-compatible chat/completions с tool calling + SSE streaming.
 
-Основная модель: `openai/gpt-oss-120b` (с автопрефиксом `cloudru/`). Fallback: `Qwen/Qwen3-Coder-Next`.
+Основная модель: `zai-org/GLM-5.1` (reasoning, 202k контекст; предопределена, без выбора в панели). Fallback в конфиге: `deepseek-ai/DeepSeek-V4-Pro`. Модели стримят chain-of-thought в отдельном поле `reasoning`, которое биллится как completion-токены.
 
 ---
 
