@@ -77,6 +77,9 @@
       body.tools = options.tools
       body.tool_choice = (options && options.tool_choice) || 'auto'
     }
+    if (options && options.chat_template_kwargs) {
+      body.chat_template_kwargs = options.chat_template_kwargs
+    }
 
     return new Promise(function (resolve, reject) {
       var controller = new AbortController()
@@ -198,6 +201,13 @@
     if (options && options.tools && options.tools.length > 0) {
       body.tools = options.tools
       body.tool_choice = (options && options.tool_choice) || 'auto'
+    }
+    // Template-level switches (verified live 2026-06-10): for GLM-5.1 on
+    // Cloud.ru, `chat_template_kwargs: { enable_thinking: false }` is the only
+    // working way to disable reasoning (thinking:{...} and reasoning_effort
+    // are silently ignored). Used by the Report path where speed > depth.
+    if (options && options.chat_template_kwargs) {
+      body.chat_template_kwargs = options.chat_template_kwargs
     }
 
     return new Promise(function (resolve, reject) {

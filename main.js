@@ -224,7 +224,9 @@
 
       els.chatTranscript.appendChild(div)
     }
-    scrollToBottom()
+    // Full re-render happens at discrete moments (message sent, run finished)
+    // — always reveal the newest message.
+    scrollToBottom(true)
   }
 
   function renderToolCallCard (tc) {
@@ -302,28 +304,87 @@
     return card
   }
 
-  function scrollToBottom () {
-    if (els.chatTranscript) {
-      els.chatTranscript.scrollTop = els.chatTranscript.scrollHeight
+  // Smart scroll: auto-scroll only when the user is already near the bottom
+  // (otherwise streaming chunks fight the user's manual scroll-back), and
+  // throttle the per-chunk scrolls. Pass force=true for user-initiated
+  // events (own message sent, run finished).
+  var _lastAutoScrollTs = 0
+
+  function isNearTranscriptBottom () {
+    var el = els.chatTranscript
+    if (!el) return true
+    return (el.scrollHeight - el.scrollTop - el.clientHeight) < 80
+  }
+
+  function scrollToBottom (force) {
+    var el = els.chatTranscript
+    if (!el) return
+    if (!force) {
+      if (!isNearTranscriptBottom()) return
+      var now = Date.now()
+      if (now - _lastAutoScrollTs < 100) return
+      _lastAutoScrollTs = now
     }
+    el.scrollTop = el.scrollHeight
   }
 
   // ── Thinking indicator ─────────────────────────────────────────────────
   var thinkingEl = null
   var thinkingToolCount = 0
+  var thinkingStartTime = 0
+  var thinkingTimerId = null
+  // Live reasoning view keeps only the tail — full CoT can run to tens of
+  // thousands of chars and the DOM update is O(length) per chunk.
+  var REASONING_TAIL_CAP = 8000
+  var reasoningBuffer = ''
+
+  function formatElapsed (ms) {
+    var s = Math.floor(ms / 1000)
+    if (s < 60) return s + 's'
+    return Math.floor(s / 60) + 'm ' + (s % 60) + 's'
+  }
 
   function showThinking () {
     if (thinkingEl) return
     thinkingToolCount = 0
     streamingTextBuffer = ''
+    reasoningBuffer = ''
     thinkingEl = document.createElement('div')
     thinkingEl.className = 'agent-thinking'
-    thinkingEl.innerHTML = '<span>Agent working</span><span class="thinking-dots"><span></span><span></span><span></span></span>'
+
+    var header = document.createElement('div')
+    header.className = 'thinking-header'
+    var label = document.createElement('span')
+    label.className = 'thinking-label'
+    label.textContent = 'Agent working'
+    header.appendChild(label)
+    var dots = document.createElement('span')
+    dots.className = 'thinking-dots'
+    dots.innerHTML = '<span></span><span></span><span></span>'
+    header.appendChild(dots)
+    var elapsed = document.createElement('span')
+    elapsed.className = 'thinking-elapsed'
+    elapsed.textContent = '0s'
+    header.appendChild(elapsed)
+    thinkingEl.appendChild(header)
+
     els.chatTranscript.appendChild(thinkingEl)
-    scrollToBottom()
+
+    thinkingStartTime = Date.now()
+    thinkingTimerId = setInterval(function () {
+      if (!thinkingEl) return
+      var el = thinkingEl.querySelector('.thinking-elapsed')
+      if (el) el.textContent = formatElapsed(Date.now() - thinkingStartTime)
+    }, 1000)
+
+    scrollToBottom(true)
   }
 
   function removeThinking () {
+    if (thinkingTimerId) {
+      clearInterval(thinkingTimerId)
+      thinkingTimerId = null
+    }
     if (thinkingEl && thinkingEl.parentNode) {
       thinkingEl.parentNode.removeChild(thinkingEl)
     }
@@ -331,6 +392,12 @@
   }
 
   var streamingTextBuffer = ''
+
+  function _setThinkingLabel (text) {
+    if (!thinkingEl) return
+    var label = thinkingEl.querySelector('.thinking-label')
+    if (label) label.textContent = text
+  }
 
   function updateThinkingWithStreamText (chunk) {
     if (!thinkingEl) return
@@ -347,12 +414,42 @@
   }
 
   // Reasoning models (GLM-5.1 etc.) stream a separate `reasoning` field before
-  // any answer/tool_calls. Surface a lightweight "reasoning" label so the panel
-  // isn't silent during the think phase. The CoT text itself is never shown.
-  function updateThinkingReasoning () {
-    if (!thinkingEl || streamingTextBuffer) return
-    var label = thinkingEl.querySelector('span')
-    if (label) label.textContent = 'Agent reasoning'
+  // any answer/tool_calls. Show the live CoT tail in a collapsible block so
+  // long thinks aren't a silent black box. textContent only — never innerHTML
+  // (model output is untrusted).
+  function updateThinkingReasoning (chunk) {
+    if (!thinkingEl) return
+    if (typeof chunk === 'string' && chunk) {
+      reasoningBuffer += chunk
+      if (reasoningBuffer.length > REASONING_TAIL_CAP) {
+        reasoningBuffer = reasoningBuffer.slice(-REASONING_TAIL_CAP)
+      }
+    }
+    if (!streamingTextBuffer) _setThinkingLabel('Agent reasoning')
+
+    var box = thinkingEl.querySelector('.reasoning-box')
+    if (!box) {
+      box = document.createElement('div')
+      box.className = 'reasoning-box'
+      var toggle = document.createElement('div')
+      toggle.className = 'reasoning-toggle'
+      toggle.textContent = '\u25B8 reasoning'
+      var body = document.createElement('div')
+      body.className = 'reasoning-body'
+      toggle.addEventListener('click', function () {
+        var expanded = box.classList.toggle('expanded')
+        toggle.textContent = (expanded ? '\u25BE' : '\u25B8') + ' reasoning'
+        if (expanded) body.scrollTop = body.scrollHeight
+      })
+      box.appendChild(toggle)
+      box.appendChild(body)
+      thinkingEl.appendChild(box)
+    }
+    var bodyEl = box.querySelector('.reasoning-body')
+    if (bodyEl) {
+      bodyEl.textContent = reasoningBuffer
+      if (box.classList.contains('expanded')) bodyEl.scrollTop = bodyEl.scrollHeight
+    }
     scrollToBottom()
   }
 
@@ -360,7 +457,7 @@
     if (!thinkingEl) return
     if (tc.status === 'running') thinkingToolCount++
     var statusText = tc.status === 'running' ? 'calling ' + tc.name + '...' : tc.name + ' ' + tc.status
-    thinkingEl.querySelector('span').textContent = 'Agent [' + thinkingToolCount + ']: ' + statusText
+    _setThinkingLabel('Agent [' + thinkingToolCount + ']: ' + statusText)
     scrollToBottom()
   }
 
@@ -390,35 +487,14 @@
   }
 
   // ── Conversation pruning ────────────────────────────────────────────────
-  function estimateTokens (messages) {
-    var total = 0
-    for (var i = 0; i < messages.length; i++) {
-      var m = messages[i]
-      if (m.content) total += m.content.length
-      if (m.tool_calls) {
-        for (var t = 0; t < m.tool_calls.length; t++) {
-          var tc = m.tool_calls[t]
-          total += (tc.function.name || '').length
-          total += (tc.function.arguments || '').length
-        }
-      }
-    }
-    return Math.ceil(total / 4)
-  }
-
+  // Delegates to the extracted, unit-tested module in lib/pure/prune.js
+  // (single source of truth: Cyrillic-aware token estimate, protected tail,
+  // old-tool-result truncation, tool-pairing preservation).
   function pruneConversation (messages, maxTokens) {
-    if (estimateTokens(messages) <= maxTokens) return messages
-    var minKeep = 2
-    var pruned = messages.slice()
-    while (estimateTokens(pruned) > maxTokens && pruned.length > minKeep) {
-      var removed = pruned.shift()
-      if (removed && removed.tool_calls && removed.tool_calls.length > 0) {
-        while (pruned.length > minKeep && pruned[0] && pruned[0].role === 'tool') {
-          pruned.shift()
-        }
-      }
+    if (window.PURE_PRUNE && typeof window.PURE_PRUNE.pruneConversation === 'function') {
+      return window.PURE_PRUNE.pruneConversation(messages, maxTokens)
     }
-    return pruned
+    return messages
   }
 
   // ── Knowledge Base Context (Phase 4) ──────────────────────────────────
@@ -661,8 +737,8 @@
       onTextChunk: function (chunk) {
         updateThinkingWithStreamText(chunk)
       },
-      onReasoningChunk: function () {
-        updateThinkingReasoning()
+      onReasoningChunk: function (chunk) {
+        updateThinkingReasoning(chunk)
       },
       onToolCall: function (tc) {
         updateThinkingWithToolCall(tc)
@@ -679,7 +755,7 @@
         get_layer_properties: true, get_effect_properties: true,
         get_expression: true, get_mask_info: true,
         get_markers: true, list_project_items: true,
-        capture_comp_frame: true
+        capture_comp_frame: true, search_layers: true
       }
       var mutatingCount = 0
       var allCalls = result.toolCallLog || []
@@ -1055,7 +1131,11 @@
 
       return window.CHAT_PROVIDER.invoke(modelId, messages, {
         max_tokens: 4096,
-        temperature: 0.2
+        temperature: 0.2,
+        // Report is summarization, not problem-solving — disable reasoning
+        // for a ~3-4x faster response (probe 2026-06-10: completion 98→2
+        // tokens of overhead). Only chat_template_kwargs works on Cloud.ru.
+        chat_template_kwargs: { enable_thinking: false }
       }).then(function (response) {
         var content = ''
         if (response.choices && response.choices[0] && response.choices[0].message) {

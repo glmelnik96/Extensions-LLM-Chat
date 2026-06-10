@@ -413,11 +413,59 @@ body {
 
 .agent-thinking {
   display: flex;
-  align-items: center;
-  gap: 6px;
+  flex-direction: column;
+  align-items: stretch;
+  gap: 2px;
   padding: 6px 8px;
   color: #888;
   font-size: 10px;
+}
+
+.thinking-header {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.thinking-elapsed {
+  color: #666;
+  font-size: 10px;
+  margin-left: auto;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Live reasoning (collapsible chain-of-thought tail) */
+.reasoning-box {
+  margin-top: 4px;
+  border-left: 2px solid #4a4a6a;
+  padding-left: 6px;
+}
+
+.reasoning-toggle {
+  cursor: pointer;
+  color: #8888aa;
+  font-size: 10px;
+  user-select: none;
+}
+
+.reasoning-toggle:hover {
+  color: #aaaacc;
+}
+
+.reasoning-body {
+  display: none;
+}
+
+.reasoning-box.expanded .reasoning-body {
+  display: block;
+  margin-top: 3px;
+  font-size: 10px;
+  color: #9090b0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  max-height: 160px;
+  overflow-y: auto;
+  line-height: 1.35;
 }
 
 .thinking-dots {

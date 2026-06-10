@@ -96,6 +96,21 @@
         }
       }
     },
+    {
+      type: 'function',
+      function: {
+        name: 'search_layers',
+        description: 'Find layers in the active composition by name substring (case-insensitive), optionally filtered by layer type. Returns minimal info per match: index, id, name, type (max 50). Cheaper than get_detailed_comp_summary when you only need to locate specific layers.',
+        parameters: {
+          type: 'object',
+          properties: {
+            pattern: { type: 'string', description: 'Substring to match against layer names (case-insensitive)' },
+            layer_type: { type: 'string', enum: ['shape', 'text', 'solid', 'null', 'adjustment', 'precomp', 'camera', 'light', 'av'], description: 'Filter matches by layer type' }
+          },
+          required: ['pattern']
+        }
+      }
+    },
 
     // ── Layer mutation tools ───────────────────────────────────────────
     {
@@ -224,7 +239,7 @@
       type: 'function',
       function: {
         name: 'add_keyframes',
-        description: 'Add keyframes to a property. Each keyframe has time, value, and optional easing. For multi-dimensional properties (Position, Scale), value is an array like [x, y] or [x, y, z].',
+        description: 'Add keyframes to ONE property. Each keyframe has time, value, and optional easing. For multi-dimensional properties (Position, Scale), value is an array like [x, y] or [x, y, z]. WHEN: single property only — if you are animating 2+ properties or layers, use set_keyframes_batch instead (one call instead of many).',
         parameters: {
           type: 'object',
           properties: {
@@ -295,6 +310,56 @@
             ease_out: { type: 'array', items: { type: 'object', properties: { speed: { type: 'number' }, influence: { type: 'number' } } } }
           },
           required: ['layer_index', 'property_path', 'key_index']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'set_keyframes_batch',
+        description: 'Add keyframes to MULTIPLE properties/layers in ONE host call. Preferred over repeated add_keyframes whenever you animate 2+ properties (e.g. Position + Opacity, or several layers). All edits share one undo group. Returns per-target ok/error details — on partial failure, fix and re-send only the failed targets.',
+        parameters: {
+          type: 'object',
+          properties: {
+            targets: {
+              type: 'array',
+              description: 'Batch targets. Each item adds keyframes to one property of one layer.',
+              items: {
+                type: 'object',
+                properties: {
+                  layer_index: { type: 'number', description: '1-based layer index' },
+                  layer_id: { type: 'number', description: 'Persistent layer ID (preferred when available)' },
+                  property_path: { type: 'string', description: 'Property path like "Transform>Position"' },
+                  keyframes: {
+                    type: 'array',
+                    items: {
+                      type: 'object',
+                      properties: {
+                        time: { type: 'number', description: 'Time in seconds' },
+                        value: { description: 'Value — number for 1D properties, array for multi-dimensional' },
+                        in_type: { type: 'string', enum: ['linear', 'bezier', 'hold'], description: 'Incoming interpolation (default: bezier)' },
+                        out_type: { type: 'string', enum: ['linear', 'bezier', 'hold'], description: 'Outgoing interpolation (default: bezier)' },
+                        ease_in: {
+                          type: 'array',
+                          items: { type: 'object', properties: { speed: { type: 'number' }, influence: { type: 'number' } } },
+                          description: 'Per-dimension incoming ease [{ speed, influence }]. influence 0-100, speed in units/sec.'
+                        },
+                        ease_out: {
+                          type: 'array',
+                          items: { type: 'object', properties: { speed: { type: 'number' }, influence: { type: 'number' } } },
+                          description: 'Per-dimension outgoing ease [{ speed, influence }]'
+                        }
+                      },
+                      required: ['time', 'value']
+                    },
+                    description: 'Keyframes to add to this property'
+                  }
+                },
+                required: ['property_path', 'keyframes']
+              }
+            }
+          },
+          required: ['targets']
         }
       }
     },

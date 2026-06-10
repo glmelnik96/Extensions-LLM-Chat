@@ -1176,6 +1176,51 @@ function _layerTypeString (layer) {
   } catch (e) { return 'unknown'; }
 }
 
+/**
+ * Find layers by name substring (case-insensitive), optionally filtered by
+ * layer type. Returns minimal info per match — much cheaper than a full
+ * comp summary when the agent just needs to locate layers.
+ * @param {string} pattern    substring to match against layer names
+ * @param {string} layerType  optional type filter ('shape'|'text'|...)
+ */
+function extensionsLlmChat_searchLayers (pattern, layerType) {
+  var result = { ok: false, message: '', matches: [], totalLayers: 0 };
+  var MAX_MATCHES = 50;
+  try {
+    if (typeof pattern !== 'string' || pattern.length === 0) {
+      result.message = 'search_layers: missing `pattern` string.';
+      return resultToJson(result);
+    }
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var comp = ctx.comp;
+    result.totalLayers = comp.numLayers;
+    var needle = pattern.toLowerCase();
+    var typeFilter = (typeof layerType === 'string' && layerType.length > 0) ? layerType : null;
+
+    for (var i = 1; i <= comp.numLayers; i++) {
+      if (result.matches.length >= MAX_MATCHES) break;
+      var layer = comp.layer(i);
+      if (!layer) continue;
+      var name = String(layer.name || '');
+      if (name.toLowerCase().indexOf(needle) === -1) continue;
+      var lt = _layerTypeString(layer);
+      if (typeFilter && lt !== typeFilter) continue;
+      result.matches.push({ index: i, id: layer.id, name: name, type: lt });
+    }
+
+    result.ok = true;
+    result.message = 'Found ' + result.matches.length + ' layer(s) matching "' + pattern + '"' +
+      (typeFilter ? ' of type "' + typeFilter + '"' : '') +
+      ' out of ' + comp.numLayers + ' total.' +
+      (result.matches.length >= MAX_MATCHES ? ' (capped at ' + MAX_MATCHES + ')' : '');
+    return resultToJson(result);
+  } catch (e) {
+    result.message = 'searchLayers error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
 // ============================================================================
 // Layer operations
 // ============================================================================
@@ -1523,8 +1568,72 @@ function extensionsLlmChat_setBlendMode (layerIndex, layerId, blendMode) {
  * inType/outType: 'linear'|'bezier'|'hold' (default 'bezier')
  * easeIn/easeOut: [{ speed, influence }] per dimension — optional
  */
+/**
+ * Shared worker: add keyframes (with interpolation + easing) to a resolved
+ * Property. Used by extensionsLlmChat_addKeyframes and
+ * extensionsLlmChat_setKeyframesBatch. Caller manages the undo group.
+ * Returns { added:number, times:Array<number> }.
+ */
+function _applyKeyframesToProp (prop, keyframes) {
+  // Map string interpolation types to AE enums.
+  function toKeyType (str) {
+    if (str === 'linear') return KeyframeInterpolationType.LINEAR;
+    if (str === 'hold') return KeyframeInterpolationType.HOLD;
+    return KeyframeInterpolationType.BEZIER;
+  }
+
+  var out = { added: 0, times: [] };
+  for (var i = 0; i < keyframes.length; i++) {
+    var kf = keyframes[i];
+    if (!kf || typeof kf.time !== 'number') continue;
+    var val = kf.value;
+    // Ensure array values are proper AE arrays.
+    if (val instanceof Array) {
+      var arr = [];
+      for (var vi = 0; vi < val.length; vi++) arr.push(val[vi]);
+      val = arr;
+    }
+
+    var kIdx = prop.addKey(kf.time);
+    prop.setValueAtKey(kIdx, val);
+    out.added++;
+    out.times.push(kf.time);
+
+    // Set interpolation type.
+    var inT = toKeyType(kf.inType);
+    var outT = toKeyType(kf.outType);
+    try { prop.setInterpolationTypeAtKey(kIdx, inT, outT); } catch (eInterp) {}
+
+    // Set easing if provided.
+    if (kf.easeIn || kf.easeOut) {
+      var numDims = _getTemporalEaseDims(prop, kIdx);
+      var eIn = [];
+      var eOut = [];
+      for (var d = 0; d < numDims; d++) {
+        var inSpec = (kf.easeIn instanceof Array && kf.easeIn[d]) ? kf.easeIn[d] : null;
+        var outSpec = (kf.easeOut instanceof Array && kf.easeOut[d]) ? kf.easeOut[d] : null;
+        var speed_in = (inSpec && typeof inSpec.speed === 'number') ? inSpec.speed : 0;
+        var infl_in = (inSpec && typeof inSpec.influence === 'number') ? inSpec.influence : 33.33;
+        var speed_out = (outSpec && typeof outSpec.speed === 'number') ? outSpec.speed : 0;
+        var infl_out = (outSpec && typeof outSpec.influence === 'number') ? outSpec.influence : 33.33;
+        eIn.push(new KeyframeEase(speed_in, infl_in));
+        eOut.push(new KeyframeEase(speed_out, infl_out));
+      }
+      try {
+        prop.setTemporalEaseAtKey(kIdx, eIn, eOut);
+      } catch (eEase) {
+        // Retry with 1 dimension for spatial properties
+        if (numDims > 1) {
+          try { prop.setTemporalEaseAtKey(kIdx, [eIn[0]], [eOut[0]]); } catch (eRetry) {}
+        }
+      }
+    }
+  }
+  return out;
+}
+
 function extensionsLlmChat_addKeyframes (layerIndex, layerId, propertyPath, keyframes) {
-  var result = { ok: false, message: '', addedCount: 0 };
+  var result = { ok: false, message: '', addedCount: 0, addedTimes: [] };
   try {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
@@ -1539,68 +1648,107 @@ function extensionsLlmChat_addKeyframes (layerIndex, layerId, propertyPath, keyf
       result.message = 'No keyframes provided.'; return resultToJson(result);
     }
 
-    // Map string interpolation types to AE enums.
-    function toKeyType (str) {
-      if (str === 'linear') return KeyframeInterpolationType.LINEAR;
-      if (str === 'hold') return KeyframeInterpolationType.HOLD;
-      return KeyframeInterpolationType.BEZIER;
-    }
-
     _beginToolUndo('Agent: Add keyframes');
-
-    for (var i = 0; i < keyframes.length; i++) {
-      var kf = keyframes[i];
-      if (!kf || typeof kf.time !== 'number') continue;
-      var val = kf.value;
-      // Ensure array values are proper AE arrays.
-      if (val instanceof Array) {
-        var arr = [];
-        for (var vi = 0; vi < val.length; vi++) arr.push(val[vi]);
-        val = arr;
-      }
-
-      var kIdx = prop.addKey(kf.time);
-      prop.setValueAtKey(kIdx, val);
-      result.addedCount++;
-
-      // Set interpolation type.
-      var inT = toKeyType(kf.inType);
-      var outT = toKeyType(kf.outType);
-      try { prop.setInterpolationTypeAtKey(kIdx, inT, outT); } catch (eInterp) {}
-
-      // Set easing if provided.
-      if (kf.easeIn || kf.easeOut) {
-        var numDims = _getTemporalEaseDims(prop, kIdx);
-        var eIn = [];
-        var eOut = [];
-        for (var d = 0; d < numDims; d++) {
-          var inSpec = (kf.easeIn instanceof Array && kf.easeIn[d]) ? kf.easeIn[d] : null;
-          var outSpec = (kf.easeOut instanceof Array && kf.easeOut[d]) ? kf.easeOut[d] : null;
-          var speed_in = (inSpec && typeof inSpec.speed === 'number') ? inSpec.speed : 0;
-          var infl_in = (inSpec && typeof inSpec.influence === 'number') ? inSpec.influence : 33.33;
-          var speed_out = (outSpec && typeof outSpec.speed === 'number') ? outSpec.speed : 0;
-          var infl_out = (outSpec && typeof outSpec.influence === 'number') ? outSpec.influence : 33.33;
-          eIn.push(new KeyframeEase(speed_in, infl_in));
-          eOut.push(new KeyframeEase(speed_out, infl_out));
-        }
-        try {
-          prop.setTemporalEaseAtKey(kIdx, eIn, eOut);
-        } catch (eEase) {
-          // Retry with 1 dimension for spatial properties
-          if (numDims > 1) {
-            try { prop.setTemporalEaseAtKey(kIdx, [eIn[0]], [eOut[0]]); } catch (eRetry) {}
-          }
-        }
-      }
-    }
-
+    var applied = _applyKeyframesToProp(prop, keyframes);
     _endToolUndo();
+
+    result.addedCount = applied.added;
+    result.addedTimes = applied.times;
     result.ok = true;
-    result.message = 'Added ' + result.addedCount + ' keyframe(s) to "' + propertyPath + '" on "' + layer.name + '".';
+    result.message = 'Added ' + result.addedCount + ' keyframe(s) to "' + propertyPath + '" on "' + layer.name + '" at t=[' + applied.times.join(', ') + ']s.';
     return resultToJson(result);
   } catch (e) {
     try { _endToolUndo(); } catch (x) {}
     result.message = 'addKeyframes error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Add keyframes to MULTIPLE properties/layers in one undo group.
+ * @param {Array} targets [{ layerIndex, layerId, propertyPath, keyframes }]
+ * keyframes items: { time, value, inType, outType, easeIn, easeOut }
+ */
+function extensionsLlmChat_setKeyframesBatch (targets) {
+  var result = { ok: false, message: '', appliedCount: 0, failedCount: 0, totalKeyframes: 0, results: [] };
+  try {
+    if (!(targets instanceof Array) || targets.length === 0) {
+      result.message = 'No batch targets provided.';
+      return resultToJson(result);
+    }
+
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) {
+      result.message = ctx.message || 'No active composition.';
+      result.compStatusCode = ctx.statusCode || '';
+      return resultToJson(result);
+    }
+    var comp = ctx.comp;
+
+    _beginToolUndo('Agent: Set keyframes batch');
+
+    for (var ti = 0; ti < targets.length; ti++) {
+      var t = targets[ti];
+      var itemResult = { ok: false, index: ti, message: '' };
+      try {
+        if (!t || typeof t !== 'object') {
+          itemResult.message = 'Target item is not an object.';
+          result.failedCount++;
+          result.results.push(itemResult);
+          continue;
+        }
+        var propertyPath = typeof t.propertyPath === 'string' ? t.propertyPath : '';
+        var layerId = typeof t.layerId === 'number' ? t.layerId : null;
+        var layerIndex = typeof t.layerIndex === 'number' ? t.layerIndex : parseInt(t.layerIndex, 10);
+        if (!(layerIndex >= 1)) layerIndex = null;
+        var kfs = (t.keyframes instanceof Array) ? t.keyframes : [];
+
+        if (!propertyPath.length || kfs.length === 0 || (layerId === null && layerIndex === null)) {
+          itemResult.message = 'Target item is missing layer_id/layer_index, property_path, or keyframes.';
+          result.failedCount++;
+          result.results.push(itemResult);
+          continue;
+        }
+
+        var layer = _resolveLayer(comp, layerIndex, layerId);
+        if (!layer) {
+          itemResult.message = 'Layer not found by layer_id/layer_index.';
+          result.failedCount++;
+          result.results.push(itemResult);
+          continue;
+        }
+
+        var prop = _resolveProperty(layer, propertyPath);
+        if (!prop || !(prop instanceof Property)) {
+          itemResult.message = 'Property "' + propertyPath + '" not found or is a group on layer "' + layer.name + '".';
+          result.failedCount++;
+          result.results.push(itemResult);
+          continue;
+        }
+
+        var applied = _applyKeyframesToProp(prop, kfs);
+        itemResult.ok = true;
+        itemResult.addedCount = applied.added;
+        itemResult.addedTimes = applied.times;
+        itemResult.message = 'Added ' + applied.added + ' keyframe(s) to "' + propertyPath + '" on "' + layer.name + '".';
+        result.appliedCount++;
+        result.totalKeyframes += applied.added;
+        result.results.push(itemResult);
+      } catch (eItem) {
+        itemResult.message = 'Item failed: ' + eItem.toString();
+        result.failedCount++;
+        result.results.push(itemResult);
+      }
+    }
+
+    try { _endToolUndo(); } catch (eEnd) {}
+
+    result.ok = result.failedCount === 0;
+    result.message = 'Keyframe batch finished: ' + result.appliedCount + ' target(s) succeeded (' + result.totalKeyframes + ' keyframes), ' + result.failedCount + ' failed.';
+    return resultToJson(result);
+  } catch (eOuter) {
+    try { _endToolUndo(); } catch (ignored) {}
+    result.message = 'Unexpected error in keyframe batch: ' + eOuter.toString();
     return resultToJson(result);
   }
 }
@@ -1994,7 +2142,21 @@ function extensionsLlmChat_addEffect (layerIndex, layerId, effectMatchName) {
     if (!fx) { result.message = 'Failed to add effect "' + effectMatchName + '".'; return resultToJson(result); }
     result.ok = true;
     result.effectIndex = fx.propertyIndex;
-    result.message = 'Added effect "' + fx.name + '" (index ' + fx.propertyIndex + ') to "' + layer.name + '".';
+    // Include the effect's settable properties inline so the agent doesn't
+    // need a follow-up get_effect_properties round trip before configuring it.
+    result.properties = [];
+    try {
+      for (var pi = 1; pi <= fx.numProperties; pi++) {
+        try {
+          var p = fx.property(pi);
+          if (!p || !(p instanceof Property)) continue;
+          var pInfo = { index: pi, name: p.name };
+          try { pInfo.value = p.value; } catch (eV) {}
+          result.properties.push(pInfo);
+        } catch (eP) {}
+      }
+    } catch (eProps) {}
+    result.message = 'Added effect "' + fx.name + '" (index ' + fx.propertyIndex + ') to "' + layer.name + '". Settable properties included in `properties` — configure with set_effect_property without re-reading.';
     return resultToJson(result);
   } catch (e) {
     try { _endToolUndo(); } catch (x) {}
@@ -2400,7 +2562,9 @@ function extensionsLlmChat_getDetailedCompSummary (filterOptions) {
           }
         } catch (eFx) {}
 
-        // Check for expressions on common properties.
+        // Check for expressions on common properties. Report which property
+        // has one (path, snippet, error) so the agent doesn't need a
+        // follow-up get_expression round trip just to find out where/what.
         var commonPaths = [
           'Transform>Position', 'Transform>Scale', 'Transform>Rotation', 'Transform>Opacity'
         ];
@@ -2409,7 +2573,17 @@ function extensionsLlmChat_getDetailedCompSummary (filterOptions) {
             var pr = _resolveProperty(layer, commonPaths[cp]);
             if (pr && pr instanceof Property && pr.expressionEnabled) {
               info.hasExpressions = true;
-              break;
+              if (!info.expressions) info.expressions = [];
+              var exprEntry = { path: commonPaths[cp] };
+              try {
+                var exprText = String(pr.expression || '');
+                exprEntry.snippet = exprText.length > 120 ? exprText.substr(0, 120) + '...' : exprText;
+              } catch (eTxt) {}
+              try {
+                var exprErr = pr.expressionError || '';
+                if (exprErr && exprErr.length > 0) exprEntry.error = String(exprErr).substr(0, 160);
+              } catch (eErr) {}
+              info.expressions.push(exprEntry);
             }
           } catch (eExp) {}
         }

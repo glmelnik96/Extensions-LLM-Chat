@@ -160,6 +160,7 @@
     get_keyframes: 1,
     get_layer_properties: 1,
     get_effect_properties: 1,
+    search_layers: 1,
     get_mask_info: 1,
     get_markers: 1,
     list_project_items: 1,

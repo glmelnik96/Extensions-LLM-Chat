@@ -125,6 +125,14 @@
         if (!isStr(args.property_path)) return 'add_keyframes: missing required `property_path` (e.g. "Transform>Scale", "Transform>Position", "Transform>Opacity").'
         if (!isArr(args.keyframes)) return 'add_keyframes: missing required `keyframes` array (each item: { time, value, in_type?, out_type? }).'
         return null
+      case 'set_keyframes_batch':
+        if (!isArr(args.targets)) return 'set_keyframes_batch: missing required `targets` array (each item: { layer_index or layer_id, property_path, keyframes }).'
+        for (var ti = 0; ti < args.targets.length; ti++) {
+          var tgt = args.targets[ti] || {}
+          if (!isStr(tgt.property_path)) return 'set_keyframes_batch: targets[' + ti + '] missing `property_path`.'
+          if (!isArr(tgt.keyframes)) return 'set_keyframes_batch: targets[' + ti + '] missing `keyframes` array (each item: { time, value, in_type?, out_type? }).'
+        }
+        return null
       case 'apply_expression':
         if (!isStr(args.property_path)) return 'apply_expression: missing required `property_path`.'
         if (typeof args.expression !== 'string') return 'apply_expression: missing required `expression` string.'
@@ -333,6 +341,11 @@
           toESLiteral(args.layer_index) + ',' +
           toESLiteral(args.layer_id || null) + ')'
         break
+      case 'search_layers':
+        call = 'extensionsLlmChat_searchLayers(' +
+          toESLiteral(args.pattern) + ',' +
+          toESLiteral(args.layer_type || null) + ')'
+        break
       case 'get_effect_properties':
         call = 'extensionsLlmChat_getEffectProperties(' +
           toESLiteral(args.layer_index) + ',' +
@@ -411,6 +424,30 @@
           toESLiteral(args.layer_id || null) + ',' +
           toESLiteral(args.property_path) + ',' +
           toESLiteral(kfs) + ')'
+        break
+      case 'set_keyframes_batch':
+        var kfTargets = []
+        var kfSrc = args.targets || []
+        for (var kti = 0; kti < kfSrc.length; kti++) {
+          var kt = kfSrc[kti] || {}
+          var ktKfs = (kt.keyframes || []).map(function (kf) {
+            return {
+              time: kf.time,
+              value: kf.value,
+              inType: kf.in_type || null,
+              outType: kf.out_type || null,
+              easeIn: kf.ease_in || null,
+              easeOut: kf.ease_out || null
+            }
+          })
+          kfTargets.push({
+            layerIndex: kt.layer_index,
+            layerId: kt.layer_id || null,
+            propertyPath: kt.property_path,
+            keyframes: ktKfs
+          })
+        }
+        call = 'extensionsLlmChat_setKeyframesBatch(' + toESLiteral(kfTargets) + ')'
         break
       case 'delete_keyframes':
         call = 'extensionsLlmChat_deleteKeyframes(' +
