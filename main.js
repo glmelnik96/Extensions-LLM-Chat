@@ -623,6 +623,27 @@
     return warnings
   }
 
+  /**
+   * Convert tool loop log entries to the persisted session shape.
+   * Used by both the success path and the error path (partial logs), so a
+   * timed-out run still records what actually executed in AE.
+   */
+  function serializeToolCalls (calls) {
+    return (calls || []).map(function (tc) {
+      return {
+        id: tc.id,
+        name: tc.name,
+        args: tc.args,
+        result: tc.result,
+        status: tc.status,
+        // Timing is included so the Report (#9) and any future analytics
+        // can compute per-tool latency without re-running the session.
+        startTime: tc.startTime || null,
+        endTime: tc.endTime || null
+      }
+    })
+  }
+
   // ── Handle Send ────────────────────────────────────────────────────────
   function handleSend () {
     if (state.isRequestInFlight) return
@@ -733,6 +754,12 @@
       tools: (window.AGENT_TOOL_REGISTRY && window.AGENT_TOOL_REGISTRY.tools) || [],
       maxSteps: maxSteps,
       temperature: agentCfg.agentTemperature || 0.3,
+      // Default false: Cloud.ru (vllm-0.22.0) drops tool_calls in streaming
+      // mode for GLM-5.1 (verified 2026-06-10). Flip agentStreaming in config
+      // to re-enable live reasoning once the server is fixed.
+      streaming: agentCfg.agentStreaming === true,
+      // Thinking OFF on all loop turns by default (12x faster, see config).
+      thinkingFirstTurn: agentCfg.agentThinkingFirstTurn === true,
       abortHandle: state.currentAbortHandle,
       onTextChunk: function (chunk) {
         updateThinkingWithStreamText(chunk)
@@ -769,19 +796,7 @@
       var assistantMsg = {
         role: 'assistant',
         text: result.content || '',
-        toolCalls: allCalls.map(function (tc) {
-          return {
-            id: tc.id,
-            name: tc.name,
-            args: tc.args,
-            result: tc.result,
-            status: tc.status,
-            // Timing is included so the Report (#9) and any future analytics
-            // can compute per-tool latency without re-running the session.
-            startTime: tc.startTime || null,
-            endTime: tc.endTime || null
-          }
-        })
+        toolCalls: serializeToolCalls(allCalls)
       }
       session.messages.push(assistantMsg)
       session.updatedAt = Date.now()
@@ -796,6 +811,17 @@
       persistState()
     }).catch(function (err) {
       removeThinking()
+      // Preserve already-executed tool calls (P0-3): the layers/keyframes may
+      // already exist in AE, so the user must see what ran, and the next
+      // request must replay these calls so the model knows the real state.
+      var partialLog = (err && err.toolCallLog) || []
+      if (partialLog.length > 0) {
+        session.messages.push({
+          role: 'assistant',
+          text: '',
+          toolCalls: serializeToolCalls(partialLog)
+        })
+      }
       var errMsg = err.message || String(err)
       session.messages.push({ role: 'system', text: 'Error: ' + errMsg })
       session.updatedAt = Date.now()

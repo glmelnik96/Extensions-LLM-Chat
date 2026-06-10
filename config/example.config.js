@@ -30,6 +30,19 @@
 
       /** Temperature for agent tool-use calls (lower = more precise tool usage). */
       agentTemperature: 0.3,
+
+      /** Streaming in the agent loop. Default false: Cloud.ru (vllm-0.22.0)
+       *  drops ALL delta.tool_calls in streaming mode for GLM-5.1 (verified
+       *  live 2026-06-10, 10/10 repro) — non-streaming returns them correctly.
+       *  Set true to restore live reasoning UI once Cloud.ru fixes the parser
+       *  (re-test first: stream a tool-forcing request, count delta.tool_calls). */
+      agentStreaming: false,
+
+      /** Allow a thinking (reasoning) turn at the START of each agent run for
+       *  planning. Default false: thinking OFF on every turn measured 12x
+       *  faster end-to-end (94s vs 18.8min) with equal-quality output on the
+       *  reference task; GLM has no thinking budget, only on/off. */
+      agentThinkingFirstTurn: false,
     }
   }
 })()

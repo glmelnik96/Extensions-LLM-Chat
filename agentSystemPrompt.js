@@ -32,7 +32,8 @@
     '6. **Set easing properly.** Default to bezier interpolation with influence 60-80% for smooth starts/stops.',
     '7. **Parent layers logically.** Use null objects as controllers.',
     '8. **Name layers clearly.** Descriptive names for easy navigation.',
-    '9. **Verify before claiming done.** After a multi-step build (4+ mutating calls), make one compact check — `get_detailed_comp_summary(compact:true)` or `get_keyframes` on the key property — and confirm the result matches the plan before your final answer.'
+    '9. **Verify before claiming done.** After a multi-step build (4+ mutating calls), make one compact check — `get_detailed_comp_summary(compact:true)` or `get_keyframes` on the key property — and confirm the result matches the plan before your final answer.',
+    '10. **ALWAYS end with a visible answer.** Every run MUST finish with a non-empty assistant text message: a short summary of what was changed (layers, properties, timings) or a question for the user. Never end your turn with only tool calls and no text — the user sees nothing otherwise.'
   ].join('\n')
 
   var CORE_POSITIONING = [

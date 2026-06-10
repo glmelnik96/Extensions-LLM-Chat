@@ -55,6 +55,12 @@
     var onTextChunk = options.onTextChunk || null
     var onReasoningChunk = options.onReasoningChunk || null
     var abortHandle = options.abortHandle || null
+    // GLM has no thinking budget — only on/off via chat_template_kwargs
+    // (verified live 2026-06-10; Z.ai recommends turn-level thinking for
+    // agents). Default: thinking OFF on every loop turn — measured 12x faster
+    // end-to-end (94s vs 18.8min) with equal-quality output on the reference
+    // task. Set thinkingFirstTurn: true to allow a thinking planning turn.
+    var thinkingFirstTurn = options.thinkingFirstTurn === true
 
     // Build the full message array for the API.
     var messages = []
@@ -68,6 +74,10 @@
 
     var toolCallLog = []
     var totalUsage = { prompt_tokens: 0, completion_tokens: 0, total_tokens: 0 }
+    // Cloud.ru vLLM 0.22 streaming bug guard: retries allowed when the server
+    // reports finish_reason=tool_calls but delivers zero tool calls.
+    var emptyToolCallRetries = 0
+    var EMPTY_TOOL_CALL_MAX_RETRIES = 2
 
     function step (stepIndex) {
       if (abortHandle && abortHandle.aborted) {
@@ -95,9 +105,22 @@
         // 32768 for gpt-oss; 65536 leaves room for reasoning + long tool chains.)
         max_tokens: 65536,
         temperature: temperature,
-        abortHandle: abortHandle,
-        onTextChunk: onTextChunk,
-        onReasoningChunk: onReasoningChunk
+        abortHandle: abortHandle
+      }
+      // Disable thinking on executor turns (and on the first turn too unless
+      // explicitly opted in). Omitting the kwargs keeps the server default
+      // (thinking ON) for the planning turn.
+      if (!(thinkingFirstTurn && stepIndex === 0)) {
+        invokeOptions.chat_template_kwargs = { enable_thinking: false }
+      }
+      // Streaming is opt-in for the agent loop. Verified live 2026-06-10:
+      // Cloud.ru (vllm-0.22.0) drops ALL delta.tool_calls in streaming mode for
+      // GLM-5.1 (10/10 repro) while non-streaming returns them correctly, so
+      // the default is non-streaming until the server is fixed.
+      // CHAT_PROVIDER.invoke picks streaming iff onTextChunk is a function.
+      if (options.streaming === true) {
+        invokeOptions.onTextChunk = onTextChunk
+        invokeOptions.onReasoningChunk = onReasoningChunk
       }
 
       return window.CHAT_PROVIDER.invoke(modelId, messages, invokeOptions)
@@ -110,15 +133,22 @@
           }
           var choice = response.choices[0]
           var assistantMsg = choice.message
+          var toolCalls = assistantMsg.tool_calls || []
 
-          // Case 1: Model wants to call tools.
-          if (choice.finish_reason === 'tool_calls' ||
-              (assistantMsg.tool_calls && assistantMsg.tool_calls.length > 0)) {
-
+          // Case 1: Model wants to call tools (and they actually arrived).
+          if (toolCalls.length > 0) {
+            // GLM's chat template looks for `reasoning_content` on in-loop
+            // assistant messages; without it an empty <think></think> is
+            // injected and the model loses its own chain between tool turns
+            // (Z.ai interleaved-thinking guidance). Cloud.ru returns the field
+            // as `reasoning`, so rename before echoing back.
+            if (assistantMsg.reasoning && !assistantMsg.reasoning_content) {
+              assistantMsg.reasoning_content = assistantMsg.reasoning
+              delete assistantMsg.reasoning
+            }
             // Push the assistant message with tool_calls into conversation.
             messages.push(assistantMsg)
 
-            var toolCalls = assistantMsg.tool_calls || []
             return executeToolCallsSequentially(toolCalls, toolCallLog, onToolCall)
               .then(function (results) {
                 // Push each tool result as a tool message.
@@ -134,8 +164,35 @@
               })
           }
 
-          // Case 2: Model responded with content (done).
+          // Server anomaly: finish_reason says tool_calls but none were
+          // delivered (Cloud.ru vLLM 0.22 streaming parser bug). Without this
+          // guard the old code pushed an empty assistant turn and spun until
+          // maxSteps/timeout with no visible answer. Retry the same step a
+          // couple of times, then fail loudly instead of silently.
+          if (choice.finish_reason === 'tool_calls') {
+            if (emptyToolCallRetries < EMPTY_TOOL_CALL_MAX_RETRIES) {
+              emptyToolCallRetries++
+              return step(stepIndex)
+            }
+            return {
+              content: (assistantMsg.content || '') ||
+                ('[Server returned finish_reason=tool_calls with no tool calls ' +
+                 EMPTY_TOOL_CALL_MAX_RETRIES + 'x in a row (known Cloud.ru streaming bug). ' +
+                 'Run aborted.' + (toolCallLog.length ? ' Completed so far: ' + summarizeToolCallLog(toolCallLog) : '') + ']'),
+              toolCallLog: toolCallLog,
+              usage: totalUsage
+            }
+          }
+
+          // Case 2: Model responded with content (done). Never end the run
+          // with empty visible text — synthesize a summary from the tool log
+          // so the user always sees an outcome (P0-2 fix).
           var content = assistantMsg.content || ''
+          if (!content) {
+            content = toolCallLog.length > 0
+              ? 'Done — ' + summarizeToolCallLog(toolCallLog) + '.'
+              : '[Model returned an empty response.]'
+          }
           return {
             content: content,
             toolCallLog: toolCallLog,
@@ -144,7 +201,36 @@
         })
     }
 
-    return step(0)
+    // Attach the partial tool log to any rejection so the UI can render
+    // already-executed calls (layers may exist in AE even when the LLM call
+    // later times out) and replay them to the model on the next turn (P0-3).
+    return step(0).catch(function (err) {
+      var e = err || new Error('Agent loop failed')
+      try { e.toolCallLog = toolCallLog; e.usage = totalUsage } catch (_) {}
+      throw e
+    })
+  }
+
+  /**
+   * Compact human-readable summary of a tool call log, e.g.
+   * "8 tool calls: create_layer, set_keyframes_batch x2, add_effect (1 failed)".
+   */
+  function summarizeToolCallLog (log) {
+    var counts = {}
+    var order = []
+    var failed = 0
+    for (var i = 0; i < log.length; i++) {
+      var name = log[i].name || 'unknown'
+      if (!counts[name]) { counts[name] = 0; order.push(name) }
+      counts[name]++
+      if (log[i].status === 'error') failed++
+    }
+    var parts = []
+    for (var j = 0; j < order.length; j++) {
+      parts.push(order[j] + (counts[order[j]] > 1 ? ' x' + counts[order[j]] : ''))
+    }
+    return log.length + ' tool call' + (log.length === 1 ? '' : 's') + ': ' +
+      parts.join(', ') + (failed > 0 ? ' (' + failed + ' failed)' : '')
   }
 
   /**

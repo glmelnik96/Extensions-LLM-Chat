@@ -678,6 +678,32 @@ function extensionsLlmChat_saveCompFramePng (pathOrName, persistent) {
 }
 
 /**
+ * Read the post-expression evaluated value of a property for tool-result
+ * readback. Returns a number or an array of numbers, or null when the value
+ * is not a simple numeric type (e.g. TextDocument, shape, marker).
+ * Readback turns every apply_expression into its own unit test: the model
+ * sees the value the expression actually produces at the current time.
+ */
+function _exprReadbackValue (prop) {
+  try {
+    var v = prop.value;
+    if (typeof v === 'number') return v;
+    if (v instanceof Array) {
+      var out = [];
+      for (var i = 0; i < v.length; i++) {
+        if (typeof v[i] !== 'number') return null;
+        // Round to 4 decimals to keep tool results compact.
+        out.push(Math.round(v[i] * 10000) / 10000);
+      }
+      return out;
+    }
+    return null;
+  } catch (eReadback) {
+    return null;
+  }
+}
+
+/**
  * Apply an expression directly to a specific layer/property combination,
  * identified by layer index and a simple property path string like
  * "Transform>Position" or "Text>Source Text".
@@ -807,6 +833,11 @@ function extensionsLlmChat_applyExpressionToTarget (layerIndex, layerId, propert
     result.ok = true;
     result.message =
       'Expression applied to "' + propName + '" on layer "' + layerName + '" in comp "' + comp.name + '".';
+    var rbVal = _exprReadbackValue(targetProp);
+    if (rbVal !== null) {
+      result.evaluatedValue = rbVal;
+      result.message += ' Evaluated value at current time: ' + rbVal + '.';
+    }
     result.compStatusCode = ctx.statusCode || 'COMP_AVAILABLE';
     result.viewerType = ctx.viewerType || '';
     result.projectActiveItemType = ctx.projectActiveItemType || '';
@@ -910,6 +941,10 @@ function extensionsLlmChat_applyExpressionBatch (targets) {
 
         itemResult.ok = true;
         itemResult.message = 'Applied to layer "' + layer.name + '" → "' + targetProp.name + '".';
+        var batchRbVal = _exprReadbackValue(targetProp);
+        if (batchRbVal !== null) {
+          itemResult.evaluatedValue = batchRbVal;
+        }
         result.appliedCount++;
         result.results.push(itemResult);
       } catch (eItem) {
