@@ -3481,6 +3481,160 @@ function extensionsLlmChat_addItemToComp (projectItemIndex) {
   }
 }
 
+/**
+ * List effects installed in this AE instance (built-in + third-party),
+ * filtered by name/matchName substring and optional category.
+ */
+function extensionsLlmChat_listAvailableEffects (filter, category, maxResults) {
+  var result = { ok: false, message: '' };
+  try {
+    var max = (typeof maxResults === 'number' && maxResults > 0) ? maxResults : 25;
+    var f = (typeof filter === 'string' && filter.length) ? filter.toLowerCase() : null;
+    var cat = (typeof category === 'string' && category.length) ? category.toLowerCase() : null;
+    var list = [];
+    var total = 0;
+    var all = app.effects;
+    for (var i = 0; i < all.length; i++) {
+      var fx = all[i];
+      if (!fx) continue;
+      var dn = String(fx.displayName || '');
+      var mn = String(fx.matchName || '');
+      var cg = String(fx.category || '');
+      if (cat && cg.toLowerCase().indexOf(cat) === -1) continue;
+      if (f && dn.toLowerCase().indexOf(f) === -1 && mn.toLowerCase().indexOf(f) === -1) continue;
+      total++;
+      if (list.length < max) {
+        list.push({ displayName: dn, matchName: mn, category: cg });
+      }
+    }
+    result.ok = true;
+    result.totalMatches = total;
+    result.effects = list;
+    result.message = 'Found ' + total + ' installed effect(s)' +
+      (total > list.length ? ', returning first ' + list.length + ' — refine the filter for more specific results' : '') + '.';
+    return resultToJson(result);
+  } catch (e) {
+    result.message = 'Failed to list available effects: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Convert a panel-style property path ("Transform>Position",
+ * "Effects>Slider Control>Slider", "Masks>Mask 1>Mask Expansion",
+ * "Text>Source Text") into an expression reference fragment.
+ * Returns null for unsupported paths.
+ */
+function _exprRefForPath (path) {
+  var parts = path.split('>');
+  function q (s) { return String(s).replace(/"/g, '\\"'); }
+  if (parts[0] === 'Transform' && parts.length === 2) {
+    var tmap = {
+      'Position': 'transform.position',
+      'Scale': 'transform.scale',
+      'Rotation': 'transform.rotation',
+      'Opacity': 'transform.opacity',
+      'Anchor Point': 'transform.anchorPoint',
+      'X Rotation': 'transform.xRotation',
+      'Y Rotation': 'transform.yRotation',
+      'Z Rotation': 'transform.zRotation'
+    };
+    return tmap[parts[1]] || null;
+  }
+  if (parts[0] === 'Effects' && parts.length === 3) {
+    return 'effect("' + q(parts[1]) + '")("' + q(parts[2]) + '")';
+  }
+  if (parts[0] === 'Masks' && parts.length === 3) {
+    var mmap = {
+      'Mask Expansion': 'maskExpansion',
+      'Mask Feather': 'maskFeather',
+      'Mask Opacity': 'maskOpacity',
+      'Mask Path': 'maskPath'
+    };
+    var mp = mmap[parts[2]];
+    if (!mp) return null;
+    return 'mask("' + q(parts[1]) + '").' + mp;
+  }
+  if (path === 'Text>Source Text') return 'text.sourceText';
+  return null;
+}
+
+/**
+ * Serialize a number or numeric array as an expression literal ("[10, 20]").
+ * Returns null for anything else.
+ */
+function _exprNumLiteral (v) {
+  if (typeof v === 'number' && isFinite(v)) return String(v);
+  if (v instanceof Array) {
+    var parts = [];
+    for (var i = 0; i < v.length; i++) {
+      if (typeof v[i] !== 'number' || !isFinite(v[i])) return null;
+      parts.push(String(v[i]));
+    }
+    return '[' + parts.join(', ') + ']';
+  }
+  return null;
+}
+
+/**
+ * Link a target property to a source property via a generated expression:
+ *   thisComp.layer("Source").transform.position [* scale] [+ offset]
+ * Verifies the source property exists, then delegates to
+ * extensionsLlmChat_applyExpressionToTarget (error check + rollback +
+ * evaluated-value readback). opts: { scale, offset }.
+ */
+function extensionsLlmChat_linkProperties (targetIndex, targetId, targetPath, sourceIndex, sourceId, sourcePath, opts) {
+  var result = { ok: false, message: '' };
+  try {
+    if (!opts) opts = {};
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) {
+      result.message = ctx.message || 'Please select a composition in the timeline and try again.';
+      return resultToJson(result);
+    }
+    var srcLayer = _resolveLayer(ctx.comp, sourceIndex, sourceId);
+    if (!srcLayer) {
+      result.message = 'Source layer not found (index ' + sourceIndex + ', id ' + sourceId + ').';
+      return resultToJson(result);
+    }
+    var srcProp = _resolveProperty(srcLayer, sourcePath);
+    if (!srcProp) {
+      result.message = 'Source property path "' + sourcePath + '" could not be resolved on layer "' + srcLayer.name + '".';
+      return resultToJson(result);
+    }
+    var ref = _exprRefForPath(sourcePath);
+    if (!ref) {
+      result.message = 'Unsupported source property path for linking: "' + sourcePath + '". Supported: Transform>*, Effects>Name>Prop, Masks>Name>Prop, Text>Source Text.';
+      return resultToJson(result);
+    }
+    var expr = 'thisComp.layer("' + String(srcLayer.name).replace(/"/g, '\\"') + '").' + ref;
+    if (typeof opts.scale === 'number' && isFinite(opts.scale) && opts.scale !== 1) {
+      expr = '(' + expr + ') * ' + opts.scale;
+    }
+    if (opts.offset !== null && opts.offset !== undefined) {
+      var offLit = _exprNumLiteral(opts.offset);
+      if (offLit === null) {
+        result.message = 'Invalid offset for link_properties: expected a number or numeric array.';
+        return resultToJson(result);
+      }
+      expr = expr + ' + ' + offLit;
+    }
+    // Delegate — returns a JSON string. Splice the generated expression in so
+    // the agent sees exactly what was applied.
+    var applied = extensionsLlmChat_applyExpressionToTarget(targetIndex, targetId, targetPath, expr);
+    try {
+      var exprJson = resultToJson({ expression: expr });
+      if (typeof applied === 'string' && applied.charAt(0) === '{') {
+        return exprJson.substring(0, exprJson.length - 1) + ',' + applied.substring(1);
+      }
+    } catch (eSplice) {}
+    return applied;
+  } catch (e) {
+    result.message = 'linkProperties error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
 // ============================================================================
 // JSON serializer for tool results (ExtendScript ES3 — no native JSON.stringify)
 // ============================================================================

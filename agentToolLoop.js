@@ -80,6 +80,13 @@
     var EMPTY_TOOL_CALL_MAX_RETRIES = 2
 
     function step (stepIndex) {
+      // P1-3: the full message array is re-sent every turn, so old verbose
+      // tool results dominate prompt tokens on long runs (live e2e measured
+      // 160k cumulative prompt tokens for a 12-turn run). Older tool results
+      // have already been acted upon — truncate them, keeping the most recent
+      // ones intact for the model's working state.
+      trimOldToolResults(messages)
+
       if (abortHandle && abortHandle.aborted) {
         return Promise.resolve({
           content: '[Agent cancelled by user.]',
@@ -211,6 +218,33 @@
     })
   }
 
+  // Keep this many most-recent tool results untouched; older ones are
+  // truncated to TRIM_MAX_CHARS. 8 results ≈ the current working set the
+  // model still references; everything older was already consumed.
+  var TRIM_KEEP_RECENT_TOOL_MSGS = 8
+  var TRIM_MAX_CHARS = 400
+  var TRIM_MARKER = '…[truncated to save context — re-read with a get_* tool if needed]'
+
+  /**
+   * Truncate tool-result message contents that are older than the most
+   * recent TRIM_KEEP_RECENT_TOOL_MSGS tool messages. Mutates in place —
+   * the messages array is loop-local, so the UI/tool log is unaffected.
+   */
+  function trimOldToolResults (messages) {
+    var toolIdxs = []
+    for (var i = 0; i < messages.length; i++) {
+      if (messages[i].role === 'tool') toolIdxs.push(i)
+    }
+    var cutoff = toolIdxs.length - TRIM_KEEP_RECENT_TOOL_MSGS
+    for (var j = 0; j < cutoff; j++) {
+      var m = messages[toolIdxs[j]]
+      if (typeof m.content !== 'string') continue
+      if (m.content.length <= TRIM_MAX_CHARS) continue
+      if (m.content.indexOf(TRIM_MARKER) !== -1) continue // already trimmed
+      m.content = m.content.slice(0, TRIM_MAX_CHARS) + TRIM_MARKER
+    }
+  }
+
   /**
    * Compact human-readable summary of a tool call log, e.g.
    * "8 tool calls: create_layer, set_keyframes_batch x2, add_effect (1 failed)".
@@ -250,7 +284,9 @@
     get_mask_info: 1,
     get_markers: 1,
     list_project_items: 1,
-    capture_comp_frame: 1
+    capture_comp_frame: 1,
+    search_expression_library: 1,
+    list_available_effects: 1
   }
 
   /**

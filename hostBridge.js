@@ -157,6 +157,16 @@
       // came in completely empty (iter 3 retest T10 #8 #9 had `args:{}`
       // and silently added an ellipse with default 200x200 size to whatever
       // happened to be selected).
+      case 'link_properties':
+        if (!isStr(args.target_property_path)) return 'link_properties: missing required `target_property_path` (e.g. "Transform>Position").'
+        if (!isStr(args.source_property_path)) return 'link_properties: missing required `source_property_path` (e.g. "Transform>Position", "Effects>Slider Control>Slider").'
+        if (typeof args.source_layer_id !== 'number' && typeof args.source_layer_index !== 'number') {
+          return 'link_properties: provide `source_layer_id` or `source_layer_index` — the layer to read FROM.'
+        }
+        return null
+      case 'list_available_effects':
+        if (!isStr(args.filter)) return 'list_available_effects: missing required `filter` substring (e.g. "glow", "blur").'
+        return null
       case 'add_shape_ellipse':
       case 'add_shape_rectangle':
       case 'add_shape_path':
@@ -665,7 +675,35 @@
         call = 'extensionsLlmChat_saveCompFramePng(' + toESLiteral(captureName) + ', true)'
         break
 
+      // Expression library — panel-local, no AE round trip.
+      case 'search_expression_library':
+        if (!(window.PURE_EXPR_LIB && typeof window.PURE_EXPR_LIB.search === 'function')) {
+          return Promise.resolve({ ok: false, message: 'Expression library module not loaded.' })
+        }
+        return Promise.resolve(window.PURE_EXPR_LIB.search(args.query, args.max_results))
+
+      // Property linking
+      case 'link_properties':
+        call = 'extensionsLlmChat_linkProperties(' +
+          toESLiteral(args.target_layer_index !== undefined ? args.target_layer_index : null) + ',' +
+          toESLiteral(args.target_layer_id || null) + ',' +
+          toESLiteral(args.target_property_path) + ',' +
+          toESLiteral(args.source_layer_index !== undefined ? args.source_layer_index : null) + ',' +
+          toESLiteral(args.source_layer_id || null) + ',' +
+          toESLiteral(args.source_property_path) + ',' +
+          toESLiteral({
+            scale: typeof args.scale === 'number' ? args.scale : null,
+            offset: args.offset !== undefined ? args.offset : null
+          }) + ')'
+        break
+
       // Effect tools
+      case 'list_available_effects':
+        call = 'extensionsLlmChat_listAvailableEffects(' +
+          toESLiteral(args.filter) + ',' +
+          toESLiteral(args.category || null) + ',' +
+          toESLiteral(typeof args.max_results === 'number' ? args.max_results : null) + ')'
+        break
       case 'add_effect':
         call = 'extensionsLlmChat_addEffect(' +
           toESLiteral(args.layer_index) + ',' +

@@ -747,7 +747,61 @@
       }
     },
 
+    // ── Expression library / linking tools ───────────────────────────
+    {
+      type: 'function',
+      function: {
+        name: 'search_expression_library',
+        description: 'Search a curated library of battle-tested After Effects expression snippets (inertial bounce, typewriter, wiggle variants, loops, overshoot, stagger by index, auto-fade, squash & stretch, etc.). Returns ready-to-apply expression code with notes and any required controller effects. ALWAYS check here before writing a non-trivial expression from scratch.',
+        parameters: {
+          type: 'object',
+          properties: {
+            query: { type: 'string', description: 'Keywords describing the desired behavior, e.g. "bounce", "typewriter", "loop pingpong", "follow with delay"' },
+            max_results: { type: 'number', description: 'Maximum snippets to return (default 5)' }
+          },
+          required: ['query']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'link_properties',
+        description: 'Link a target property to a source property with a live expression (e.g. "Scale of B follows Scale of A", "Position linked to a Null controller"). Builds thisComp.layer("...") reference automatically, applies it with error checking, and returns the evaluated value. Optional scale multiplier and offset.',
+        parameters: {
+          type: 'object',
+          properties: {
+            target_layer_index: { type: 'number', description: '1-based index of the layer that RECEIVES the expression' },
+            target_layer_id: { type: 'number', description: 'Persistent ID of the target layer (preferred)' },
+            target_property_path: { type: 'string', description: 'Property path on the target layer, e.g. "Transform>Position"' },
+            source_layer_index: { type: 'number', description: '1-based index of the layer to read FROM' },
+            source_layer_id: { type: 'number', description: 'Persistent ID of the source layer (preferred)' },
+            source_property_path: { type: 'string', description: 'Property path on the source layer, e.g. "Transform>Position", "Effects>Slider Control>Slider"' },
+            scale: { type: 'number', description: 'Optional multiplier applied to the source value' },
+            offset: { description: 'Optional offset added to the source value — number for 1D, [x, y] array for 2D properties' }
+          },
+          required: ['target_property_path', 'source_property_path']
+        }
+      }
+    },
+
     // ── Effect tools ───────────────────────────────────────────────────
+    {
+      type: 'function',
+      function: {
+        name: 'list_available_effects',
+        description: 'Search effects actually installed in this After Effects (built-in + third-party plugins) by name substring. Returns displayName, matchName, and category. Use when unsure of the exact matchName before add_effect — never guess matchNames for exotic/third-party effects.',
+        parameters: {
+          type: 'object',
+          properties: {
+            filter: { type: 'string', description: 'Substring to match against effect display name or matchName (case-insensitive), e.g. "glow", "blur", "particular"' },
+            category: { type: 'string', description: 'Optional category filter, e.g. "Blur & Sharpen", "Stylize"' },
+            max_results: { type: 'number', description: 'Maximum effects to return (default 25)' }
+          },
+          required: ['filter']
+        }
+      }
+    },
     {
       type: 'function',
       function: {

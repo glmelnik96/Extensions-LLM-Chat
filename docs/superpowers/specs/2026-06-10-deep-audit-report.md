@@ -206,6 +206,25 @@ verify-цикл** вместо ответа. Реальный хост согл�
 
 ---
 
+## 7. Этап 3 — РЕАЛИЗОВАН (2026-06-11)
+
+| Что | Файл | Детали |
+|---|---|---|
+| Миссия-рефрейм | agentSystemPrompt.js | INTRO: «motion design EDITING assistant», задача — ускорять работу пользователя над ЕГО композицией (экспрешены, линковка, эффекты, тайминг); строить анимации с нуля только по явной просьбе. Строка «create animations from scratch» удалена. Workflow и модули указывают на новые тулы |
+| `search_expression_library` | lib/pure/expressionLibrary.js (новый), hostBridge.js, toolRegistry.js | 28 канонических сниппетов (Ebberts inertial bounce, typewriter, wiggle-семейство, loopOut, auto-fade, squash&stretch, trail/stagger by index, sourceRectAtTime-плашка, marker pulse, slider-риги…). Ключевые слова EN+RU, скоринговый поиск. Panel-local — БЕЗ round-trip в AE. `requires` декларирует контроллер-эффекты (Slider Control) для add_effect-prerequisite |
+| `link_properties` | host/index.jsx, hostBridge.js, toolRegistry.js | Генерирует `thisComp.layer("...").transform.position` (+ опциональные scale/offset) из panel-style путей (Transform>\*, Effects>Name>Prop, Masks>Name>Prop, Text>Source Text), проверяет существование source-property, делегирует в applyExpressionToTarget (rollback + evaluatedValue readback), возвращает применённый expression |
+| `list_available_effects` | host/index.jsx, hostBridge.js, toolRegistry.js | Поиск по `app.effects` (установленные built-in + third-party) по substring имени/matchName + категория. Закрывает галлюцинации matchName для экзотики |
+| P1-3 контекст-трим | agentToolLoop.js | `trimOldToolResults()` перед каждым ходом: tool-результаты старше последних 8 обрезаются до 400 зн. с маркером «re-read with a get_* tool if needed». Live-замер этапа 2 показал 160k кумулятивных prompt-токенов за ран — префилл стал главным рычагом скорости |
+| Валидация аргументов | hostBridge.js | `_validateRequiredArgs` для link_properties (target/source path + source layer) и list_available_effects (filter) |
+
+Регистр: 47 → **50 тулов**. Оба новых read-тула включены в READ_ONLY_TOOLS (параллельное исполнение).
+
+**Валидация:** юнит 51/51 (`node --test test/*.test.js`); новые — test/expressionLibrary.test.js (9: well-formed сниппеты, анти-питфолы text.sourceText.value/Date()/баланс скобок, поиск EN+RU, max_results, requires, трим старых tool-результатов с сохранением свежих 8, короткие не трогаются) + 2 в registry.test.js (схемы новых тулов, рефрейм промпта). host/index.jsx: parse OK, новый регион ES3-safe.
+
+**Не сделано / дальше:** AE-версия в контексте промпта (нужен host-вызов `app.version` при старте сессии); live e2e этапа 3 на реальном AE (link_properties и list_available_effects требуют живого хоста — синтетика не покрывает `app.effects`); ручной чек-лист пользователя в панели.
+
+---
+
 ## Источники
 
 - Внутренний аудит: agentToolLoop.js, chatProvider.js, main.js, agentSystemPrompt.js, hostBridge.js, host/index.jsx

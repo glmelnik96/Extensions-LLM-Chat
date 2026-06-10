@@ -23,9 +23,9 @@ function loadBrowserGlobal (file) {
 const registryWindow = loadBrowserGlobal('toolRegistry.js')
 const tools = registryWindow.AGENT_TOOL_REGISTRY && registryWindow.AGENT_TOOL_REGISTRY.tools
 
-test('registry: exposes 47 tools', () => {
+test('registry: exposes 50 tools', () => {
   assert.ok(Array.isArray(tools), 'tools array exported')
-  assert.strictEqual(tools.length, 47)
+  assert.strictEqual(tools.length, 50)
 })
 
 test('registry: every tool has a valid OpenAI function schema', () => {
@@ -100,7 +100,32 @@ test('prompt: new behavior rules present', () => {
   assert.match(full, /Verify before claiming done/, 'self-verification rule')
   assert.match(full, /brief numbered plan/, 'plan rule')
   assert.ok(!full.includes('No chain-of-thought in the visible response'), 'old no-CoT rule replaced')
-  assert.match(full, /47 tools/, 'tool count updated')
+  assert.match(full, /50 tools/, 'tool count updated')
+})
+
+test('registry: stage-3 tools registered with correct schemas', () => {
+  const lib = findTool('search_expression_library')
+  assert.ok(lib, 'search_expression_library registered')
+  assert.strictEqual(JSON.stringify(lib.function.parameters.required), JSON.stringify(['query']))
+
+  const link = findTool('link_properties')
+  assert.ok(link, 'link_properties registered')
+  assert.strictEqual(JSON.stringify(link.function.parameters.required), JSON.stringify(['target_property_path', 'source_property_path']))
+  assert.ok(link.function.parameters.properties.scale, 'link has scale')
+  assert.ok(link.function.parameters.properties.offset, 'link has offset')
+
+  const fx = findTool('list_available_effects')
+  assert.ok(fx, 'list_available_effects registered')
+  assert.strictEqual(JSON.stringify(fx.function.parameters.required), JSON.stringify(['filter']))
+})
+
+test('prompt: stage-3 reframe — editing assistant, new tools mentioned', () => {
+  const full = builder.buildFull()
+  assert.match(full, /EDITING assistant/, 'editing-assistant framing')
+  assert.ok(!full.includes('create animations from scratch'), '"from scratch" mission line removed')
+  assert.ok(full.includes('search_expression_library'), 'mentions expression library tool')
+  assert.ok(full.includes('link_properties'), 'mentions link_properties')
+  assert.ok(full.includes('list_available_effects'), 'mentions list_available_effects')
 })
 
 test('prompt: legacy AGENT_SYSTEM_PROMPT global still exported', () => {
