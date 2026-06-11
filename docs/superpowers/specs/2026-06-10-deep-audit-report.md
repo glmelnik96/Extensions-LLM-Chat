@@ -221,7 +221,44 @@ verify-цикл** вместо ответа. Реальный хост согл�
 
 **Валидация:** юнит 51/51 (`node --test test/*.test.js`); новые — test/expressionLibrary.test.js (9: well-formed сниппеты, анти-питфолы text.sourceText.value/Date()/баланс скобок, поиск EN+RU, max_results, requires, трим старых tool-результатов с сохранением свежих 8, короткие не трогаются) + 2 в registry.test.js (схемы новых тулов, рефрейм промпта). host/index.jsx: parse OK, новый регион ES3-safe.
 
-**Не сделано / дальше:** AE-версия в контексте промпта (нужен host-вызов `app.version` при старте сессии); live e2e этапа 3 на реальном AE (link_properties и list_available_effects требуют живого хоста — синтетика не покрывает `app.effects`); ручной чек-лист пользователя в панели.
+**Не сделано / дальше:** AE-версия в контексте промпта (нужен host-вызов `app.version` при старте сессии); ручной чек-лист пользователя в панели.
+
+---
+
+## 8. Live-валидация в реальном AE (2026-06-12)
+
+Методика: панель с CEP debug-портом (`.debug`, порт 8092) + `scripts/cdp-eval.js` — выполнение JS внутри живой панели через Chrome DevTools Protocol, вызовы реального `HOST_BRIDGE.executeToolCall(...)` → настоящий ExtendScript/композиция. Воспроизводимо без ручных кликов.
+
+**Прошло сразу:** `list_available_effects` (реальный `app.effects`, нашёл built-in ADBE Glo2 и third-party Mettle SkyBox Glow; пустой фильтр → 0 без ошибки); `search_expression_library` (panel-local, 28 сниппетов в живой панели); `auto-fade` сниппет на Opacity (readback 0 на t=0 — корректно).
+
+**Найдено и исправлено 3 live-бага, невидимых для node-тестов:**
+
+| # | Баг | Симптом | Фикс |
+|---|---|---|---|
+| 1 | ExtendScript кидает «invalid numeric result (divide by zero?)» на конкатенации `строка + Array` (даже чистый пересобранный массив; `join()` работает) | apply_expression/link_properties возвращали ok:false при УСПЕШНО применённом экспрешене — на всех многомерных свойствах | host/index.jsx: readback-сообщение строится через `join(', ')` |
+| 2 | `resultToJson` не экранировал control-символы; AE кладёт сырые `\r\n` в expressionError | Невалидный JSON → панель не парсила ответ → fallback-обёртка с **ok:true при реальной ошибке экспрешена** | host/index.jsx: эскейп `\r\n\t` + все `\u0000-\u001f` |
+| 3 | `add_effect` не умел задавать имя инстанса эффекта | Сниппеты-риги ссылаются на `effect("Wiggle Freq")` — агент не мог создать такое имя вообще | `effect_name` опциональный параметр (registry + hostBridge + host, rename в undo-группе) |
+
+**Прошло после фиксов (живой AE):** `link_properties` Scale×0.5 (источник A=80 → B evaluated [40,40,100], линк живой при изменении источника), Position+offset [200,100] ([960,540]→[1160,640]); полный slider-риг цикл: add_effect×2 с rename → set_effect_property по index → `wiggle-slider` сниппет на Rotation (evaluated 5.96, живой wiggle от слайдеров); заведомо битый экспрешен → ok:false + expressionError доезжают до панели корректно. Юнит после фиксов: 51/51.
+
+### 8.1 Стресс-раунд (та же сессия)
+
+Батареи: unicode/escaping, текст+typewriter+авто-плашка, кейфреймы+loop, маски/3D/камера/свет/parenting/precompose/duplicate/timing, error-пути/идемпотентность/capture_comp_frame.
+
+**Прошло без правок:** кавычки/кириллица/эмодзи в именах слоёв (включая корректный эскейп внутри сгенерированных expressions), маркеры с `\n`, rename с backslash, поиск по кириллице; create text + set_text_document («ёлочки», цвет, кегль) + typewriter (readback: пустая строка на t=0 — верно); add_keyframes/get_keyframes/set_keyframes_batch/loopOut; маски (feather/opacity), set_layer_3d, камера (zoom/DOF), свет, parenting, duplicate, set_layer_timing; error-пути (несуществующие id/path/index → чистые сообщения); идемпотентность client_op_id (dedup, один слой); capture_comp_frame (PNG 27KB записан; `fileSize:-1` — косметика).
+
+**Найдено и исправлено ещё 4 бага:**
+
+| # | Баг | Симптом | Фикс |
+|---|---|---|---|
+| 4 | `_resolveProperty`: alias `contents→ADBE Root Vectors Group` затирал исходный сегмент и для direct lookup, и для fallback-скана | Внутренние `Contents` шейп-групп (matchName `ADBE Vectors Group`) не резолвились НИКОГДА — даже пути, которые выдаёт сам get_layer_properties | direct lookup пробует alias и оригинал; name-скан — по оригинальному сегменту |
+| 5 | add_shape_rect/ellipse/path: чтение `rect.name` после `addProperty(Fill/Stroke)` | ExtendScript «Object is invalid» — addProperty инвалидирует соседние ссылки; плюс ok:true при ошибке (catch не сбрасывал ok) | имена захватываются сразу после создания; catch ставит ok=false; результат теперь содержит готовые `sizePath`/`positionPath`/`pathPropertyPath` — агенту не нужно угадывать пути |
+| 6 | `reorder_layer` использовал `layer.moveTo(index)` — у Layer НЕТ moveTo (это метод Property) | «parent is not an INDEXED_GROUP» на ЛЮБОМ слое — тул не работал никогда | moveToBeginning/moveToEnd/moveBefore/moveAfter по направлению; проверено: вниз/вверх/в начало/в конец/noop |
+| 7 | `precompose_layers` принимал только layer_indices | Агент рефлекторно передаёт layer_ids (как все остальные тулы) и получает отказ; индексы сдвигаются при reorder | поддержка `layer_ids` (резолв id→index в хосте), required теперь только comp_name |
+
+Дополнительно: подсказка пути в сниппете `auto-size-box` исправлена на реальный формат (`Contents><Group>>Contents>Rectangle Path 1>Size`) и указывает брать `sizePath` из результата add_shape_rectangle. Авто-плашка проверена end-to-end: rect Size получил sourceRectAtTime-экспрешен от текстового слоя, evaluated [40,40] при пустом тексте (typewriter на t=0) — связка библиотека+шейпы+текст работает.
+
+Все тестовые слои удалены (9/9), комп чист. Юнит: 51/51. В бин проекта остался item «Прекомп плашки» и тестовые solids — мусор от прогона, можно удалить вручную или `File > Reduce Project`.
 
 ---
 

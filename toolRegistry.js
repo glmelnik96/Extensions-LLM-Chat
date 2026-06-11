@@ -813,6 +813,7 @@
             layer_index: { type: 'number', description: '1-based layer index' },
             layer_id: { type: 'number', description: 'Persistent layer ID' },
             effect_match_name: { type: 'string', description: 'Effect matchName or display name' },
+            effect_name: { type: 'string', description: 'Optional custom display name for the added effect instance (e.g. "Wiggle Freq" for a Slider Control referenced by expressions)' },
             client_op_id: { type: 'string', description: 'Optional unique id for idempotency. Reuse on retry to avoid stacking duplicate effects.' }
           },
           required: ['layer_index', 'effect_match_name']
@@ -884,10 +885,11 @@
           type: 'object',
           properties: {
             layer_indices: { type: 'array', items: { type: 'number' }, description: 'Array of 1-based layer indices to precompose' },
+            layer_ids: { type: 'array', items: { type: 'number' }, description: 'Array of persistent layer IDs (preferred over indices — indices shift on reorder)' },
             comp_name: { type: 'string', description: 'Name for the new precomp' },
             move_attributes: { type: 'boolean', description: 'Move layer attributes into precomp (default true)' }
           },
-          required: ['layer_indices', 'comp_name']
+          required: ['comp_name']
         }
       }
     },

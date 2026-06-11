@@ -708,7 +708,8 @@
         call = 'extensionsLlmChat_addEffect(' +
           toESLiteral(args.layer_index) + ',' +
           toESLiteral(args.layer_id || null) + ',' +
-          toESLiteral(args.effect_match_name) + ')'
+          toESLiteral(args.effect_match_name) + ',' +
+          toESLiteral(args.effect_name || null) + ')'
         break
       case 'remove_effect':
         call = 'extensionsLlmChat_removeEffect(' +
@@ -738,9 +739,10 @@
         break
       case 'precompose_layers':
         call = 'extensionsLlmChat_precomposeLayers(' +
-          toESLiteral(args.layer_indices) + ',' +
+          toESLiteral(args.layer_indices || null) + ',' +
           toESLiteral(args.comp_name) + ',' +
-          toESLiteral(args.move_attributes !== undefined ? args.move_attributes : true) + ')'
+          toESLiteral(args.move_attributes !== undefined ? args.move_attributes : true) + ',' +
+          toESLiteral(args.layer_ids || null) + ')'
         break
       case 'set_comp_settings':
         call = 'extensionsLlmChat_setCompSettings(' +

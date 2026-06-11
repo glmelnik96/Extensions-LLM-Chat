@@ -836,7 +836,10 @@ function extensionsLlmChat_applyExpressionToTarget (layerIndex, layerId, propert
     var rbVal = _exprReadbackValue(targetProp);
     if (rbVal !== null) {
       result.evaluatedValue = rbVal;
-      result.message += ' Evaluated value at current time: ' + rbVal + '.';
+      // NOTE: ExtendScript throws "invalid numeric result" on string + Array
+      // concatenation (verified live in AE) — always join() arrays explicitly.
+      var rbStr = (rbVal instanceof Array) ? '[' + rbVal.join(', ') + ']' : '' + rbVal;
+      result.message += ' Evaluated value at current time: ' + rbStr + '.';
     }
     result.compStatusCode = ctx.statusCode || 'COMP_AVAILABLE';
     result.viewerType = ctx.viewerType || '';
@@ -1157,18 +1160,25 @@ function _resolveProperty (layer, propertyPath) {
   var segments = propertyPath.split('>');
   var current = layer;
   for (var i = 0; i < segments.length; i++) {
-    var seg = segments[i];
+    var segOrig = segments[i];
+    if (!segOrig) { current = null; break; }
     // Check alias table first
-    var segAlias = _segAlias[seg.toLowerCase()];
-    if (segAlias) seg = segAlias;
-    if (!seg) { current = null; break; }
+    var segAlias = _segAlias[segOrig.toLowerCase()];
+    var seg = segAlias || segOrig;
     var next = null;
     // Try direct lookup (works for matchNames and most display names).
     try { next = current.property(seg); } catch (e2) { next = null; }
+    // Alias may be wrong in nested contexts (e.g. inner "Contents" of a shape
+    // group is ADBE Vectors Group, not the root matchName) — retry original.
+    if (!next && segAlias) {
+      try { next = current.property(segOrig); } catch (e2b) { next = null; }
+    }
     // If direct lookup failed and current is a group, scan children by name.
+    // Scan with the ORIGINAL segment — the alias substitution must not hide
+    // children whose display name matches what the agent actually passed.
     if (!next && current.numProperties !== undefined) {
       try {
-        var segLower = seg.toLowerCase();
+        var segLower = segOrig.toLowerCase();
         // Numeric index fallback: "Mask 1", "Mask 2" etc. → property(N)
         var numMatch = segLower.match(/^(?:mask|effect|group)\s+(\d+)$/);
         if (numMatch) {
@@ -1434,16 +1444,21 @@ function extensionsLlmChat_reorderLayer (layerIndex, layerId, newIndex) {
     }
     _beginToolUndo('Agent: Reorder layer');
     try {
-      layer.moveTo(newIndex);
+      // Layer has NO moveTo(index) — that's a Property method and always
+      // throws "parent is not an INDEXED_GROUP" (verified live in AE).
+      // Use the real Layer API: moveBefore/moveAfter/moveToBeginning/moveToEnd.
+      if (newIndex === 1) {
+        layer.moveToBeginning();
+      } else if (newIndex === ctx.comp.numLayers) {
+        layer.moveToEnd();
+      } else if (newIndex < layer.index) {
+        layer.moveBefore(ctx.comp.layer(newIndex));
+      } else {
+        layer.moveAfter(ctx.comp.layer(newIndex));
+      }
     } catch (eMove) {
       _endToolUndo();
-      var msg = String(eMove && eMove.toString ? eMove.toString() : eMove);
-      // Decorate the cryptic AE error so the agent stops retrying immediately.
-      if (msg.indexOf('INDEXED_GROUP') !== -1) {
-        result.message = 'reorder_layer cannot move this layer: it appears to be inside a precomp or has a non-standard parent. Reorder only direct comp layers, or open the parent comp first. (AE: ' + msg + ')';
-      } else {
-        result.message = 'reorderLayer error: ' + msg;
-      }
+      result.message = 'reorderLayer error: ' + String(eMove && eMove.toString ? eMove.toString() : eMove);
       return resultToJson(result);
     }
     _endToolUndo();
@@ -2162,7 +2177,7 @@ function extensionsLlmChat_getLayerProperties (layerIndex, layerId) {
 /**
  * Add an effect to a layer by matchName or display name.
  */
-function extensionsLlmChat_addEffect (layerIndex, layerId, effectMatchName) {
+function extensionsLlmChat_addEffect (layerIndex, layerId, effectMatchName, effectName) {
   var result = { ok: false, message: '', effectIndex: null };
   try {
     var ctx = extensionsLlmChat_resolveActiveComp();
@@ -2173,6 +2188,11 @@ function extensionsLlmChat_addEffect (layerIndex, layerId, effectMatchName) {
     if (!effects) { result.message = 'Layer does not support effects.'; return resultToJson(result); }
     _beginToolUndo('Agent: Add effect');
     var fx = effects.addProperty(effectMatchName);
+    // Optional rename — expression-library rigs reference sliders by custom
+    // name (e.g. effect("Wiggle Freq")("Slider")), so the name must be settable.
+    if (fx && typeof effectName === 'string' && effectName.length > 0) {
+      try { fx.name = effectName; } catch (eRename) {}
+    }
     _endToolUndo();
     if (!fx) { result.message = 'Failed to add effect "' + effectMatchName + '".'; return resultToJson(result); }
     result.ok = true;
@@ -2375,13 +2395,29 @@ function extensionsLlmChat_createComp (name, width, height, pixelAspect, duratio
  * @param {string} compName      Name for the new precomp
  * @param {boolean} moveAttributes  If true, move attributes into precomp (option 1). Default true.
  */
-function extensionsLlmChat_precomposeLayers (layerIndices, compName, moveAttributes) {
+function extensionsLlmChat_precomposeLayers (layerIndices, compName, moveAttributes, layerIds) {
   var result = { ok: false, message: '', precompName: '' };
   try {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    // Persistent ids are safer than indices (indices shift on reorder) —
+    // resolve them to current indices when provided.
+    if ((!(layerIndices instanceof Array) || layerIndices.length === 0) && layerIds instanceof Array && layerIds.length > 0) {
+      layerIndices = [];
+      for (var idI = 0; idI < layerIds.length; idI++) {
+        var found = null;
+        for (var li = 1; li <= ctx.comp.numLayers; li++) {
+          if (ctx.comp.layer(li).id === layerIds[idI]) { found = li; break; }
+        }
+        if (found === null) {
+          result.message = 'Layer with id ' + layerIds[idI] + ' not found in the active comp.';
+          return resultToJson(result);
+        }
+        layerIndices.push(found);
+      }
+    }
     if (!(layerIndices instanceof Array) || layerIndices.length === 0) {
-      result.message = 'No layer indices provided.'; return resultToJson(result);
+      result.message = 'No layer indices provided. Pass layer_indices (1-based) or layer_ids.'; return resultToJson(result);
     }
     var n = (typeof compName === 'string' && compName.length) ? compName : 'Precomp';
     var moveAttr = (typeof moveAttributes === 'boolean') ? moveAttributes : true;
@@ -2670,6 +2706,9 @@ function extensionsLlmChat_addShapeRect (layerIndex, layerId, opts) {
 
     var vectors = grp.property('ADBE Vectors Group');
     var rect = vectors.addProperty('ADBE Vector Shape - Rect');
+    // Capture the name NOW — later addProperty(Fill/Stroke) calls invalidate
+    // this reference (ExtendScript "Object is invalid").
+    var rectName = rect.name;
     var rectSize = rect.property('ADBE Vector Rect Size');
     if (rectSize) rectSize.setValue([typeof opts.width === 'number' ? opts.width : 200, typeof opts.height === 'number' ? opts.height : 200]);
     var rectPos = rect.property('ADBE Vector Rect Position');
@@ -2690,10 +2729,16 @@ function extensionsLlmChat_addShapeRect (layerIndex, layerId, opts) {
     _endToolUndo();
     result.ok = true;
     result.groupName = grp.name;
-    result.message = 'Added rectangle "' + grp.name + '" to shape layer "' + layer.name + '".';
+    // Ready-to-use property paths — agents kept guessing these wrong.
+    var basePath = 'Contents>' + groupName + '>Contents>' + rectName;
+    result.sizePath = basePath + '>Size';
+    result.positionPath = basePath + '>Position';
+    result.roundnessPath = basePath + '>Roundness';
+    result.message = 'Added rectangle "' + grp.name + '" to shape layer "' + layer.name + '". Size property path: "' + result.sizePath + '".';
     return resultToJson(result);
   } catch (e) {
     try { _endToolUndo(); } catch (x) {}
+    result.ok = false;
     result.message = 'addShapeRect error: ' + e.toString();
     return resultToJson(result);
   }
@@ -2724,6 +2769,9 @@ function extensionsLlmChat_addShapeEllipse (layerIndex, layerId, opts) {
 
     var vectors = grp.property('ADBE Vectors Group');
     var ellipse = vectors.addProperty('ADBE Vector Shape - Ellipse');
+    // Capture the name NOW — later addProperty(Fill/Stroke) calls invalidate
+    // this reference (ExtendScript "Object is invalid").
+    var ellipseName = ellipse.name;
     var eSize = ellipse.property('ADBE Vector Ellipse Size');
     if (eSize) eSize.setValue([typeof opts.width === 'number' ? opts.width : 200, typeof opts.height === 'number' ? opts.height : 200]);
     var ePos = ellipse.property('ADBE Vector Ellipse Position');
@@ -2742,10 +2790,15 @@ function extensionsLlmChat_addShapeEllipse (layerIndex, layerId, opts) {
     _endToolUndo();
     result.ok = true;
     result.groupName = grp.name;
-    result.message = 'Added ellipse "' + grp.name + '" to shape layer "' + layer.name + '".';
+    // Ready-to-use property paths — agents kept guessing these wrong.
+    var basePathE = 'Contents>' + groupName + '>Contents>' + ellipseName;
+    result.sizePath = basePathE + '>Size';
+    result.positionPath = basePathE + '>Position';
+    result.message = 'Added ellipse "' + grp.name + '" to shape layer "' + layer.name + '". Size property path: "' + result.sizePath + '".';
     return resultToJson(result);
   } catch (e) {
     try { _endToolUndo(); } catch (x) {}
+    result.ok = false;
     result.message = 'addShapeEllipse error: ' + e.toString();
     return resultToJson(result);
   }
@@ -2780,6 +2833,9 @@ function extensionsLlmChat_addShapePath (layerIndex, layerId, opts) {
 
     var vectors = grp.property('ADBE Vectors Group');
     var pathGrp = vectors.addProperty('ADBE Vector Shape - Group');
+    // Capture the name NOW — later addProperty(Fill/Stroke) calls invalidate
+    // this reference (ExtendScript "Object is invalid").
+    var pathGrpName = pathGrp.name;
     var pathProp = pathGrp.property('ADBE Vector Shape');
 
     var shapeObj = new Shape();
@@ -2801,10 +2857,12 @@ function extensionsLlmChat_addShapePath (layerIndex, layerId, opts) {
     _endToolUndo();
     result.ok = true;
     result.groupName = grp.name;
-    result.message = 'Added path "' + grp.name + '" with ' + opts.vertices.length + ' vertices to "' + layer.name + '".';
+    result.pathPropertyPath = 'Contents>' + groupName + '>Contents>' + pathGrpName + '>Path';
+    result.message = 'Added path "' + grp.name + '" with ' + opts.vertices.length + ' vertices to "' + layer.name + '". Path property path: "' + result.pathPropertyPath + '".';
     return resultToJson(result);
   } catch (e) {
     try { _endToolUndo(); } catch (x) {}
+    result.ok = false;
     result.message = 'addShapePath error: ' + e.toString();
     return resultToJson(result);
   }
@@ -3646,7 +3704,16 @@ function resultToJson (obj) {
     }
     var t = typeof value;
     if (t === 'string') {
-      return '"' + value.replace(/\\/g, '\\\\').replace(/"/g, '\\"') + '"';
+      // Escape control chars too — AE error strings contain raw \r\n, which
+      // produced invalid JSON and made the panel drop the ok:false status.
+      var s = value.replace(/\\/g, '\\\\').replace(/"/g, '\\"')
+        .replace(/\r/g, '\\r').replace(/\n/g, '\\n').replace(/\t/g, '\\t');
+      s = s.replace(/[\u0000-\u001f]/g, function (ch) {
+        var code = ch.charCodeAt(0).toString(16);
+        while (code.length < 4) code = '0' + code;
+        return '\\u' + code;
+      });
+      return '"' + s + '"';
     }
     if (t === 'boolean') {
       return value ? 'true' : 'false';
