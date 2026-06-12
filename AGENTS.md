@@ -12,7 +12,7 @@ The user types a natural-language motion-design request → the agent plans a se
 
 **Tagline for the user:** «buddy for motion design, not autopilot». The agent should help with hard expression logic, parameter dependencies, and AE quirks — not auto-generate entire animations from a single sentence.
 
-**Status (2026-05-12):** MVP shipped, 4 iterations of post-release fixes. See `docs/release-checklist.md` for the cut, and `docs/iterations.md` (created here in AGENTS) — actually see the **Iteration history** section below in this file for a quick recap.
+**Status (2026-06-10):** MVP shipped (2026-04-30), 4 iterations of post-release fixes (2026-05), migration to Cloud.ru reasoning models GLM-5.1 (2026-06-04), Stage 3 editing-assistant upgrade (expression library, link_properties, list_available_effects), and live validation in real AE via CDP — 7 host bugs found and fixed (2026-06-10). All committed and pushed. See the **Iteration history** section below.
 
 ---
 
@@ -29,17 +29,21 @@ Extensions LLM Chat/
 ├── agentToolLoop.js           ← LLM ↔ tool execution cycle (parallel reads, validation, abort)
 ├── chatProvider.js            ← Cloud.ru API, retry on 429/5xx, SSE streaming
 ├── hostBridge.js              ← Tool name → ExtendScript mapping, anti-spam guard, idempotency, validation
-├── toolRegistry.js            ← 45 OpenAI-format tool definitions
+├── toolRegistry.js            ← 50 OpenAI-format tool definitions
 ├── host/
-│   └── index.jsx              ← ExtendScript: ALL AE operations (~3200 lines, 49 functions)
+│   └── index.jsx              ← ExtendScript: ALL AE operations (~3850 lines, 54 functions)
 ├── CSXS/manifest.xml          ← CEP manifest
 ├── lib/
-│   └── CSInterface.js         ← Adobe CSInterface (downloaded by user, not in repo)
+│   ├── CSInterface.js         ← Adobe CSInterface (tracked in repo)
+│   └── pure/                  ← pure modules shared with node tests (esLiteral, markdown, prune, expressionLibrary)
 ├── config/
 │   ├── example.config.js      ← tracked defaults
 │   ├── runtime-config.js      ← gitignored overrides
 │   └── secrets.local.js       ← gitignored API key
 ├── knowledge-base/            ← AE expression reference corpus (human-readable; KB_SNIPPETS in main.js does keyword injection)
+├── scripts/
+│   └── cdp-eval.js            ← CDP helper: eval JS inside the live panel (port 8092) for real-AE testing
+├── test/                      ← node:test unit tests (51 tests) — `node --test test/*.test.js`
 └── docs/                      ← detailed per-topic docs
 ```
 
@@ -86,7 +90,8 @@ These are documented thoroughly in `~/.claude/projects/.../memory/feedback_llm_f
 | `args: {}` for tools with required fields | `_validateRequiredArgs` in `hostBridge.js` | iter 1 |
 | `apply_expression<|channel|>commentary` Unknown tool | toolName normalize in `executeToolCall` | iter 3 (Fix I) |
 | Spiral of 14×/43× same failing call | anti-spam guard in `hostBridge.js` | iter 2 (Fix B) |
-| Truncated tool_calls JSON mid-stream | `max_tokens: 32768` in `agentToolLoop.js` | iter 3+4 (Fix H, M) |
+| Truncated tool_calls JSON mid-stream | `max_tokens: 65536` in `agentToolLoop.js` | iter 3+4 (Fix H, M), raised for GLM-5.1 |
+| Streaming drops ALL tool_calls (vLLM 0.22.0 + GLM-5.1) | non-streaming for tool turns in agent loop | 2026-06 reliability fixes |
 | Fabricated `![preview](file:///...)` without `capture_comp_frame` | prompt rule + opt-in capture | iter 4 (Fix J) |
 | `add_shape_*({})` silently inserts into wrong layer | `_validateRequiredArgs` requires layer_id | iter 4 (Fix K) |
 | CoT leakage into final response | prompt rule in CORE_RULES | iter 4 (Fix L) |
@@ -104,23 +109,21 @@ These are documented thoroughly in `~/.claude/projects/.../memory/feedback_llm_f
 ## First moves for a new agent
 
 1. **Read this file** (you are doing it). Skim `README.md` for user-facing setup.
-2. **Read your memory** — Claude Code has 5 memory files under `~/.claude/projects/<project>/memory/`:
-   - `MEMORY.md` (index)
-   - `user_profile.md` (motion designer; Windows + Mac + Android)
-   - `project_direction.md` (chat-only, post-MVP, patches only)
-   - `feedback_llm_failure_modes.md` (Cloud.ru tool-call quirks, mitigations) ← **most useful**
-   - `feedback_refactor_lessons.md` (host/index.jsx helper-deletion pitfalls)
-   - `feedback_brand_presets.md` (presets out of scope here — live in separate "Cloud.ru Motion Presets" extension)
+2. **Read your memory** — Claude Code memory files live under `~/.claude/projects/<project>/memory/` (`MEMORY.md` is the index). Highlights:
+   - `feedback_git_safety.md`, `feedback_work_style.md`, `feedback_session_start.md` — collaboration rules
+   - `project_windows_msix_env.md` — MSIX sandbox + SSH quirks on this Windows machine
+   - `project_model_stack.md`, `project_cloudru_streaming_bug.md` — GLM-5.1 / Cloud.ru specifics
+   - `reference_live_ae_testing.md` — CDP live-testing pipeline + ExtendScript quirks ← **most useful for tool work**
 3. **Glance at recent git log** to see latest commits:
    ```
    git log --oneline -10
    ```
 4. **If the user describes a problem with tests / behavior**, check `~/Desktop/Логи/T*.json` for exported error logs. The user runs T1-T10 integration tests after every iteration.
 5. **Open the Obsidian vault** for higher-level project context:
-   - macOS: `~/Documents/2nd brain` (Syncthing-synced)
+   - Windows: `C:\Users\Глеб\Downloads\2nd brain` / macOS: `~/Downloads/2nd brain` (Syncthing-synced)
    - Folder note: `01 Projects/AE Motion Agent/AE Motion Agent.md` — current status + 🎯 next action + artifact table
    - Iteration artifacts: `01 Projects/AE Motion Agent/AE Motion Agent — итерация N *.md`
-6. **DO NOT read `host/index.jsx` (3200+ lines) end-to-end on first session.** Use `grep` for `function extensionsLlmChat_<name>` or `_<helper>` to jump to the relevant section.
+6. **DO NOT read `host/index.jsx` (~3850 lines) end-to-end on first session.** Use `grep` for `function extensionsLlmChat_<name>` or `_<helper>` to jump to the relevant section.
 
 ---
 
@@ -138,8 +141,6 @@ First T1-T10 integration test run exposed systematic problems. Three fixes:
 - **Fix B** — anti-spam guard in `hostBridge.js`. Tracks `(toolName, JSON.stringify(args))` failure streak. After 3 sequential failures with the same args, 4th attempt is rejected with `error_code: 'RETRY_BLOCKED'`. Counter resets on any success for that key. `resetSpamGuard()` runs at start of every `runAgentLoop`.
 - **Fix C** — dynamic host hints (in `add_shape_*` and `reorder_layer`) plus prompt updates (SHAPES module — explicit layer-type tracking, KNOWN_LIMITATIONS — layer stacking + precomp limitations + anti-spam guard explanation).
 
-**Not committed yet (as of 2026-05-12)** — waiting for retest verification.
-
 ### Iteration 3 (2026-05-12) — Fix H/I — protocol-layer artifacts
 Second T1-T11 test run confirmed iter 2 fixes (T1 17→3 errors, T10 137→9 calls, 0 RETRY_BLOCKED). Exposed two new patterns:
 
@@ -152,9 +153,41 @@ Second retest confirmed iter 3 (T6 4/4, T9 8/8, T10 27 calls), exposed four new 
 - **Fix J** — `CORE_PREVIEW` rewritten. Removed proactive "capture after changes" suggestion. Made `capture_comp_frame` opt-in only ("call ONLY when user says capture/screenshot/preview"). Honest constraint "no time parameter". Hard rule **"NEVER emit `![preview](file:///...)` unless `capture_comp_frame` actually returned a path in the SAME turn"**. Closes the broken-image-icon fabrication problem.
 - **Fix K** — `_validateRequiredArgs` cases for `add_shape_ellipse`/`rectangle`/`path`: require `layer_id` OR `layer_index`. Selection fallback in `_resolveLayer` was creating silent insertions on wrong layers with default 200×200 size when args came in empty. Also requires `vertices.length >= 2` for `add_shape_path`.
 - **Fix L** — `CORE_RULES` adds explicit "no chain-of-thought in visible response" rule. Distinguishes structured plan (OK) from stream-of-consciousness (NOT). Addresses harmony commentary channel leak.
-- **Fix M** — `max_tokens: 16384 → 32768`. T9 retest still truncated on 1/8 set_property_value at 16k. 32k is Cloud.ru ceiling for this model.
+- **Fix M** — `max_tokens: 16384 → 32768`. T9 retest still truncated on 1/8 set_property_value at 16k.
 
-**Iter 2 + 3 + 4 are all PENDING COMMIT** as one bundled PR. User wants to verify with one more test pass before merging.
+Iter 2 + 3 + 4 committed as one bundle: `39f8804`.
+
+### Model migration (2026-06-04) — Cloud.ru reasoning models
+Switched from gpt-oss-120b to `zai-org/GLM-5.1` (reasoning, 202k context). Reasoning streams in a separate `reasoning` field (not `reasoning_content`); parser feeds it to a live "Agent reasoning" indicator. `max_tokens` raised to 65536. Discovered vLLM 0.22.0 bug: streaming drops ALL tool_calls for GLM-5.1 → agent loop uses non-streaming for tool turns (guarded in `chatProvider.js`). Commits `7026a5c`, `659061e`, `33244de`.
+
+### Stage 3 (2026-06-10) — editing-assistant upgrade
+Prompt reframed from "animation generator" to editing assistant. New tools: `search_expression_library` (28 curated snippets in `lib/pure/expressionLibrary.js`, panel-local search — no LLM round-trip), `link_properties` (pick-whip), `list_available_effects` (search installed effects). `add_effect` gained optional `effect_name` rename (needed for expression rigs referencing `effect("...")`). Context trimming improvements. Commit `3c22313`.
+
+### Live AE validation (2026-06-10) — 7 host bugs fixed
+First validation against a **real** running After Effects via CDP (see "Live testing" below). Two rounds + 5 stress batches found 7 bugs invisible to node tests, all fixed in commit `60f2b79`:
+
+1. ExtendScript `string + Array` concat throws "invalid numeric result" → `join()` in expression readback
+2. `resultToJson` didn't escape `\r\n` control chars (AE puts raw CRLF in `expressionError`) → invalid JSON → panel showed ok:true on real errors
+3. `add_effect` couldn't rename effects (blocked expression rigs)
+4. `_resolveProperty` alias shadowing — nested shape `Contents` never resolved
+5. `addProperty()` invalidates sibling refs → "Object is invalid" + false ok:true; shape tools now capture names immediately and return ready-made property paths (`sizePath` etc.)
+6. `reorder_layer` never worked — Layer has no `moveTo()`; rewritten with moveBefore/moveAfter/moveToBeginning/moveToEnd
+7. `precompose_layers` rejected `layer_ids` — added id→index resolution
+
+Full methodology + bug tables: `docs/superpowers/specs/2026-06-10-deep-audit-report.md` (sections 8, 8.1).
+
+---
+
+## Live testing against real AE (CDP pipeline)
+
+When the user has AE open with the panel loaded, you can drive the panel directly:
+
+1. `.debug` file (gitignored) sets remote-debug port **8092** for AEFT; PlayerDebugMode must be 1.
+2. `node scripts/cdp-eval.js "<js>"` — evaluates JS inside the panel page (Runtime.evaluate, awaitPromise, 120s timeout). For anything non-trivial use `node scripts/cdp-eval.js @payload.js` (shell escaping breaks inline quotes). Wrap payloads in an IIFE — top-level `const` persists between evaluates.
+3. Hot-reload JSX without panel restart: eval `cs.evalScript('$.evalFile("<ext>/host/index.jsx"); "reloaded"')`. Full panel reload: `location.reload()` + ~4s wait.
+4. Call tools via `hostBridge.executeToolCall(name, argsObject)` from the evaluated payload.
+
+ExtendScript (ES3) quirks verified live: `string + Array` throws; `addProperty()` invalidates sibling property references; Layer has no `moveTo(index)`; AE error strings contain raw `\r\n`.
 
 ---
 
@@ -163,7 +196,8 @@ Second retest confirmed iter 3 (T6 4/4, T9 8/8, T10 27 calls), exposed four new 
 | Question | File |
 |---|---|
 | User-facing setup, features, install | `README.md` |
-| 45 tools, capabilities, limitations | `docs/capabilities-and-roadmap.md` |
+| 50 tools, capabilities, limitations | `docs/capabilities-and-roadmap.md` |
+| Live AE validation methodology + bug tables | `docs/superpowers/specs/2026-06-10-deep-audit-report.md` |
 | Agent loop architecture, tool categories | `docs/final-architecture.md` |
 | Config fields, loading order, secrets | `docs/configuration.md`, `docs/secret-handling.md` |
 | Panel ↔ AE communication patterns | `docs/host-bridge-notes.md` |
@@ -175,7 +209,7 @@ Second retest confirmed iter 3 (T6 4/4, T9 8/8, T10 27 calls), exposed four new 
 | KB corpus (reference only, not loaded at runtime) | `knowledge-base/corpus/` |
 
 For external (Obsidian) context, see also:
-- Vault folder note: `~/Documents/2nd brain/01 Projects/AE Motion Agent/AE Motion Agent.md`
+- Vault folder note: `<vault>/01 Projects/AE Motion Agent/AE Motion Agent.md`
 - Iteration artifacts in the same folder
 
 ---
@@ -233,7 +267,7 @@ For external (Obsidian) context, see also:
 ## Boundaries and red flags
 
 **You should escalate (ask user) before:**
-- Adding new tools that mutate AE state outside the current 45
+- Adding new tools that mutate AE state outside the current 50
 - Changing the API provider or model (`zai-org/GLM-5.1` ↔ another model)
 - Modifying `_resolveLayer` selection-fallback behavior
 - Changing the localStorage `ae-motion-agent-state` schema (breaks existing sessions)
@@ -249,13 +283,13 @@ For external (Obsidian) context, see also:
 ## Where to leave notes for the next agent
 
 - **Code learnings** → `~/.claude/projects/.../memory/` (Claude Code memory)
-- **Iteration artifacts** → `~/Documents/2nd brain/01 Projects/AE Motion Agent/AE Motion Agent — итерация N *.md`
+- **Iteration artifacts** → `<vault>/01 Projects/AE Motion Agent/AE Motion Agent — итерация N *.md` (vault: `C:\Users\Глеб\Downloads\2nd brain` on Windows, `~/Downloads/2nd brain` on macOS)
 - **Detailed plans** → `.omc/plans/<plan>.md` (gitignored, session-local)
 - **Public-facing changes** → update `docs/<topic>.md` and add entry to `docs/release-checklist.md`
 - **Update this AGENTS.md** when adding a new iteration or shifting boundaries
 
-The vault folder note is the single source of truth for project status. The master index `~/Documents/2nd brain/01 Projects/Экосистема Claude.md` aggregates chronology from all projects.
+The vault folder note is the single source of truth for project status. The master index `<vault>/01 Projects/Экосистема Claude.md` aggregates chronology from all projects.
 
 ---
 
-*Last updated 2026-05-12 — after iteration 4. If you read this and it feels out of date, refresh it before touching code.*
+*Last updated 2026-06-12 — after live AE validation (60f2b79). If you read this and it feels out of date, refresh it before touching code.*

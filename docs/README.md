@@ -6,7 +6,7 @@
 
 - **[../AGENTS.md](../AGENTS.md)** — Entry point for AI agents working on this codebase
 - **[../README.md](../README.md)** — User-facing setup and feature overview
-- [capabilities-and-roadmap.md](capabilities-and-roadmap.md) — 45 tools, known limitations, future roadmap
+- [capabilities-and-roadmap.md](capabilities-and-roadmap.md) — 50 tools, known limitations, future roadmap
 - [final-architecture.md](final-architecture.md) — Runtime architecture, tool categories, agent loop
 - [host-bridge-notes.md](host-bridge-notes.md) — Panel ↔ AE communication, validation/idempotency/anti-spam pipelines
 - [configuration.md](configuration.md) — Config fields, loading order, CEP deployment

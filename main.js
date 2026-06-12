@@ -163,12 +163,87 @@
     return state.session
   }
 
+  // ── Render: welcome hint (empty session) ──────────────────────────────
+  var WELCOME_CAPABILITIES = [
+    'Выражения — написать, починить, объяснить; линковка свойств (pick-whip); библиотека из 28 проверенных сниппетов',
+    'Анимация — кейфреймы с изингом, batch-операции по нескольким свойствам',
+    'Слои и контент — шейпы, текст, маски, solid/null/adjustment, порядок и парентинг',
+    'Эффекты — поиск установленных, добавление с переименованием, настройка параметров',
+    '3D — камера, свет, глубина, depth of field',
+    'Превью кадра — по запросу (capture/preview)'
+  ]
+
+  var WELCOME_EXAMPLES = [
+    'Сделай счётчик от 0 до 100 за 2 секунды с easing',
+    'Привяжи Opacity текста к Scale шейп-слоя',
+    'Добавь wiggle к позиции выделенного слоя и объясни параметры',
+    'Текст появляется слева с fade-in и overshoot'
+  ]
+
+  function renderWelcomeHint () {
+    var box = document.createElement('div')
+    box.className = 'welcome-hint'
+
+    var title = document.createElement('div')
+    title.className = 'welcome-title'
+    title.textContent = 'AE Motion Agent — напарник для моушн-дизайна'
+    box.appendChild(title)
+
+    var intro = document.createElement('div')
+    intro.className = 'welcome-intro'
+    intro.textContent = 'Опишите задачу на русском или английском — выполню её в активной композиции через инструменты After Effects. Что умею:'
+    box.appendChild(intro)
+
+    var list = document.createElement('ul')
+    list.className = 'welcome-list'
+    for (var i = 0; i < WELCOME_CAPABILITIES.length; i++) {
+      var li = document.createElement('li')
+      li.textContent = WELCOME_CAPABILITIES[i]
+      list.appendChild(li)
+    }
+    box.appendChild(list)
+
+    var examplesLabel = document.createElement('div')
+    examplesLabel.className = 'welcome-examples-label'
+    examplesLabel.textContent = 'Примеры (клик — подставить в поле ввода):'
+    box.appendChild(examplesLabel)
+
+    var examples = document.createElement('div')
+    examples.className = 'welcome-examples'
+    for (var j = 0; j < WELCOME_EXAMPLES.length; j++) {
+      var btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'welcome-example-btn'
+      btn.textContent = WELCOME_EXAMPLES[j]
+      btn.addEventListener('click', (function (prompt) {
+        return function () {
+          if (!els.userInput) return
+          els.userInput.value = prompt
+          els.userInput.dispatchEvent(new Event('input'))
+          els.userInput.focus()
+        }
+      })(WELCOME_EXAMPLES[j]))
+      examples.appendChild(btn)
+    }
+    box.appendChild(examples)
+
+    var foot = document.createElement('div')
+    foot.className = 'welcome-foot'
+    foot.textContent = 'Работаю только с активной композицией. Изменения последнего запроса можно откатить кнопкой Undo.'
+    box.appendChild(foot)
+
+    return box
+  }
+
   // ── Render: chat transcript ────────────────────────────────────────────
   function renderTranscript () {
     if (!els.chatTranscript) return
     els.chatTranscript.innerHTML = ''
     var session = state.session
-    if (!session) return
+    if (!session || session.messages.length === 0) {
+      els.chatTranscript.appendChild(renderWelcomeHint())
+      return
+    }
 
     for (var i = 0; i < session.messages.length; i++) {
       var msg = session.messages[i]

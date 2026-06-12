@@ -1,6 +1,6 @@
 # AE Motion Agent — CEP Panel for After Effects
 
-> **Status: MVP shipped 2026-04-30 + iterations 2-4 of stability fixes (2026-05-12) + model upgrade to Cloud.ru reasoning models (2026-06-04).** Chat-only AI agent for motion-design work inside Adobe After Effects 26+. Cloud.ru Foundation Models (`zai-org/GLM-5.1`, reasoning) drive 45 tools mapped to ExtendScript.
+> **Status: MVP shipped 2026-04-30 → stability iterations 2-4 (2026-05-12) → Cloud.ru reasoning models (2026-06-04) → Stage 3 editing-assistant + live validation в реальном AE, 7 host-багов исправлено (2026-06-10).** Chat-only AI agent for motion-design work inside Adobe After Effects 26+. Cloud.ru Foundation Models (`zai-org/GLM-5.1`, reasoning) drive 50 tools mapped to ExtendScript.
 
 **Tagline:** «buddy for motion design, not autopilot». The agent helps with hard expression logic, parameter dependencies, and AE quirks — not auto-generate entire animations from one sentence.
 
@@ -14,20 +14,21 @@ Read **[AGENTS.md](AGENTS.md)** — the project HANDOFF. It has the 30-second pr
 
 ## Возможности
 
-AI-агент принимает запросы на естественном языке (русском или английском) и выполняет их через 45 инструментов: создание слоёв, shape content, анимация, эффекты, 3D/камера/свет, маски, маркеры, импорт файлов, превью кадра и многое другое.
+AI-агент принимает запросы на естественном языке (русском или английском) и выполняет их через 50 инструментов: создание слоёв, shape content, анимация, эффекты, 3D/камера/свет, маски, маркеры, импорт файлов, превью кадра, библиотека выражений и многое другое.
 
-### 45 инструментов
+### 50 инструментов
 
 | Категория | Инструменты |
 |-----------|------------|
-| Чтение | comp summary, host context, свойства, выражения, кейфреймы, свойства слоя/эффекта, маски, маркеры, элементы проекта |
+| Чтение | comp summary, host context, свойства, выражения, кейфреймы, свойства слоя/эффекта, маски, маркеры, элементы проекта, search_layers |
 | Слои | create, delete, duplicate, reorder, parent, timing, rename, 3D toggle, set_blend_mode |
-| Shape content | rectangle, ellipse, custom path (с fill и stroke) |
-| Анимация | keyframes (add/delete/easing), свойства, expressions (single + batch) |
-| Эффекты | add, remove, set property (через `property_name`) |
+| Shape content | rectangle, ellipse, custom path (с fill и stroke; результат возвращает готовые property paths) |
+| Анимация | keyframes (add/delete/easing/batch), свойства, expressions (single + batch) |
+| Выражения | search_expression_library (28 проверенных сниппетов), link_properties (pick-whip между свойствами) |
+| Эффекты | list_available_effects (поиск по установленным), add (с переименованием), remove, set property |
 | 3D / камера / свет | camera properties, light properties |
-| Маски | add mask, set properties, create_masks_from_text |
-| Маркеры | add, delete |
+| Маски | add mask, set properties, get mask info, create_shapes_from_text |
+| Маркеры | add, get, delete |
 | Импорт | import file, add to comp |
 | Композиция | create, precompose, settings |
 | Текст | set text document |
@@ -112,38 +113,70 @@ Math.round(ease(time, 0, 2, 0, 100)).toString()
 
 ## Установка
 
-### 1. Разместить расширение
+Все зависимости (включая `lib/CSInterface.js`) уже в репозитории — ничего докачивать не нужно.
 
-```
-~/Library/Application Support/Adobe/CEP/extensions/Extensions LLM Chat
-```
-
-### 2. Установить CSInterface.js
+### 1. Клонировать репозиторий
 
 ```bash
-curl -sL "https://raw.githubusercontent.com/Adobe-CEP/CEP-Resources/master/CEP_11.x/CSInterface.js" \
-  -o "$HOME/Library/Application Support/Adobe/CEP/extensions/Extensions LLM Chat/lib/CSInterface.js"
+git clone https://github.com/glmelnik96/Extensions-LLM-Chat.git
 ```
 
-Если 404, попробовать `CEP_9.x` / `CEP_8.x` или скачать вручную с [Adobe CEP-Resources](https://github.com/Adobe-CEP/CEP-Resources).
+### 2. Подключить расширение к CEP
 
-### 3. Настроить API-ключ
+Папку репозитория нужно разместить (или засимлинкать — удобнее для разработки) в директорию CEP-расширений:
+
+**Windows:**
+
+```powershell
+# симлинк (рекомендуется — git pull сразу обновляет панель)
+mklink /D "%APPDATA%\Adobe\CEP\extensions\Extensions LLM Chat" "C:\path\to\Extensions-LLM-Chat"
+```
+
+**macOS:**
 
 ```bash
-cd ~/Library/Application\ Support/Adobe/CEP/extensions/Extensions\ LLM\ Chat
+ln -s "/path/to/Extensions-LLM-Chat" \
+  "$HOME/Library/Application Support/Adobe/CEP/extensions/Extensions LLM Chat"
+```
+
+Альтернатива без симлинка — просто скопировать папку репозитория в эту директорию.
+
+### 3. Разрешить неподписанные CEP-расширения (PlayerDebugMode)
+
+Расширение не подписано, поэтому нужен debug-режим CEP. `CSXS.11` соответствует CEP 11 (AE 2022+); для других версий AE может понадобиться другой номер.
+
+**Windows:**
+
+```cmd
+reg add HKCU\Software\Adobe\CSXS.11 /v PlayerDebugMode /t REG_SZ /d 1
+```
+
+**macOS:**
+
+```bash
+defaults write com.adobe.CSXS.11 PlayerDebugMode 1
+```
+
+После изменения перезапустить After Effects.
+
+### 4. Настроить API-ключ
+
+В корне репозитория:
+
+```bash
 cp config/secrets.local.example.js config/secrets.local.js
 # открыть secrets.local.js и вставить Bearer-токен Cloud.ru в apiKey
 ```
 
+`secrets.local.js` в `.gitignore` — токен не попадёт в git.
+
 Опционально: `cp config/runtime-config.example.js config/runtime-config.js` для переопределения `baseUrl` и моделей.
-
-### 4. Разрешить CEP-расширения
-
-Может понадобиться включить загрузку неподписанных CEP-расширений (зависит от версии AE и macOS). См. [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ### 5. Открыть панель
 
 After Effects → меню **Window** → **Extensions** → **Extensions LLM Chat**.
+
+Если панели нет в меню — проверить шаг 3 (PlayerDebugMode) и путь из шага 2. Подробнее: [docs/troubleshooting.md](docs/troubleshooting.md).
 
 ---
 
@@ -160,12 +193,15 @@ Extensions LLM Chat/
 ├── agentToolLoop.js           # LLM ↔ tool execution cycle
 ├── chatProvider.js            # Cloud.ru API + SSE
 ├── hostBridge.js              # tool name → ExtendScript dispatch (с pipeline защит)
-├── toolRegistry.js            # 45 OpenAI-format tool definitions
-├── host/index.jsx             # ExtendScript: ~3200 lines, 49 функций
+├── toolRegistry.js            # 50 OpenAI-format tool definitions
+├── host/index.jsx             # ExtendScript: ~3850 lines, 54 функции
 ├── CSXS/manifest.xml          # CEP manifest
-├── lib/CSInterface.js         # Adobe CSInterface (downloaded manually)
+├── lib/CSInterface.js         # Adobe CSInterface (в репозитории)
+├── lib/pure/                  # чистые модули (esLiteral, markdown, prune, expression library)
 ├── config/                    # default + runtime + secrets (gitignored)
 ├── knowledge-base/            # AE expression reference corpus
+├── scripts/cdp-eval.js        # CDP-помощник для live-тестов панели в реальном AE
+├── test/                      # node:test юнит-тесты (51 тест)
 └── docs/                      # детальная документация
 ```
 
@@ -173,7 +209,7 @@ Extensions LLM Chat/
 
 - **[AGENTS.md](AGENTS.md)** — HANDOFF для агентов
 - **[docs/README.md](docs/README.md)** — индекс всей документации
-- **[docs/capabilities-and-roadmap.md](docs/capabilities-and-roadmap.md)** — полный список 45 tools + ограничения + roadmap
+- **[docs/capabilities-and-roadmap.md](docs/capabilities-and-roadmap.md)** — полный список 50 tools + ограничения + roadmap
 - **[docs/final-architecture.md](docs/final-architecture.md)** — runtime архитектура агентного цикла
 - **[docs/host-bridge-notes.md](docs/host-bridge-notes.md)** — детали panel ↔ AE моста
 - **[docs/configuration.md](docs/configuration.md)** — config fields, loading order
@@ -197,8 +233,7 @@ Extensions LLM Chat/
 - Нет spatial bezier handles (только temporal easing)
 - Работает только с активной композицией
 - Freeform mask paths ограничены (простые формы работают)
-- `reorder_layer` падает для слоёв внутри precomp'ов
-- `capture_comp_frame` не принимает `time` параметр — захватывает только current playhead
+- `capture_comp_frame` захватывает только current playhead (без параметра `time`)
 - Solid color нельзя поменять после создания (workaround: `add_effect("ADBE Fill")`)
 
 Полный список: [docs/capabilities-and-roadmap.md](docs/capabilities-and-roadmap.md).
@@ -213,7 +248,7 @@ Extensions LLM Chat/
 
 ## Связанные расширения
 
-`Cloud.ru Motion Presets` и `Cloud.ru Motion Export` — отдельные CEP-расширения в той же папке `~/Library/Application Support/Adobe/CEP/extensions/`. Они **не** часть этого проекта. Бренд-пресеты и HTML-экспорт были вынесены туда во время chat-only cleanup 2026-04-30.
+`Cloud.ru Motion Presets` и `Cloud.ru Motion Export` — отдельные CEP-расширения в той же директории CEP extensions. Они **не** часть этого проекта. Бренд-пресеты и HTML-экспорт были вынесены туда во время chat-only cleanup 2026-04-30.
 
 ---
 

@@ -1,23 +1,20 @@
-# Required: CSInterface.js
+# lib/
 
 **Scope:** Contents of **lib/** and how the extension uses them. For full CEP install and config, see the root README and config/README.md; do not duplicate those here.
 
-The panel loads **CSInterface.js** from this folder. Without it you get:
+## CSInterface.js
 
-`Failed to load resource: net::ERR_FILE_NOT_FOUND` for `CSInterface.js`
+Adobe's CEP bridge library (`CSInterface.js`, CEP 11.x) — **tracked in the repo**, no manual download needed. The panel loads it from this folder; it provides `evalScript` for all panel ↔ After Effects communication.
 
-and the extension cannot talk to After Effects (no layer refresh, no apply expression).
+If you ever see `Failed to load resource: net::ERR_FILE_NOT_FOUND` for `CSInterface.js`, the file is missing (e.g. broken checkout) — restore it via `git checkout lib/CSInterface.js` or re-download from [Adobe CEP-Resources](https://github.com/Adobe-CEP/CEP-Resources) (CEP_11.x folder).
 
-## What to do
+## pure/
 
-1. **Download CSInterface.js** from Adobe’s CEP-Resources:
-   - Open: **https://github.com/Adobe-CEP/CEP-Resources**
-   - Open the **CEP_11.x** folder (or **CEP_9.x** / **CEP_8.x** if 11 is not there).
-   - Click **CSInterface.js**, then click **Raw** (or "Download").
-   - Save the file as **CSInterface.js** into this folder:
-     `Extensions LLM Chat/lib/`
-   - You should end up with: `Extensions LLM Chat/lib/CSInterface.js`
+Pure JS modules with no CEP/DOM dependencies, shared between the panel and node unit tests (`test/`):
 
-2. **Reload the extension**: close the Extensions LLM Chat panel in After Effects and open it again (or restart AE).
+- `esLiteral.js` — safe serialization of JS values into ExtendScript literals
+- `markdown.js` — markdown → HTML renderer for chat messages
+- `prune.js` — conversation pruning under token budget
+- `expressionLibrary.js` — 28 curated AE expression snippets + local search (`search_expression_library` tool)
 
-After that, the Console error for CSInterface.js should go away and the panel can call `evalScript` to refresh layers and apply expressions.
+Each file exposes itself on `window.PURE_*` when loaded in the panel and via `module.exports` under node.

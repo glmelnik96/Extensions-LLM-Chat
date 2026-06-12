@@ -556,3 +556,73 @@ body {
   margin: 6px 0;
   border: 1px solid #555;
 }
+
+/* ── Welcome hint (empty session) ────────────────────────────────────── */
+
+.welcome-hint {
+  border: 1px solid #3f4650;
+  background-color: #252c35;
+  border-radius: 4px;
+  padding: 10px 12px;
+  color: #c8d2de;
+  font-size: 11px;
+  line-height: 1.45;
+}
+
+.welcome-title {
+  font-size: 12px;
+  font-weight: 600;
+  color: #e4eefb;
+  margin-bottom: 4px;
+}
+
+.welcome-intro {
+  color: #b8c6d8;
+  margin-bottom: 6px;
+}
+
+.welcome-list {
+  margin: 0 0 8px 0;
+  padding-left: 16px;
+}
+
+.welcome-list li {
+  margin-bottom: 3px;
+}
+
+.welcome-examples-label {
+  font-size: 10px;
+  color: #8fa0b5;
+  margin-bottom: 4px;
+}
+
+.welcome-examples {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+  margin-bottom: 8px;
+}
+
+.welcome-example-btn {
+  background: #2e3946;
+  border: 1px solid #4a5868;
+  color: #c7e3ff;
+  font-size: 10px;
+  text-align: left;
+  padding: 4px 8px;
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.welcome-example-btn:hover {
+  background: #3a4858;
+  border-color: #6a82a0;
+  color: #fff;
+}
+
+.welcome-foot {
+  font-size: 10px;
+  color: #8fa0b5;
+  border-top: 1px solid #3f4650;
+  padding-top: 6px;
+}

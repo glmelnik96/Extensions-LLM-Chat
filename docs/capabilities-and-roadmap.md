@@ -5,7 +5,7 @@
 ### Agent Tool System
 The extension works as an AI agent that can inspect, create, and modify After Effects compositions through tool calls. The LLM plans a sequence of actions, executes them one by one via ExtendScript, and reports results.
 
-**Supported tools (45):**
+**Supported tools (50):**
 
 #### Read (inspection)
 | Tool | Description |
@@ -20,6 +20,7 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 | `get_mask_info` | Read all masks on a layer: mode, feather, opacity, expansion, vertex count |
 | `get_markers` | Read all markers from a layer or composition |
 | `list_project_items` | List all comps, footage, and folders in the project |
+| `search_layers` | Find layers by name pattern / type without a full comp dump |
 
 #### Layer operations
 | Tool | Description |
@@ -32,28 +33,33 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 | `set_layer_timing` | Set in/out points and start time |
 | `rename_layer` | Rename a layer |
 | `set_layer_3d` | Enable/disable 3D on a layer |
+| `set_blend_mode` | Set layer blending mode |
 
 #### Shape content
 | Tool | Description |
 |------|-------------|
-| `add_shape_rectangle` | Rectangle with size, position, roundness, fill, stroke |
-| `add_shape_ellipse` | Ellipse with size, position, fill, stroke |
-| `add_shape_path` | Custom bezier path with vertices, tangents, fill, stroke |
+| `add_shape_rectangle` | Rectangle with size, position, roundness, fill, stroke. Returns ready property paths (`sizePath`, `positionPath`, `roundnessPath`). |
+| `add_shape_ellipse` | Ellipse with size, position, fill, stroke. Returns ready property paths. |
+| `add_shape_path` | Custom bezier path with vertices, tangents, fill, stroke. Returns `pathPropertyPath`. |
 
 #### Animation
 | Tool | Description |
 |------|-------------|
 | `add_keyframes` | Add keyframes with values, interpolation type, and easing |
+| `set_keyframes_batch` | Add keyframes to multiple properties/layers in one call |
 | `delete_keyframes` | Delete keyframes at specific times or all |
 | `set_keyframe_easing` | Change interpolation and easing on existing keyframes |
 | `set_property_value` | Set a static value on any property |
-| `apply_expression` | Apply an AE expression to any expressable property. Returns expression errors for agent self-correction. |
+| `apply_expression` | Apply an AE expression to any expressable property. Returns expression errors for agent self-correction + evaluated value readback. |
 | `apply_expression_batch` | Apply expressions to multiple layer properties in one tool call with per-target success/error details. |
+| `search_expression_library` | Search 28 curated expression snippets (`lib/pure/expressionLibrary.js`) — panel-local, no LLM round-trip |
+| `link_properties` | Pick-whip: link a property to another via auto-generated expression (with optional remap range) |
 
 #### Effects
 | Tool | Description |
 |------|-------------|
-| `add_effect` | Add effect by matchName or display name |
+| `list_available_effects` | Search effects installed in this AE by name/matchName |
+| `add_effect` | Add effect by matchName or display name, with optional rename (`effect_name`) for expression rigs |
 | `remove_effect` | Remove an effect |
 | `set_effect_property` | Set a value on an effect property |
 
@@ -68,7 +74,7 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 |------|-------------|
 | `add_mask` | Create a mask on a layer with custom vertices, mode, feather, opacity, expansion. Reports actual mode and warnings if properties fail. |
 | `set_mask_properties` | Modify mask feather, opacity, expansion, mode, inverted. Reports warnings on failures. |
-| `create_masks_from_text` | Convert text layer outlines into masks (letter shapes). Only works on text layers. |
+| `create_shapes_from_text` | Convert text layer outlines into a shape layer (letter shapes). Only works on text layers. |
 
 #### Markers
 | Tool | Description |
@@ -106,7 +112,8 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 - **Markdown rendering** in agent responses (headers, bold, italic, code blocks, lists, inline images)
 - **Frame preview** — `capture_comp_frame` results shown as inline images in chat
 - **No-composition warning** — system message when no active comp is detected before sending
-- Model selector in chat header
+- Static model badge in chat header (`Cloud.ru · GLM-5.1`; model predetermined, no selector)
+- **Live reasoning indicator** — model's `reasoning` stream shown as "Agent reasoning" status (never enters the chat)
 - **Quick action buttons**: Wiggle, Counter, Slide In, Bounce, Preview — one-click common operations
 - **Streaming text preview** — agent response text appears in real-time during generation
 - **Textarea auto-resize** — input grows up to ~8 lines as you type
@@ -136,8 +143,11 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 - **Tool latency stats in Report** — per-tool count, errors, avg/min/max ms in the LLM-analyzed bug report.
 - **Persistent capture frames** — written to `~/AE-agent-captures/<date>/` (not `/tmp`), auto-pruned to newest 50.
 
+- **Non-streaming tool turns** — vLLM 0.22.0 drops ALL tool_calls in streaming mode for GLM-5.1; agent loop uses non-streaming requests for tool turns (guarded in `chatProvider.js`).
+- **`max_tokens: 65536`** — covers reasoning + tool_call chains + answer in one turn.
+
 ### API Provider
-- **Cloud.ru Foundation Models** — OpenAI-compatible chat/completions with tool calling and SSE streaming
+- **Cloud.ru Foundation Models** — OpenAI-compatible chat/completions with tool calling and SSE streaming. Model: `zai-org/GLM-5.1` (reasoning, 202k context); chain-of-thought arrives in a separate `reasoning` field.
 
 ---
 
@@ -187,9 +197,13 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 
 **Iteration 3 (2026-05-12)** — Fix H/I: bumped `max_tokens` 4096→16384 (output truncation), strip harmony-format leak from `function.name`.
 
-**Iteration 4 (2026-05-12)** — Fix J/K/L/M: anti-preview-fabrication rule, shape-tools require `layer_id`/`layer_index`, no-CoT rule, `max_tokens` 16384→32768.
+**Iteration 4 (2026-05-12)** — Fix J/K/L/M: anti-preview-fabrication rule, shape-tools require `layer_id`/`layer_index`, no-CoT rule, `max_tokens` 16384→32768. Iter 2-4 committed as `39f8804`.
 
-Iter 2-4 are bundled for the next commit.
+**Model migration (2026-06-04, commits `7026a5c`/`659061e`/`33244de`)** — Cloud.ru reasoning models (`zai-org/GLM-5.1`), separate `reasoning` field + live reasoning UI, `max_tokens` 65536, non-streaming tool turns (vLLM streaming bug guard), batch keyframes.
+
+**Stage 3 (2026-06-10, commit `3c22313`)** — editing-assistant prompt reframe, `search_expression_library` (28 snippets), `link_properties`, `list_available_effects`, context trimming.
+
+**Live AE validation (2026-06-10, commit `60f2b79`)** — 7 host bugs found & fixed by driving the real panel via CDP (`scripts/cdp-eval.js`): string+Array concat in readback, control-char escaping in `resultToJson`, `add_effect` rename, `_resolveProperty` alias shadowing, `addProperty()` ref invalidation in shape tools, `reorder_layer` rewrite (no `moveTo` on Layer), `precompose_layers` layer_ids support. Details: `docs/superpowers/specs/2026-06-10-deep-audit-report.md`.
 
 ### Future Improvements (only on user request)
 
@@ -211,8 +225,6 @@ Iter 2-4 are bundled for the next commit.
 
 **Plan-then-execute UI mode** — Outline plan as plain text before executing — opt-in for complex requests.
 
-**Unit tests** — Pure JS functions (`validateExpression`, `pruneConversation`, `parseModelId`, KB matching) testable in Node.
-
 **Editable quick actions / saved prompts library** — Pure UX.
 
 **Trim Paths / Merge Paths / Repeater** — Shape modifiers via `addProperty()`.
@@ -225,11 +237,11 @@ See **[../AGENTS.md](../AGENTS.md)** for iteration history and where to leave no
 
 ### File Structure (agent modules)
 ```
-agentSystemPrompt.js  — Agent persona, workflow rules, expression guidance, 45 tool documentation, known limitations
+agentSystemPrompt.js  — Agent persona, workflow rules, expression guidance, tool documentation, known limitations
 agentToolLoop.js      — LLM <> tool execution cycle with abort, streaming, expression validation
 chatProvider.js       — Cloud.ru API with retry, SSE streaming
 hostBridge.js         — Tool name -> ExtendScript mapping (single-load host script) + pre-call required-args validation
-toolRegistry.js       — 45 OpenAI-compatible tool definitions
+toolRegistry.js       — 50 OpenAI-compatible tool definitions
 host/index.jsx        — ExtendScript functions (AE operations, shapes, 3D, masks, markers, import)
 main.js               — UI, sessions, markdown, pruning, cancel, batch-undo, KB injection, quick actions
 ```
@@ -249,4 +261,4 @@ main.js               — UI, sessions, markdown, pruning, cancel, batch-undo, K
 2. Add tool definition in `toolRegistry.js` (OpenAI function schema)
 3. Add mapping in `hostBridge.js` (`executeToolCall` switch case)
 4. Update system prompt if the tool needs special guidance
-5. If read-only, add to `READ_ONLY_TOOLS` array in `main.js`
+5. If read-only, add to `READ_ONLY_TOOLS` in `agentToolLoop.js`
