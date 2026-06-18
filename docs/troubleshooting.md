@@ -109,6 +109,12 @@ Tool reorder_layer called 4 times with the same arguments and the same error...
 
 **Fix:** pass a non-empty `new_name`. **Why this is guarded:** before the fix, a missing `new_name` reached `layer.name = String(newName)` and silently renamed the layer to the literal `"null"`/`"undefined"` — silent corruption. The host now returns a clean error instead, consistent with every other tool. (Found via live multi-model testing 2026-06-19.)
 
+### `delete_keyframes` removed more keyframes than expected
+
+**Cause:** `delete_keyframes` deletes ALL keyframes only when BOTH selectors are omitted. Select specific keyframes with `times` (delete the keys nearest those times) and/or `key_indices` (1-based, same indexing as `set_keyframe_easing`). A selector that matches nothing now deletes 0 — it no longer falls through to delete-all.
+
+**Fix:** pass `key_indices: [n]` or `times: [t]`. Omit both only when you truly want to clear every keyframe. (Aligned with `set_keyframe_easing` addressing 2026-06-19.)
+
 ### `create_shapes_from_text` reported the wrong new layer name/id
 
 **Cause:** AE's "Create Shapes from Text" inserts the new shape layer *directly above the source text layer*, not at the top of the stack. The host previously assumed `layer(1)` (top) was the new layer, so when the text layer wasn't already topmost it returned a different layer's `newLayerId`/`newLayerName`/`newLayerIndex` — and a follow-up "animate that shape" would target the wrong layer.

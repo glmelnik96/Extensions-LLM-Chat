@@ -279,14 +279,15 @@
       type: 'function',
       function: {
         name: 'delete_keyframes',
-        description: 'Delete keyframes from a property. If times array is empty or omitted, deletes ALL keyframes.',
+        description: 'Delete keyframes from a property. Select which to delete by `times` and/or `key_indices` (1-based, same indexing as set_keyframe_easing). ONLY when BOTH are omitted does this delete ALL keyframes.',
         parameters: {
           type: 'object',
           properties: {
             layer_index: { type: 'number', description: '1-based layer index' },
             layer_id: { type: 'number', description: 'Persistent layer ID' },
             property_path: { type: 'string', description: 'Property path' },
-            times: { type: 'array', items: { type: 'number' }, description: 'Specific times to delete at (omit for all)' }
+            times: { type: 'array', items: { type: 'number' }, description: 'Delete the keyframes nearest these times (within ~1ms)' },
+            key_indices: { type: 'array', items: { type: 'number' }, description: '1-based keyframe indices to delete (same indexing as set_keyframe_easing key_index)' }
           },
           required: ['layer_index', 'property_path']
         }

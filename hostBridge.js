@@ -464,7 +464,8 @@
           toESLiteral(args.layer_index) + ',' +
           toESLiteral(args.layer_id || null) + ',' +
           toESLiteral(args.property_path) + ',' +
-          toESLiteral(args.times || null) + ')'
+          toESLiteral(args.times || null) + ',' +
+          toESLiteral(args.key_indices || null) + ')'
         break
       case 'set_keyframe_easing':
         call = 'extensionsLlmChat_setKeyframeEasing(' +

@@ -1876,7 +1876,7 @@ function extensionsLlmChat_getKeyframes (layerIndex, layerId, propertyPath) {
 /**
  * Delete keyframes at specified times (or all if times is empty/null).
  */
-function extensionsLlmChat_deleteKeyframes (layerIndex, layerId, propertyPath, times) {
+function extensionsLlmChat_deleteKeyframes (layerIndex, layerId, propertyPath, times, keyIndices) {
   var result = { ok: false, message: '', deletedCount: 0 };
   try {
     var ctx = extensionsLlmChat_resolveActiveComp();
@@ -1887,21 +1887,40 @@ function extensionsLlmChat_deleteKeyframes (layerIndex, layerId, propertyPath, t
     if (!prop || !(prop instanceof Property)) {
       result.message = 'Property not found or is a group.'; return resultToJson(result);
     }
+    var hasTimes = times && (times instanceof Array) && times.length > 0;
+    var hasIdx = keyIndices && (keyIndices instanceof Array) && keyIndices.length > 0;
     _beginToolUndo('Agent: Delete keyframes');
-    if (!times || !(times instanceof Array) || times.length === 0) {
-      // Delete all keyframes, backwards to preserve indices.
+    if (!hasTimes && !hasIdx) {
+      // No selector → delete ALL keyframes (backwards to preserve indices).
       for (var i = prop.numKeys; i >= 1; i--) {
         prop.removeKey(i);
         result.deletedCount++;
       }
     } else {
-      // Delete at specific times — find nearest key.
-      for (var t = 0; t < times.length; t++) {
-        var kIdx = prop.nearestKeyIndex(times[t]);
-        if (kIdx > 0 && Math.abs(prop.keyTime(kIdx) - times[t]) < 0.001) {
-          prop.removeKey(kIdx);
-          result.deletedCount++;
+      // Selective: accept BOTH `times` (time-based) and `key_indices`
+      // (1-based index-based, mirroring set_keyframe_easing). Collect the
+      // target indices into a set so a bad/unmatched selector deletes only
+      // what it matches — it never silently falls through to delete-all.
+      var toDelete = {};
+      if (hasIdx) {
+        for (var ki = 0; ki < keyIndices.length; ki++) {
+          var idx = keyIndices[ki];
+          if (typeof idx === 'number' && idx >= 1 && idx <= prop.numKeys) toDelete['_' + idx] = idx;
         }
+      }
+      if (hasTimes) {
+        for (var t = 0; t < times.length; t++) {
+          var kIdx = prop.nearestKeyIndex(times[t]);
+          if (kIdx > 0 && Math.abs(prop.keyTime(kIdx) - times[t]) < 0.001) toDelete['_' + kIdx] = kIdx;
+        }
+      }
+      // Remove highest index first so lower indices stay valid.
+      var arr = [];
+      for (var key in toDelete) { if (toDelete.hasOwnProperty(key)) arr.push(toDelete[key]); }
+      arr.sort(function (a, b) { return b - a; });
+      for (var a = 0; a < arr.length; a++) {
+        prop.removeKey(arr[a]);
+        result.deletedCount++;
       }
     }
     _endToolUndo();
