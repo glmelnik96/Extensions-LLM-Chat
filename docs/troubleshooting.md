@@ -109,6 +109,12 @@ Tool reorder_layer called 4 times with the same arguments and the same error...
 
 **Fix:** pass a non-empty `new_name`. **Why this is guarded:** before the fix, a missing `new_name` reached `layer.name = String(newName)` and silently renamed the layer to the literal `"null"`/`"undefined"` — silent corruption. The host now returns a clean error instead, consistent with every other tool. (Found via live multi-model testing 2026-06-19.)
 
+### `add_effect: missing required \`effect_match_name\` ...`
+
+**Cause:** `add_effect` was called without an `effect_match_name` (the effect selector). Note `effect_name` is a *different*, optional arg — it renames the added instance (e.g. `"Wiggle Freq"`), it does NOT select the effect.
+
+**Fix:** pass `effect_match_name` as either the matchName (`"ADBE Gaussian Blur 2"`) or the display name (`"Gaussian Blur"`) from `list_available_effects`. **Why this is guarded:** before the fix, a missing selector reached `addProperty(null)` and AE threw a cryptic `Can not add a property with name "null" to this PropertyGroup` — unactionable for the agent. The host now returns a clear error. (Found via live multi-model testing 2026-06-19.)
+
 ### `set_layer_timing: in_point (X) must be less than out_point (Y)`
 
 **Cause:** both `in_point` and `out_point` were supplied in one call with `in_point >= out_point`.

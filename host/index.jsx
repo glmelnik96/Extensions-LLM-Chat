@@ -2210,10 +2210,22 @@ function extensionsLlmChat_addEffect (layerIndex, layerId, effectMatchName, effe
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
     if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    // Guard: a missing/empty effect_match_name otherwise reaches
+    // addProperty(null) and AE throws a cryptic "Can not add a property with
+    // name null" — unhelpful to the agent. Return a clean, actionable error.
+    if (effectMatchName === null || effectMatchName === undefined) {
+      result.message = 'add_effect: missing required `effect_match_name` (effect matchName or display name, e.g. "Gaussian Blur").';
+      return resultToJson(result);
+    }
+    var fxName = String(effectMatchName).replace(/^\s+|\s+$/g, '');
+    if (fxName === '') {
+      result.message = 'add_effect: `effect_match_name` must be a non-empty string.';
+      return resultToJson(result);
+    }
     var effects = layer.property('ADBE Effect Parade');
     if (!effects) { result.message = 'Layer does not support effects.'; return resultToJson(result); }
     _beginToolUndo('Agent: Add effect');
-    var fx = effects.addProperty(effectMatchName);
+    var fx = effects.addProperty(fxName);
     // Optional rename — expression-library rigs reference sliders by custom
     // name (e.g. effect("Wiggle Freq")("Slider")), so the name must be settable.
     if (fx && typeof effectName === 'string' && effectName.length > 0) {
