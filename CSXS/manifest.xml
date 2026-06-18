@@ -11,6 +11,10 @@
       <Locale Code="All" />
     </LocaleList>
     <RequiredRuntimeList>
+      <!-- Minimum CSXS runtime (a floor, not a pin): CEP 11+ loads this fine,
+           including CEP 12 on AE 2024+/2026. NOTE: PlayerDebugMode for unsigned
+           extensions must be set on the key matching the user's actual CEP
+           version (CSXS.10/11/12) — see README step 3 / troubleshooting.md. -->
       <RequiredRuntime Name="CSXS" Version="11.0" />
     </RequiredRuntimeList>
   </ExecutionEnvironment>

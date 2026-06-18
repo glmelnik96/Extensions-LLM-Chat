@@ -143,21 +143,29 @@ ln -s "/path/to/Extensions-LLM-Chat" \
 
 ### 3. Разрешить неподписанные CEP-расширения (PlayerDebugMode)
 
-Расширение не подписано, поэтому нужен debug-режим CEP. `CSXS.11` соответствует CEP 11 (AE 2022+); для других версий AE может понадобиться другой номер.
+Расширение не подписано, поэтому нужен debug-режим CEP. **Ключ реестра/preferences зависит от версии CEP, а та — от версии After Effects.** Если выставить не тот номер `CSXS.N`, панель просто не появится в меню Window → Extensions (самая частая причина «не работает на другой машине»).
 
-**Windows:**
+| After Effects | CEP | Ключ |
+|---------------|-----|------|
+| 2024 / 2025 / 2026 (24.x–26.x) | CEP 12 | `CSXS.12` |
+| 2022 / 2023 (22.x–23.x) | CEP 11 | `CSXS.11` |
+| 2021 (18.x) | CEP 10 | `CSXS.10` |
 
-```cmd
-reg add HKCU\Software\Adobe\CSXS.11 /v PlayerDebugMode /t REG_SZ /d 1
+Не уверены в версии — выставьте сразу несколько (лишние ключи безвредны). Узнать точную версию CEP можно в открытой панели через DevTools-консоль: `window.__adobe_cep__.getCurrentApiVersion()`.
+
+**Windows** (PowerShell — ставит CSXS.10/11/12 разом):
+
+```powershell
+10,11,12 | % { reg add "HKCU\Software\Adobe\CSXS.$_" /v PlayerDebugMode /t REG_SZ /d 1 /f }
 ```
 
 **macOS:**
 
 ```bash
-defaults write com.adobe.CSXS.11 PlayerDebugMode 1
+for v in 10 11 12; do defaults write com.adobe.CSXS.$v PlayerDebugMode 1; done
 ```
 
-После изменения перезапустить After Effects.
+После изменения **перезапустить After Effects** (на macOS может потребоваться `killall cfprefsd`, чтобы сбросить кэш preferences).
 
 ### 4. Настроить API-ключ
 

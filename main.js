@@ -1015,13 +1015,33 @@
     renderTranscript()
   }
 
+  // Resolve a writable output directory for exports/reports. Prefers the user's
+  // Desktop but GUARANTEES the directory exists before callers write into it.
+  // On machines where ~/Desktop is absent (Windows OneDrive desktop redirection,
+  // localized folder names, headless/CI), writing straight to ~/Desktop throws
+  // ENOENT and the whole export crashes; here we create it (or fall back to the
+  // home dir) so a write never fails for a missing directory.
+  function resolveOutputDir () {
+    var os = require('os')
+    var fs = require('fs')
+    var path = require('path')
+    var home = os.homedir()
+    var desktop = path.join(home, 'Desktop')
+    try {
+      fs.mkdirSync(desktop, { recursive: true })
+      return desktop
+    } catch (e) {
+      return home
+    }
+  }
+
   function handleExportSessions () {
     try {
       var fs = require('fs')
       var path = require('path')
       var ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
       var filename = 'ae-agent-session-' + ts + '.json'
-      var outDir = path.join(require('os').homedir(), 'Desktop')
+      var outDir = resolveOutputDir()
       var outPath = path.join(outDir, filename)
       var data = {
         exportedAt: new Date().toISOString(),
@@ -1042,7 +1062,7 @@
       var path = require('path')
       var ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
       var filename = 'ae-agent-errors-' + ts + '.json'
-      var outDir = path.join(require('os').homedir(), 'Desktop')
+      var outDir = resolveOutputDir()
       var outPath = path.join(outDir, filename)
 
       var errorEntries = []
@@ -1326,9 +1346,8 @@
       try {
         var fs = require('fs')
         var path = require('path')
-        var os = require('os')
         var ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
-        var outDir = path.join(os.homedir(), 'Desktop')
+        var outDir = resolveOutputDir()
 
         var md = []
         md.push('# AE Motion Agent \u2014 Session Analysis Report')

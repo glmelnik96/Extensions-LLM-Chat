@@ -4,11 +4,24 @@ Common issues and known error patterns in AE Motion Agent.
 
 ---
 
-## Panel doesn't open or blank
+## Panel doesn't appear in Window → Extensions menu
 
-- **CEP version mismatch**: AE version must match `CSXS/manifest.xml`. AE 2026 is currently expected.
+This is almost always **`PlayerDebugMode` set on the wrong `CSXS.N` key**. The key number is the CEP version, which is tied to the AE version — not a fixed `11`:
+
+| After Effects | CEP | Key |
+|---------------|-----|-----|
+| 2024 / 2025 / 2026 (24.x–26.x) | 12 | `CSXS.12` |
+| 2022 / 2023 (22.x–23.x) | 11 | `CSXS.11` |
+| 2021 (18.x) | 10 | `CSXS.10` |
+
+Confirm your CEP version from the open panel's DevTools console: `window.__adobe_cep__.getCurrentApiVersion()` → `{major: 12, ...}` means set `CSXS.12`. The simplest fix is to set 10/11/12 all at once (see README step 3), then **restart AE** (macOS: also `killall cfprefsd`). Verified live 2026-06-18: AE 26.2.1 reports CEP **12**, so `CSXS.12` is the relevant key on current AE.
+
+- **`manifest.xml` host range**: `<Host Name="AEFT" Version="[18.0,99.9]">` covers AE 2021+, and `RequiredRuntime CSXS 11.0` is a *floor* (loads fine under CEP 12). The manifest is not the usual culprit — the `PlayerDebugMode` key is.
+
+## Panel opens but is blank
+
 - **Script load order**: All config + library + module scripts must load before `main.js` (see order in `index.html`). One failing script blanks the panel — open CEP DevTools (`http://localhost:8088` if `.debug` is present in the panel folder).
-- **CSInterface.js missing**: Download manually to `lib/CSInterface.js` — see README install instructions.
+- **CSInterface.js missing**: Already bundled at `lib/CSInterface.js` — no download needed. If you deleted it, restore from the repo.
 
 ---
 
