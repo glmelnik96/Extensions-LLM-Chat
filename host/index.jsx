@@ -665,8 +665,15 @@ function extensionsLlmChat_saveCompFramePng (pathOrName, persistent) {
     } catch (ePath) {
       result.path = String(pathOrName);
     }
+    // Note: outFile.length is read on AE's main (ExtendScript) thread, but
+    // saveFrameToPng flushes the PNG bytes on that same thread only AFTER this
+    // call returns — so the size reads back as -1/0 here even though the file
+    // writes correctly within ~200ms (verified live). Reporting a -1 fileSize
+    // would falsely signal an empty/failed capture to the agent, so only
+    // include the field when a real size is available; otherwise omit it.
     try {
-      result.fileSize = outFile.length;
+      var savedLen = outFile.length;
+      if (typeof savedLen === 'number' && savedLen > 0) result.fileSize = savedLen;
     } catch (eLen) {}
     result.message = 'Saved frame at t=' + comp.time + 's.';
     return resultToJson(result);
@@ -1521,6 +1528,14 @@ function extensionsLlmChat_setLayerTiming (layerIndex, layerId, inPoint, outPoin
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
     if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    // Guard: when BOTH in_point and out_point are provided in one call, reject
+    // an inverted/zero range (in >= out). AE otherwise silently accepts it and
+    // leaves the layer with a negative duration — a degenerate, hard-to-notice
+    // state. Single-field calls are unaffected.
+    if (typeof inPoint === 'number' && typeof outPoint === 'number' && inPoint >= outPoint) {
+      result.message = 'set_layer_timing: in_point (' + inPoint + ') must be less than out_point (' + outPoint + ').';
+      return resultToJson(result);
+    }
     _beginToolUndo('Agent: Set layer timing');
     if (typeof startTime === 'number') layer.startTime = startTime;
     if (typeof inPoint === 'number') layer.inPoint = inPoint;

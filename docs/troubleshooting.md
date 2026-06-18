@@ -109,6 +109,18 @@ Tool reorder_layer called 4 times with the same arguments and the same error...
 
 **Fix:** pass a non-empty `new_name`. **Why this is guarded:** before the fix, a missing `new_name` reached `layer.name = String(newName)` and silently renamed the layer to the literal `"null"`/`"undefined"` — silent corruption. The host now returns a clean error instead, consistent with every other tool. (Found via live multi-model testing 2026-06-19.)
 
+### `set_layer_timing: in_point (X) must be less than out_point (Y)`
+
+**Cause:** both `in_point` and `out_point` were supplied in one call with `in_point >= out_point`.
+
+**Fix:** pass an `in_point` strictly less than `out_point`. **Why this is guarded:** before the fix, AE silently accepted the inverted range and left the layer with a negative duration — a degenerate, hard-to-notice state. Single-field calls (only `in_point` or only `out_point`) are unaffected. (Found via live multi-model testing 2026-06-19.)
+
+### `capture_comp_frame` result has no `fileSize` field
+
+**Cause:** **not an error.** The PNG is flushed on AE's main thread only *after* the host call returns, so `outFile.length` reads back as `-1`/`0` at capture time even though the file writes correctly (~200ms later). The host now omits `fileSize` rather than reporting a misleading `-1`.
+
+**Fix:** trust `ok:true` and the returned `path`; the file will exist shortly. Do not retry on a missing `fileSize`. (Found via live multi-model testing 2026-06-19.)
+
 ### `fontWarning: Font "Inter-Bold" not found; AE substituted "MyriadPro-Regular"`
 
 **Cause:** requested PostScript font name doesn't exist on the user's system.
