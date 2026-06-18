@@ -3317,6 +3317,15 @@ function extensionsLlmChat_createShapesFromText (layerIndex, layerId) {
     var layersBefore = ctx.comp.numLayers;
     var textLayerName = layer.name;
 
+    // Snapshot existing layer ids so we can identify the newly created shape
+    // layer by difference. AE inserts it directly ABOVE the source text layer,
+    // NOT at the top of the stack — so a fixed layer(1) lookup misidentifies it
+    // whenever the text layer isn't already topmost.
+    var beforeIds = {};
+    for (var bi = 1; bi <= ctx.comp.numLayers; bi++) {
+      try { beforeIds['_' + ctx.comp.layer(bi).id] = true; } catch (eBid) {}
+    }
+
     _beginToolUndo('Agent: Create shapes from text');
 
     // Select only this layer (required for menu commands)
@@ -3331,8 +3340,17 @@ function extensionsLlmChat_createShapesFromText (layerIndex, layerId) {
     _endToolUndo();
 
     if (layersAfter > layersBefore) {
-      // The new shape layer is typically at index 1 (top of stack)
-      var newLayer = ctx.comp.layer(1);
+      // Identify the new shape layer by the id that wasn't present before.
+      // It sits directly above the source text layer, not necessarily at index 1.
+      var newLayer = null;
+      for (var ai = 1; ai <= ctx.comp.numLayers; ai++) {
+        var cand = ctx.comp.layer(ai);
+        var cid = null;
+        try { cid = cand.id; } catch (eCid) {}
+        if (cid !== null && !beforeIds['_' + cid]) { newLayer = cand; break; }
+      }
+      // Fallback: AE places it directly above the (now shifted-down) text layer.
+      if (!newLayer) newLayer = ctx.comp.layer(Math.max(1, layer.index - 1));
       result.ok = true;
       result.newLayerIndex = newLayer.index;
       try { result.newLayerId = newLayer.id; } catch (e) {}

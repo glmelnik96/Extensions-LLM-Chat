@@ -109,6 +109,12 @@ Tool reorder_layer called 4 times with the same arguments and the same error...
 
 **Fix:** pass a non-empty `new_name`. **Why this is guarded:** before the fix, a missing `new_name` reached `layer.name = String(newName)` and silently renamed the layer to the literal `"null"`/`"undefined"` — silent corruption. The host now returns a clean error instead, consistent with every other tool. (Found via live multi-model testing 2026-06-19.)
 
+### `create_shapes_from_text` reported the wrong new layer name/id
+
+**Cause:** AE's "Create Shapes from Text" inserts the new shape layer *directly above the source text layer*, not at the top of the stack. The host previously assumed `layer(1)` (top) was the new layer, so when the text layer wasn't already topmost it returned a different layer's `newLayerId`/`newLayerName`/`newLayerIndex` — and a follow-up "animate that shape" would target the wrong layer.
+
+**Fix:** the host now identifies the new layer by the id that wasn't present before the command (with an above-the-text fallback). No action needed — `newLayerId`/`newLayerName` are now correct regardless of source position. (Found via live multi-model testing 2026-06-19.)
+
 ### `add_effect: missing required \`effect_match_name\` ...`
 
 **Cause:** `add_effect` was called without an `effect_match_name` (the effect selector). Note `effect_name` is a *different*, optional arg — it renames the added instance (e.g. `"Wiggle Freq"`), it does NOT select the effect.
