@@ -1,6 +1,6 @@
 # AE Motion Agent — CEP Panel for After Effects
 
-> **Status: MVP shipped 2026-04-30 → stability iterations 2-4 (2026-05-12) → Cloud.ru reasoning models (2026-06-04) → Stage 3 editing-assistant + live validation в реальном AE, 7 host-багов исправлено (2026-06-10).** Chat-only AI agent for motion-design work inside Adobe After Effects 26+. Cloud.ru Foundation Models (`zai-org/GLM-5.1`, reasoning) drive 50 tools mapped to ExtendScript.
+> **Status: MVP shipped 2026-04-30 → stability iterations 2-4 (2026-05-12) → Cloud.ru reasoning models (2026-06-04) → Stage 3 editing-assistant + live validation в реальном AE, 7 host-багов исправлено (2026-06-10) → 3-model selector (gpt-oss-120b / MiniMax-M2.5 / GLM-4.7), live-verified (2026-06-18).** Chat-only AI agent for motion-design work inside Adobe After Effects 26+. Cloud.ru Foundation Models drive 50 tools mapped to ExtendScript.
 
 **Tagline:** «buddy for motion design, not autopilot». The agent helps with hard expression logic, parameter dependencies, and AE quirks — not auto-generate entire animations from one sentence.
 
@@ -47,7 +47,7 @@ AI-агент принимает запросы на естественном я
 - **Export** — сессия в JSON на Desktop
 - **Errors** — только ошибочные tool calls в JSON
 - **Report** — LLM-анализ сессии + tool latency table на Desktop
-- Auto-resize textarea, static model badge в chat header (`Cloud.ru · GLM-5.1`), token usage display
+- Auto-resize textarea, селектор моделей в chat header (`Cloud.ru` + 3 кнопки: gpt-oss-120b / MiniMax-M2.5 / GLM-4.7; переключение блокируется во время запроса), token usage display
 
 ### Архитектура надёжности (после MVP + итераций 1-4)
 
@@ -223,7 +223,7 @@ Extensions LLM Chat/
 
 **Cloud.ru Foundation Models** — OpenAI-compatible chat/completions с tool calling + SSE streaming.
 
-Основная модель: `zai-org/GLM-5.1` (reasoning, 202k контекст; предопределена, без выбора в панели). Fallback в конфиге: `deepseek-ai/DeepSeek-V4-Pro`. Модели стримят chain-of-thought в отдельном поле `reasoning`, которое биллится как completion-токены.
+Модели (селектор в панели, хранится per-session как `session.model`, список — `AVAILABLE_MODELS` в `main.js`): `openai/gpt-oss-120b` (дефолт, самый быстрый чистый tool-caller), `MiniMaxAI/MiniMax-M2.5`, `zai-org/GLM-4.7`. Fallback в конфиге: `deepseek-ai/DeepSeek-V4-Pro`. Reasoning-модели стримят chain-of-thought в отдельном поле `reasoning`, которое биллится как completion-токены.
 
 ---
 

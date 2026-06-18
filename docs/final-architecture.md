@@ -15,7 +15,7 @@ Runtime architecture of the AE Motion Agent CEP extension. Read **[../AGENTS.md]
 | Host bridge | `hostBridge.js` | Tool name → ExtendScript mapping, anti-spam guard, idempotency cache, pre-validation, harmony normalize |
 | Tool registry | `toolRegistry.js` | 45 OpenAI-format function definitions |
 | Host script | `host/index.jsx` | ~3200 lines ExtendScript — all AE operations |
-| API | Cloud.ru Foundation Models | `zai-org/GLM-5.1` (reasoning) with tool calling and SSE; separate `reasoning` stream field |
+| API | Cloud.ru Foundation Models | 3-model selector (`openai/gpt-oss-120b` default, `MiniMaxAI/MiniMax-M2.5`, `zai-org/GLM-4.7`) with tool calling and SSE; reasoning models use a separate `reasoning` stream field |
 
 ---
 
@@ -112,7 +112,7 @@ The full list (with parameters) is the source of truth in `toolRegistry.js`. Cap
 - Export → session JSON to Desktop
 - Errors → error-only export to Desktop
 - Report → LLM-analyzed summary + tool latency stats to Desktop
-- Auto-resize textarea, static model badge in chat header (`Cloud.ru · GLM-5.1`), token usage display, anti-spam visibility (errors with `RETRY_BLOCKED`)
+- Auto-resize textarea, `Cloud.ru` badge + 3-model selector in chat header (gpt-oss-120b / MiniMax-M2.5 / GLM-4.7; switching blocked mid-request), token usage display, anti-spam visibility (errors with `RETRY_BLOCKED`)
 
 ---
 

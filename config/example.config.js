@@ -12,9 +12,11 @@
       /** Timeout for Cloud.ru chat requests (ms). Reasoning models (GLM-5.1 etc.)
        *  spend time "thinking" before the first token, so this is generous. */
       cloudChatTimeoutMs: 300000,
-      /** Predetermined reasoning model — no panel selection. GLM-5.1 leads on
-       *  tool-call schema adherence (lowest hallucinated-tool-name rate). */
-      defaultModel: 'zai-org/GLM-5.1',
+      /** Default model when none is selected. The panel exposes a selector
+       *  (gpt-oss-120b / MiniMax-M2.5 / GLM-4.7 — see AVAILABLE_MODELS in
+       *  main.js); gpt-oss-120b is the fastest clean tool-caller from the
+       *  2026-06-18 benchmark, so it is the default. */
+      defaultModel: 'openai/gpt-oss-120b',
       fallbackModel: 'deepseek-ai/DeepSeek-V4-Pro',
 
       /** ── Agent mode settings ─────────────────────────────────────────── */

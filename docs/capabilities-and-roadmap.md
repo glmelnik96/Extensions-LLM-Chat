@@ -112,7 +112,7 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 - **Markdown rendering** in agent responses (headers, bold, italic, code blocks, lists, inline images)
 - **Frame preview** — `capture_comp_frame` results shown as inline images in chat
 - **No-composition warning** — system message when no active comp is detected before sending
-- Static model badge in chat header (`Cloud.ru · GLM-5.1`; model predetermined, no selector)
+- **Model selector** in chat header — `Cloud.ru` badge + 3 buttons (gpt-oss-120b / MiniMax-M2.5 / GLM-4.7); selection persists per-session, switching blocked mid-request
 - **Live reasoning indicator** — model's `reasoning` stream shown as "Agent reasoning" status (never enters the chat)
 - **Quick action buttons**: Wiggle, Counter, Slide In, Bounce, Preview — one-click common operations
 - **Streaming text preview** — agent response text appears in real-time during generation
@@ -147,7 +147,7 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 - **`max_tokens: 65536`** — covers reasoning + tool_call chains + answer in one turn.
 
 ### API Provider
-- **Cloud.ru Foundation Models** — OpenAI-compatible chat/completions with tool calling and SSE streaming. Model: `zai-org/GLM-5.1` (reasoning, 202k context); chain-of-thought arrives in a separate `reasoning` field.
+- **Cloud.ru Foundation Models** — OpenAI-compatible chat/completions with tool calling and SSE streaming. Models (panel selector): `openai/gpt-oss-120b` (default), `MiniMaxAI/MiniMax-M2.5`, `zai-org/GLM-4.7`. For reasoning models, chain-of-thought arrives in a separate `reasoning` field.
 
 ---
 

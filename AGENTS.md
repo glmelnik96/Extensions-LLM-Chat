@@ -8,7 +8,7 @@
 
 **AE Motion Agent** (CEP extension folder: `Extensions LLM Chat`) is a chat-only AI agent embedded in Adobe After Effects 26+ via CEP (Common Extensibility Platform).
 
-The user types a natural-language motion-design request → the agent plans a sequence of tool calls → each tool maps to an ExtendScript function that runs inside After Effects → results stream back into the chat. Cloud.ru Foundation Models (`zai-org/GLM-5.1`, a reasoning model; predetermined, no panel selector) provide the LLM via an OpenAI-compatible API with tool calling + SSE. These models stream chain-of-thought in a separate `reasoning` field (not `content`) — see `docs/superpowers/specs/2026-06-04-model-upgrade-design.md`.
+The user types a natural-language motion-design request → the agent plans a sequence of tool calls → each tool maps to an ExtendScript function that runs inside After Effects → results stream back into the chat. Cloud.ru Foundation Models provide the LLM via an OpenAI-compatible API with tool calling + SSE. The panel header has a 3-model selector (`AVAILABLE_MODELS` in `main.js`): `openai/gpt-oss-120b` (default), `MiniMaxAI/MiniMax-M2.5`, `zai-org/GLM-4.7`; the choice is stored per-session as `session.model`. Reasoning models stream chain-of-thought in a separate `reasoning` field (not `content`) — see `docs/superpowers/specs/2026-06-04-model-upgrade-design.md`.
 
 **Tagline for the user:** «buddy for motion design, not autopilot». The agent should help with hard expression logic, parameter dependencies, and AE quirks — not auto-generate entire animations from a single sentence.
 
@@ -176,6 +176,9 @@ First validation against a **real** running After Effects via CDP (see "Live tes
 
 Full methodology + bug tables: `docs/superpowers/specs/2026-06-10-deep-audit-report.md` (sections 8, 8.1).
 
+### Model selector (2026-06-18) — 3 user-selectable models
+Re-added a panel model selector (reversing the brief "predetermined model" decision). `AVAILABLE_MODELS` in `main.js` defines `openai/gpt-oss-120b` (default), `MiniMaxAI/MiniMax-M2.5`, `zai-org/GLM-4.7`; `selectModel()` stores the choice on `session.model` (persisted) and is blocked mid-request; `normalizeModelId` migrates unknown/old ids (e.g. `zai-org/GLM-5.1`) to the default. UI: `#model-selector` buttons (`index.html`), `.model-btn`/`.model-btn-active` (`styles.css`). All three live-verified in real AE via CDP — clean tool dispatch (0 hallucinated tool names) on a simple read and a complex multi-tool rig (null + Slider Control + shape + Opacity↔slider link): gpt-oss-120b 7 calls/~93k tok, GLM-4.7 5 calls/~91k tok, MiniMax-M2.5 11 calls/~225k tok (self-corrected 3 transient expression errors to success).
+
 ---
 
 ## Live testing against real AE (CDP pipeline)
@@ -268,7 +271,7 @@ For external (Obsidian) context, see also:
 
 **You should escalate (ask user) before:**
 - Adding new tools that mutate AE state outside the current 50
-- Changing the API provider or model (`zai-org/GLM-5.1` ↔ another model)
+- Changing the API provider or the `AVAILABLE_MODELS` selector list (adding/removing/replacing a model)
 - Modifying `_resolveLayer` selection-fallback behavior
 - Changing the localStorage `ae-motion-agent-state` schema (breaks existing sessions)
 - Touching CSXS manifest extension ID (breaks existing localStorage)

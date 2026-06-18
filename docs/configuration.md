@@ -20,11 +20,11 @@ The panel reads two globals injected by config scripts in `index.html`:
 | `apiKey` | string | `''` | Bearer token for Cloud.ru chat/completions. Required for Send. Prefer setting via `EXTENSIONS_LLM_CHAT_SECRETS.apiKey` in `secrets.local.js`; `EXTENSIONS_LLM_CHAT_CONFIG.apiKey` is a legacy fallback. |
 | `baseUrl` | string | `https://foundation-models.api.cloud.ru/v1` | API base URL. |
 | `cloudChatTimeoutMs` | number | `300000` | Timeout for chat/completions requests (ms). Raised for reasoning-model latency before first token. |
-| `defaultModel` | string | `zai-org/GLM-5.1` | Default LLM (reasoning, 202k context). Hardcoded as `DEFAULT_MODEL` in `main.js`; no panel selector. |
+| `defaultModel` | string | `openai/gpt-oss-120b` | Default LLM when no model is selected. The panel exposes a 3-model selector (see `AVAILABLE_MODELS` in `main.js`): `openai/gpt-oss-120b`, `MiniMaxAI/MiniMax-M2.5`, `zai-org/GLM-4.7`. The selection is stored per-session as `session.model`. |
 | `fallbackModel` | string | `deepseek-ai/DeepSeek-V4-Pro` | Config fallback for `invokeWithFallback` (not wired into the agent loop). |
 | `agentMaxSteps` | number | `60` | Maximum number of LLM ↔ tool-call rounds per user message. |
 | `agentTemperature` | number | `0.3` | Temperature for tool-use generation. |
-| `maxConversationTokens` | number | `120000` | Conversation-history pruning budget (well within GLM-5.1's 202k context). |
+| `maxConversationTokens` | number | `120000` | Conversation-history pruning budget (well within each model's context window). |
 
 > **Removed in chat-only cleanup (2026-04-30):** legacy fields `captureEnabled`, `captureTimeoutMs`, `previewCaptureInset` (related to deleted screen-capture node helpers), plus all `ollama*` fields. If you see these in old configs, they are silently ignored.
 

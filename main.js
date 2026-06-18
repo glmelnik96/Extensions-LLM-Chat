@@ -25,9 +25,36 @@
 
   // ── Constants ──────────────────────────────────────────────────────────
   var STORAGE_KEY = 'ae-motion-agent-state'
-  // Predetermined model — no panel selection. See config.defaultModel.
-  var DEFAULT_MODEL = 'zai-org/GLM-5.1'
+
+  // User-selectable models (panel selector). Each entry tuned from the live
+  // 8-model × 4-task benchmark (2026-06-18, real AE, Russian prompts):
+  //  - gpt-oss-120b   : fastest (~28s/4 tasks), clean tool use, 4/4 correct.
+  //  - MiniMax-M2.5   : cleanest tool use (0 errors, fewest calls), 4/4.
+  //  - GLM-4.7        : 4/4 but thrashes on the hardest task (30+ calls,
+  //                     up to ~377k tokens); GLM family respects
+  //                     enable_thinking:false, so thinking is forced off.
+  // `thinking` controls the chat_template_kwargs.enable_thinking flag the loop
+  // sends; only the GLM family honors it (others ignore the kwarg harmlessly).
+  var AVAILABLE_MODELS = [
+    { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b', family: 'gpt-oss' },
+    { id: 'MiniMaxAI/MiniMax-M2.5', label: 'MiniMax-M2.5', family: 'minimax' },
+    { id: 'zai-org/GLM-4.7', label: 'GLM-4.7', family: 'glm' }
+  ]
+  // Default = fastest clean model from the benchmark.
+  var DEFAULT_MODEL = AVAILABLE_MODELS[0].id
   var DEFAULT_AGENT_MAX_STEPS = 60
+
+  function getModelById (id) {
+    for (var i = 0; i < AVAILABLE_MODELS.length; i++) {
+      if (AVAILABLE_MODELS[i].id === id) return AVAILABLE_MODELS[i]
+    }
+    return null
+  }
+
+  function getModelLabel (id) {
+    var m = getModelById(id)
+    return m ? m.label : (id || '').split('/').pop()
+  }
 
   // ── State ──────────────────────────────────────────────────────────────
   var state = {
@@ -54,13 +81,14 @@
     els.cancelBtn = document.getElementById('cancel-btn')
     els.statusText = document.getElementById('status-text')
     els.modelStatus = document.getElementById('model-status')
+    els.modelSelector = document.getElementById('model-selector')
   }
 
-  // The model is predetermined (no per-session selection). Always resolve to
-  // DEFAULT_MODEL so old sessions persisted with a previous model id migrate
-  // transparently to the current one.
-  function normalizeModelId () {
-    return DEFAULT_MODEL
+  // Resolve a persisted/selected model id to one of the AVAILABLE_MODELS.
+  // Unknown ids (older sessions saved with a now-removed model) migrate
+  // transparently to DEFAULT_MODEL.
+  function normalizeModelId (id) {
+    return getModelById(id) ? id : DEFAULT_MODEL
   }
 
   function getAgentMaxSteps (cfg) {
@@ -548,6 +576,43 @@
     state.lastModelStatus = { status: status, label: label }
   }
 
+  // ── Model selector ───────────────────────────────────────────────────────
+  // Render the selectable model buttons and highlight the active one.
+  function renderModelSelector () {
+    if (!els.modelSelector) return
+    var active = normalizeModelId(state.session ? state.session.model : DEFAULT_MODEL)
+    els.modelSelector.innerHTML = ''
+    for (var i = 0; i < AVAILABLE_MODELS.length; i++) {
+      var m = AVAILABLE_MODELS[i]
+      var btn = document.createElement('button')
+      btn.type = 'button'
+      btn.className = 'model-btn' + (m.id === active ? ' model-btn-active' : '')
+      btn.textContent = m.label
+      btn.setAttribute('data-model-id', m.id)
+      btn.setAttribute('title', m.id)
+      els.modelSelector.appendChild(btn)
+    }
+  }
+
+  // Switch the active model. Blocked mid-request so a run always finishes on the
+  // model it started with (mixing models within one tool-call chain corrupts the
+  // tool_call/tool message pairing).
+  function selectModel (id) {
+    if (!getModelById(id)) return
+    if (state.isRequestInFlight) {
+      setStatus('Finish or stop the current request before switching models.')
+      return
+    }
+    var session = ensureSession()
+    if (session.model === id) return
+    session.model = id
+    session.updatedAt = Date.now()
+    persistState()
+    renderModelSelector()
+    setModelStatus(state.lastModelStatus.status === 'error' ? 'ok' : state.lastModelStatus.status, getModelLabel(id))
+    setStatus('Model: ' + getModelLabel(id))
+  }
+
   // ── Minimal markdown → HTML ─────────────────────────────────────────────
   // Delegates to the extracted, unit-tested renderer in lib/pure/markdown.js
   // (single source of truth; hardened against attribute-injection XSS).
@@ -883,7 +948,7 @@
       session.messages.push(assistantMsg)
       session.updatedAt = Date.now()
 
-      setModelStatus('ok', DEFAULT_MODEL.split('/').pop())
+      setModelStatus('ok', getModelLabel(session.model))
       var usageNote = ''
       if (result.usage && result.usage.total_tokens > 0) {
         usageNote = ' | tokens: ' + result.usage.total_tokens
@@ -1218,7 +1283,7 @@
     session.messages.push({ role: 'system', text: '\uD83D\uDCCA Report: analyzing ' + totalChunks + ' chunk(s)...' })
     renderTranscript()
 
-    var modelId = DEFAULT_MODEL
+    var modelId = normalizeModelId(session.model)
     var chunkReports = []
 
     function processChunk (idx) {
@@ -1346,6 +1411,16 @@
     if (els.reportBtn) els.reportBtn.addEventListener('click', handleGenerateReport)
     if (els.undoBtn) els.undoBtn.addEventListener('click', handleUndo)
 
+    // Model selector (event delegation — buttons are re-rendered on switch).
+    if (els.modelSelector) {
+      els.modelSelector.addEventListener('click', function (e) {
+        var btn = e.target.closest ? e.target.closest('.model-btn') : null
+        if (!btn) return
+        var id = btn.getAttribute('data-model-id')
+        if (id) selectModel(id)
+      })
+    }
+
     // Chat buttons
     if (els.sendBtn) els.sendBtn.addEventListener('click', handleSend)
     if (els.cancelBtn) els.cancelBtn.addEventListener('click', function () {
@@ -1397,7 +1472,9 @@
 
     // Ensure single session exists
     ensureSession()
+    state.session.model = normalizeModelId(state.session.model)
     renderTranscript()
+    renderModelSelector()
 
     bindEvents()
     setStatus('Ready')
@@ -1408,7 +1485,7 @@
     var secrets = (window.EXTENSIONS_LLM_CHAT_SECRETS) || {}
     var cfg = (window.EXTENSIONS_LLM_CHAT_CONFIG) || {}
     var apiKey = secrets.apiKey || cfg.apiKey || ''
-    var modelLabel = DEFAULT_MODEL.split('/').pop()
+    var modelLabel = getModelLabel(state.session ? state.session.model : DEFAULT_MODEL)
     if (apiKey) {
       setModelStatus('ok', modelLabel)
     } else {
