@@ -24,6 +24,7 @@
    *   - maxSteps:     number — max tool-call rounds (default 150)
    *   - temperature:  number — (default 0.3)
    *   - onToolCall:   function(toolCall) — callback for UI updates per tool call
+   *   - onStepStart:  function(stepIndex) — fired before each model request
    *   - onStepComplete: function(stepIndex, toolResults) — callback after each step
    *
    * @returns {Promise<object>} { content: string, toolCallLog: Array }
@@ -52,6 +53,10 @@
     var temperature = (typeof options.temperature === 'number') ? options.temperature : DEFAULT_TEMPERATURE
     var onToolCall = options.onToolCall || function () {}
     var onStepComplete = options.onStepComplete || function () {}
+    // Fired right before each model request. Lets the UI show a live
+    // "waiting for model" state during the (non-streaming) turn instead of
+    // leaving the label stuck on the previous tool's status.
+    var onStepStart = options.onStepStart || function () {}
     var onTextChunk = options.onTextChunk || null
     var onReasoningChunk = options.onReasoningChunk || null
     var abortHandle = options.abortHandle || null
@@ -120,6 +125,9 @@
       if (!(thinkingFirstTurn && stepIndex === 0)) {
         invokeOptions.chat_template_kwargs = { enable_thinking: false }
       }
+      // Signal that a model request is about to start (UI: "waiting for model").
+      try { onStepStart(stepIndex) } catch (_) {}
+
       // Streaming is opt-in for the agent loop. Verified live 2026-06-10:
       // Cloud.ru (vllm-0.22.0) drops ALL delta.tool_calls in streaming mode for
       // GLM-5.1 (10/10 repro) while non-streaming returns them correctly, so

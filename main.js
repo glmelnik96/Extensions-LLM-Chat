@@ -845,6 +845,13 @@
       onToolCall: function (tc) {
         updateThinkingWithToolCall(tc)
       },
+      onStepStart: function (stepIdx) {
+        // Non-streaming turns give no token feedback while the model thinks,
+        // so without this the label stays stuck on the previous tool's status
+        // for 7-14s and looks frozen. Show an explicit "waiting" state; the
+        // elapsed-seconds timer in the indicator keeps ticking alongside it.
+        _setThinkingLabel('Agent · waiting for model (step ' + (stepIdx + 1) + '/' + maxSteps + ')')
+      },
       onStepComplete: function (stepIdx, results) {
         setStatus('Step ' + (stepIdx + 1) + '/' + maxSteps + ' (' + results.length + ' tool calls)')
       }
