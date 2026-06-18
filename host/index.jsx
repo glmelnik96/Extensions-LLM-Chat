@@ -1546,9 +1546,20 @@ function extensionsLlmChat_renameLayer (layerIndex, layerId, newName) {
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
     if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    // Guard: a missing/empty new_name must NOT silently rename the layer to the
+    // literal "null"/"undefined". Return a clean error like the other tools.
+    if (newName === null || newName === undefined) {
+      result.message = 'rename_layer: missing required `new_name` string.';
+      return resultToJson(result);
+    }
+    var nameStr = String(newName).replace(/^\s+|\s+$/g, '');
+    if (nameStr === '') {
+      result.message = 'rename_layer: `new_name` must be a non-empty string.';
+      return resultToJson(result);
+    }
     var old = layer.name;
     _beginToolUndo('Agent: Rename layer');
-    layer.name = String(newName);
+    layer.name = nameStr;
     _endToolUndo();
     result.ok = true;
     result.message = 'Renamed "' + old + '" → "' + layer.name + '".';

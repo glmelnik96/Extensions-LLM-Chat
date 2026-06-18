@@ -103,6 +103,12 @@ Tool reorder_layer called 4 times with the same arguments and the same error...
 
 **Fix:** the model should retry with `layer_id` from `create_layer(layer_type:"shape")`. Error message guides it.
 
+### `rename_layer: missing required \`new_name\` string` / `... must be a non-empty string`
+
+**Cause:** `rename_layer` was called without a `new_name` (or with an empty/whitespace-only one).
+
+**Fix:** pass a non-empty `new_name`. **Why this is guarded:** before the fix, a missing `new_name` reached `layer.name = String(newName)` and silently renamed the layer to the literal `"null"`/`"undefined"` — silent corruption. The host now returns a clean error instead, consistent with every other tool. (Found via live multi-model testing 2026-06-19.)
+
 ### `fontWarning: Font "Inter-Bold" not found; AE substituted "MyriadPro-Regular"`
 
 **Cause:** requested PostScript font name doesn't exist on the user's system.
