@@ -7,8 +7,7 @@
   if (typeof window !== 'undefined' && window.EXTENSIONS_LLM_CHAT_CONFIG) {
     Object.assign(window.EXTENSIONS_LLM_CHAT_CONFIG, {
       // baseUrl: 'https://foundation-models.api.cloud.ru/v1',
-      // defaultModel: 'zai-org/GLM-5.1',
-      // fallbackModel: 'deepseek-ai/DeepSeek-V4-Pro',
+      // defaultModel: 'openai/gpt-oss-120b',
       // cloudChatTimeoutMs: 300000,
       // agentMaxSteps: 60,
       // agentTemperature: 0.3,

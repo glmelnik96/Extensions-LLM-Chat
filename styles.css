@@ -237,42 +237,6 @@ body {
   margin-bottom: 4px;
 }
 
-/* ── Expression blocks (for backward compat with expression pipeline) ── */
-
-.chat-message.assistant .chat-expression {
-  display: block;
-  background-color: #1a1f28;
-  border: 1px solid #586a8a;
-  padding: 4px;
-  margin-bottom: 4px;
-  color: #e4f1ff;
-  white-space: pre-wrap;
-  font-family: Menlo, Monaco, Consolas, monospace;
-  font-size: 10px;
-}
-
-.chat-expression-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 2px;
-  font-size: 10px;
-  color: #a8c4ff;
-}
-
-.chat-expression-copy-btn {
-  border: 1px solid #586a8a;
-  background-color: #2b3242;
-  color: #e4f1ff;
-  padding: 1px 4px;
-  font-size: 10px;
-  cursor: pointer;
-}
-
-.chat-expression-copy-btn:hover {
-  background-color: #354159;
-}
-
 /* ── Status & provider bar ────────────────────────────────────────────── */
 
 .status-line {

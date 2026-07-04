@@ -150,21 +150,6 @@
       var raw = localStorage.getItem(STORAGE_KEY)
       if (!raw) return
       var data = JSON.parse(raw)
-      // Support old multi-session format: migrate to single session
-      if (data.sessions && data.sessions.length > 0) {
-        // Pick the active session or the first one
-        var active = null
-        if (data.activeSessionId) {
-          for (var i = 0; i < data.sessions.length; i++) {
-            if (data.sessions[i].id === data.activeSessionId) { active = data.sessions[i]; break }
-          }
-        }
-        if (!active) active = data.sessions[0]
-        state.session = active
-        state.session.model = normalizeModelId(state.session.model)
-        return
-      }
-      // New single-session format
       if (data.session) {
         state.session = data.session
         state.session.model = normalizeModelId(state.session.model)
@@ -923,14 +908,11 @@
     }).then(function (result) {
       removeThinking()
 
-      var READ_ONLY_TOOLS = {
-        get_detailed_comp_summary: true, get_host_context: true,
-        get_property_value: true, get_keyframes: true,
-        get_layer_properties: true, get_effect_properties: true,
-        get_expression: true, get_mask_info: true,
-        get_markers: true, list_project_items: true,
-        capture_comp_frame: true, search_layers: true
-      }
+      // Shared read-only list from the tool loop (single source of truth).
+      // A stale local copy here once omitted search_expression_library /
+      // list_available_effects, inflating the Undo count — Undo then reverted
+      // the user's OWN edits beyond the agent's actions.
+      var READ_ONLY_TOOLS = (window.AGENT_TOOL_LOOP && window.AGENT_TOOL_LOOP.READ_ONLY_TOOLS) || {}
       var mutatingCount = 0
       var allCalls = result.toolCallLog || []
       for (var ci = 0; ci < allCalls.length; ci++) {
@@ -1125,7 +1107,9 @@
   var REPORT_CHUNK_CHARS = 24000
   var REPORT_SYSTEM_PROMPT = [
     'You are a QA analyst reviewing session logs from an Adobe After Effects AI agent panel (AE Motion Agent).',
-    'The panel has 47 tools that create/modify layers, shapes, keyframes, expressions, effects, masks, markers, 3D, camera, light, import files, capture frames.',
+    'The panel has ' +
+      ((window.AGENT_TOOL_REGISTRY && window.AGENT_TOOL_REGISTRY.tools) ? window.AGENT_TOOL_REGISTRY.tools.length : 'dozens of') +
+      ' tools that create/modify layers, shapes, keyframes, expressions, effects, masks, markers, 3D, camera, light, import files, capture frames.',
     '',
     'Analyze the provided session log chunk and produce a structured report in this EXACT format:',
     '',

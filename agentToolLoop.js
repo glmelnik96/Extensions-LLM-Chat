@@ -418,7 +418,11 @@
   if (typeof window !== 'undefined') {
     window.AGENT_TOOL_LOOP = {
       runAgentLoop: runAgentLoop,
-      createAbortHandle: createAbortHandle
+      createAbortHandle: createAbortHandle,
+      // Single source of truth for "read-only" tools (no AE undo group, safe
+      // to parallelize). main.js uses this to count undoable agent actions —
+      // keep ONE list so the Undo count can never drift out of sync again.
+      READ_ONLY_TOOLS: READ_ONLY_TOOLS
     }
   }
 })()

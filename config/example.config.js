@@ -17,7 +17,6 @@
        *  main.js); gpt-oss-120b is the fastest clean tool-caller from the
        *  2026-06-18 benchmark, so it is the default. */
       defaultModel: 'openai/gpt-oss-120b',
-      fallbackModel: 'deepseek-ai/DeepSeek-V4-Pro',
 
       /** ── Agent mode settings ─────────────────────────────────────────── */
 

@@ -45,7 +45,7 @@
    */
   function parseModelId (modelId) {
     if (!modelId || typeof modelId !== 'string') {
-      return { provider: 'cloudru', model: getConfig().defaultModel || 'zai-org/GLM-5.1' }
+      return { provider: 'cloudru', model: getConfig().defaultModel || 'openai/gpt-oss-120b' }
     }
     if (modelId.indexOf('cloudru/') === 0) {
       return { provider: 'cloudru', model: modelId.substring(8) }
@@ -342,22 +342,10 @@
     }, 3)
   }
 
-  /**
-   * Invoke with automatic fallback to a secondary model on failure.
-   */
-  function invokeWithFallback (primaryModelId, fallbackModelId, messages, options) {
-    return invoke(primaryModelId, messages, options).catch(function (err) {
-      console.warn('Primary model failed (' + primaryModelId + '), trying fallback: ' + err.message)
-      if (!fallbackModelId) throw err
-      return invoke(fallbackModelId, messages, options)
-    })
-  }
-
   // Export
   if (typeof window !== 'undefined') {
     window.CHAT_PROVIDER = {
       invoke: invoke,
-      invokeWithFallback: invokeWithFallback,
       parseModelId: parseModelId
     }
   }
