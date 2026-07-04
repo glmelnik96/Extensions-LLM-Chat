@@ -1503,8 +1503,45 @@
     window.addEventListener('focus', function () { refreshActiveCompNote(true) })
   }
 
+  // ── Host theme sync (AppSkinInfo) ──────────────────────────────────────
+  // Follow AE's brightness slider like native panels do: derive the token
+  // palette from the host's panel background and re-derive on the CEP
+  // ThemeColorChanged event. Outside CEP (plain browser) this is a no-op —
+  // the :root defaults in styles.css stay in effect.
+  function applyHostTheme (skinInfo) {
+    if (!window.PURE_THEME) return
+    var bg = window.PURE_THEME.backgroundFromSkinInfo(skinInfo)
+    if (!bg) return
+    var palette = window.PURE_THEME.derivePalette(bg)
+    var rootStyle = document.documentElement.style
+    for (var k in palette.vars) {
+      if (Object.prototype.hasOwnProperty.call(palette.vars, k)) {
+        rootStyle.setProperty(k, palette.vars[k])
+      }
+    }
+  }
+
+  function initHostThemeSync () {
+    if (typeof CSInterface === 'undefined') return
+    try {
+      var cs = new CSInterface()
+      var env = cs.getHostEnvironment()
+      if (env && env.appSkinInfo) applyHostTheme(env.appSkinInfo)
+      cs.addEventListener(CSInterface.THEME_COLOR_CHANGED_EVENT, function () {
+        // Event payload lacks the skin info in some CEP versions — re-query.
+        try {
+          var fresh = cs.getHostEnvironment()
+          if (fresh && fresh.appSkinInfo) applyHostTheme(fresh.appSkinInfo)
+        } catch (_) {}
+      })
+    } catch (e) {
+      console.warn('Host theme sync unavailable:', e)
+    }
+  }
+
   // ── Init ───────────────────────────────────────────────────────────────
   function init () {
+    initHostThemeSync()
     cacheDomRefs()
     loadState()
 
