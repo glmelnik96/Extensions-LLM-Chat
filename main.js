@@ -116,6 +116,7 @@
         createdAt: state.session.createdAt,
         updatedAt: state.session.updatedAt,
         model: state.session.model,
+        totalTokens: state.session.totalTokens || 0,
         messages: state.session.messages
       } : null
     }
@@ -169,6 +170,7 @@
       createdAt: Date.now(),
       updatedAt: Date.now(),
       model: DEFAULT_MODEL,
+      totalTokens: 0,
       messages: []
     }
     persistState()
@@ -921,6 +923,7 @@
         }
       }
       state.lastMutatingToolCount = mutatingCount
+      updateUndoButton()
 
       var assistantMsg = {
         role: 'assistant',
@@ -933,7 +936,9 @@
       setModelStatus('ok', getModelLabel(session.model))
       var usageNote = ''
       if (result.usage && result.usage.total_tokens > 0) {
-        usageNote = ' | tokens: ' + result.usage.total_tokens
+        session.totalTokens = (session.totalTokens || 0) + result.usage.total_tokens
+        usageNote = ' | tokens: ' + result.usage.total_tokens +
+          ' (session ' + session.totalTokens + ')'
       }
       setStatus('Ready' + usageNote)
       renderTranscript()
@@ -951,6 +956,16 @@
           toolCalls: serializeToolCalls(partialLog)
         })
       }
+      // A failed run may still have mutated the project — count the partial
+      // log the same way as the success path so Undo reflects reality instead
+      // of keeping the count from the PREVIOUS run.
+      var roTools = (window.AGENT_TOOL_LOOP && window.AGENT_TOOL_LOOP.READ_ONLY_TOOLS) || {}
+      var partialMutating = 0
+      for (var pi = 0; pi < partialLog.length; pi++) {
+        if (!roTools[partialLog[pi].name] && partialLog[pi].status === 'ok') partialMutating++
+      }
+      state.lastMutatingToolCount = partialMutating
+      updateUndoButton()
       var errMsg = err.message || String(err)
       session.messages.push({ role: 'system', text: 'Error: ' + errMsg })
       session.updatedAt = Date.now()
@@ -969,16 +984,31 @@
   }
 
   // ── Handle Undo ────────────────────────────────────────────────────────
+  // Reflect the pending agent-action count on the Undo button. Disabled +
+  // plain "Undo" when there is nothing to revert — a blind executeCommand(16)
+  // here used to revert the user's OWN manual edit.
+  function updateUndoButton () {
+    if (!els.undoBtn) return
+    var count = state.lastMutatingToolCount || 0
+    els.undoBtn.disabled = count < 1
+    els.undoBtn.textContent = count > 0 ? 'Undo (' + count + ')' : 'Undo'
+  }
+
   function handleUndo () {
     if (!window.HOST_BRIDGE) return
-    var count = state.lastMutatingToolCount || 1
-    if (count < 1) count = 1
+    var count = state.lastMutatingToolCount || 0
+    if (count < 1) {
+      setStatus('Nothing to undo — no agent changes since the last run')
+      updateUndoButton()
+      return
+    }
 
     var script = '(function(){ for (var i = 0; i < ' + count + '; i++) { app.executeCommand(16); } return "' + count + '"; })()'
     window.HOST_BRIDGE.evalHostFunction(script)
       .then(function () { setStatus('Undo: ' + count + ' action' + (count > 1 ? 's' : '') + ' reverted') })
       .catch(function (e) { setStatus('Undo failed: ' + e.message) })
     state.lastMutatingToolCount = 0
+    updateUndoButton()
   }
 
   // ── Session actions ────────────────────────────────────────────────────
@@ -1385,22 +1415,27 @@
 
   function refreshActiveCompNote (silent) {
     if (!els.activeCompNote) return
+    // .warn turns the note amber when no comp is active — the agent's
+    // mutating tools will fail in that state, so make it visually obvious.
+    function setNote (text, warn) {
+      els.activeCompNote.textContent = text
+      els.activeCompNote.classList.toggle('warn', !!warn)
+    }
     if (!window.HOST_BRIDGE || typeof window.HOST_BRIDGE.evalHostFunction !== 'function') {
-      els.activeCompNote.textContent = 'Active comp: unavailable.'
+      setNote('Active comp: unavailable.', true)
       return
     }
     return window.HOST_BRIDGE.evalHostFunction('extensionsLlmChat_getActiveCompNote()')
       .then(function (ctx) {
         if (ctx && ctx.ok && ctx.compName) {
-          els.activeCompNote.textContent =
-            'Active composition: "' + ctx.compName + '". Changes are applied to this composition.'
+          setNote('Active composition: "' + ctx.compName + '". Changes are applied to this composition.', false)
           return
         }
         var msg = (ctx && ctx.message) ? ctx.message : 'No active composition.'
-        els.activeCompNote.textContent = 'Active composition: unavailable. ' + msg
+        setNote('Active composition: unavailable. ' + msg, true)
       })
       .catch(function (err) {
-        els.activeCompNote.textContent = 'Active composition: unavailable.'
+        setNote('Active composition: unavailable.', true)
         if (!silent) setStatus('Active comp note unavailable: ' + (err.message || String(err)))
       })
   }
@@ -1481,6 +1516,7 @@
 
     bindEvents()
     setStatus('Ready')
+    updateUndoButton()
     refreshActiveCompNote(true)
     checkHostCapabilities()
 

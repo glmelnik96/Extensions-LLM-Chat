@@ -12,6 +12,7 @@ body {
   flex-direction: column;
   height: 100vh;
   box-sizing: border-box;
+  padding: 6px 8px;
   background-color: #323232;
 }
 
@@ -54,6 +55,13 @@ body {
   border-radius: 3px;
 }
 
+/* No active comp — agent mutations will fail, warn in amber. */
+.active-comp-note.warn {
+  color: #f0d090;
+  border-color: #8a6a30;
+  background-color: #3a3020;
+}
+
 .chat-message {
   margin-bottom: 8px;
   padding: 6px 8px;
@@ -80,7 +88,7 @@ body {
 }
 
 .chat-message .msg-role {
-  font-size: 9px;
+  font-size: 10px;
   text-transform: uppercase;
   letter-spacing: 0.5px;
   color: #888;
@@ -119,7 +127,7 @@ body {
   font-family: Menlo, Monaco, Consolas, monospace;
   font-size: 10px;
   white-space: pre-wrap;
-  word-break: break-all;
+  word-break: break-word;
   color: #e4f1ff;
   border-radius: 2px;
 }
@@ -180,7 +188,7 @@ body {
 }
 
 .tool-status {
-  font-size: 9px;
+  font-size: 10px;
   padding: 1px 5px;
   border-radius: 2px;
 }
@@ -226,14 +234,14 @@ body {
 
 .tool-detail-label {
   color: #666;
-  font-size: 9px;
+  font-size: 10px;
   margin-top: 2px;
 }
 
 .tool-detail-content {
   color: #ccc;
   white-space: pre-wrap;
-  word-break: break-all;
+  word-break: break-word;
   margin-bottom: 4px;
 }
 
@@ -250,7 +258,7 @@ body {
 .model-status {
   padding: 1px 4px;
   border-radius: 2px;
-  font-size: 9px;
+  font-size: 10px;
 }
 
 .model-status-ok {
