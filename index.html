@@ -22,12 +22,17 @@
           <span id="model-status" class="model-status model-status-unknown">model: unknown</span>
         </div>
 
-        <!-- Quick actions -->
+        <!-- Quick actions: ordered by real-world demand (2026-07 research:
+             wiggle/loop/bounce top every list; auto-resize text box is the
+             most-asked expression question on Adobe forums). -->
         <div class="quick-actions" id="quick-actions">
           <button class="quick-action-btn" data-prompt="Add wiggle(3, 25) to selected layers" title="Apply wiggle expression to selection">Wiggle</button>
-          <button class="quick-action-btn" data-prompt="Create a counter from 0 to 100 on selected text layer" title="Counter expression on text">Counter</button>
-          <button class="quick-action-btn" data-prompt="Animate selected layers in from the left with easing" title="Slide in from left">Slide In</button>
+          <button class="quick-action-btn" data-prompt="Loop existing keyframes on selected layers with loopOut cycle" title="Repeat keyframed animation forever">Loop</button>
           <button class="quick-action-btn" data-prompt="Add bounce easing expression to all keyframes on selected layers" title="Bounce overshoot on keyframes">Bounce</button>
+          <button class="quick-action-btn" data-prompt="Create a counter from 0 to 100 on selected text layer" title="Counter expression on text">Counter</button>
+          <button class="quick-action-btn" data-prompt="Create an auto-resizing background box behind the selected text layer using sourceRectAtTime" title="Auto-resizing text background (lower third)">Text Box</button>
+          <button class="quick-action-btn" data-prompt="Add auto fade in/out expression to opacity of selected layers" title="Fade at layer in/out points, no keyframes">Fade</button>
+          <button class="quick-action-btn" data-prompt="Make selected layers rotate continuously using a time expression" title="Endless rotation without keyframes">Spin</button>
           <button class="quick-action-btn" data-prompt="Capture current frame preview" title="Save and show current comp frame">Preview</button>
         </div>
 

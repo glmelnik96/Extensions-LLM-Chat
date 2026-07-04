@@ -74,6 +74,32 @@ test('exprlib: search respects max_results and returns requires', () => {
   assert.ok(slider.snippets.some(s => s.requires.indexOf('ADBE Slider Control') !== -1), 'slider snippets declare required controller effect')
 })
 
+test('exprlib: 2026-07 additions are findable via EN and RU keywords', () => {
+  const cases = [
+    ['spin forever', 'spin-forever'],
+    ['вращение', 'spin-forever'],
+    ['overshoot pop', 'overshoot-settle'],
+    ['музыка бит', 'audio-reactive'],
+    ['seedrandom duplicate', 'random-per-layer'],
+    ['snap zoom', 'snap-zoom'],
+    ['aim target', 'look-at-layer'],
+    ['lens flare 3d', 'effect-point-to-3d'],
+    ['parent inverse scale', 'keep-scale-when-parented'],
+    ['walk cycle offset', 'loop-offset'],
+    ['clamp limit', 'clamp-range']
+  ]
+  for (const [query, id] of cases) {
+    const r = lib.search(query)
+    assert.strictEqual(r.ok, true, query)
+    assert.ok(r.snippets.some(s => s.id === id), `"${query}" should find ${id}, got: ` + r.snippets.map(s => s.id).join(', '))
+  }
+})
+
+test('exprlib: "bounce" still ranks inertial-bounce first after additions', () => {
+  const r = lib.search('bounce')
+  assert.strictEqual(r.snippets[0].id, 'inertial-bounce')
+})
+
 test('exprlib: empty query → ok:false, nonsense query → ok:true with guidance', () => {
   const empty = lib.search('')
   assert.strictEqual(empty.ok, false)
