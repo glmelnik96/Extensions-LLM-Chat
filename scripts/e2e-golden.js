@@ -63,7 +63,7 @@ function closeCDP () {
 function evalInPanel (code, timeoutMs = 30000) {
   return new Promise((resolve, reject) => {
     const id = ++msgId
-    const timer = setTimeout(() => reject(new Error('evalInPanel timeout (' + timeoutMs + 'ms)')), timeoutMs)
+    const timer = setTimeout(() => { ws.removeEventListener('message', handler); reject(new Error('evalInPanel timeout (' + timeoutMs + 'ms)')) }, timeoutMs)
     const handler = e => {
       const msg = JSON.parse(e.data)
       if (msg.id !== id) return
@@ -89,6 +89,9 @@ function evalInPanel (code, timeoutMs = 30000) {
  * Fire-and-poll pattern for async panel operations.
  * Sets window.__e2e = null, runs the async expression (which should assign to
  * window.__e2e on completion), then polls until __e2e is non-null.
+ *
+ * NOTE: intentionally sequential-only — concurrent fireAndPoll calls would
+ * collide on the shared window.__e2e sentinel.
  */
 async function fireAndPoll (asyncExpr, pollIntervalMs = 2000, timeoutMs = 60000) {
   // Clear sentinel
@@ -238,7 +241,7 @@ function checkExpressionExists (exprResult, label) {
     pass: !!hasExpr,
     detail: hasExpr
       ? `Expression (${exprResult.expression.length} chars): ${exprResult.expression.slice(0, 100)}`
-      : `No expression found: ${JSON.stringify(exprResult).slice(0, 200)}`
+      : `No expression found: ${JSON.stringify(exprResult ?? null).slice(0, 200)}`
   }
 }
 
@@ -761,11 +764,13 @@ async function main () {
     )
     if (!panelCheck) {
       logError('Panel globals not found. Is the AE Motion Agent panel fully loaded?')
+      closeCDP()
       process.exit(1)
     }
     log('Panel globals verified.')
   } catch (e) {
     logError('Panel check failed: ' + e.message)
+    closeCDP()
     process.exit(1)
   }
 
@@ -850,7 +855,7 @@ async function main () {
   } catch (_) {}
 
   // Write JSON report
-  const reportPath = path.join(__dirname, `e2e-report-${Date.now()}.json`)
+  const reportPath = path.join(__dirname, `e2e-report-${new Date().toISOString().replace(/[:.]/g, '-')}.json`)
   const report = {
     timestamp: new Date().toISOString(),
     model: modelOverride || 'default',
