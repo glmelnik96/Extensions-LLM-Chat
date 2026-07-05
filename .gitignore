@@ -26,5 +26,8 @@ npm-debug.log*
 # Node (if a package.json is added later)
 node_modules/
 
+# E2E test reports (generated, timestamped)
+scripts/e2e-report-*.json
+
 # Local project memory/artifacts
 .omc/
