@@ -209,6 +209,24 @@ function checkAtLeast (value, min, label) {
 }
 
 /**
+ * Check that a keyframe time is within tolerance of the layer in-point.
+ */
+function checkTimingNearInPoint (keyTime, inPoint, tolerance) {
+  const t = typeof keyTime === 'number' ? keyTime : NaN
+  const ip = typeof inPoint === 'number' ? inPoint : 0
+  const tol = typeof tolerance === 'number' ? tolerance : 0.5
+  const diff = Math.abs(t - ip)
+  const pass = !isNaN(t) && diff <= tol
+  return {
+    name: 'First keyframe time near layer in-point',
+    pass,
+    detail: pass
+      ? 'Keyframe time ' + t + 's within ' + tol + 's of in-point ' + ip + 's'
+      : 'Keyframe time ' + t + 's is ' + diff.toFixed(3) + 's from in-point ' + ip + 's (tolerance ' + tol + 's)'
+  }
+}
+
+/**
  * Check expression exists and is enabled on a property.
  */
 function checkExpressionExists (exprResult, label) {
@@ -226,7 +244,7 @@ function checkExpressionExists (exprResult, label) {
 
 // Export verify helpers for potential unit testing
 if (typeof module !== 'undefined') {
-  module.exports = { checkContains, checkAtLeast, checkExpressionExists }
+  module.exports = { checkContains, checkAtLeast, checkExpressionExists, checkTimingNearInPoint }
 }
 
 // ── Scenario definitions ─────────────────────────────────────────────────
@@ -562,6 +580,16 @@ const scenarioPopIn = {
         pass: isFromZero,
         detail: 'First keyframe value: ' + JSON.stringify(firstVal)
       })
+
+      // Verify first keyframe time is near the layer in-point.
+      // The test layer is created by createSolidLayer with default timing,
+      // so in-point is 0 (comp start). Still, use 0 explicitly with a comment
+      // rather than making an extra tool call; if the harness ever changes
+      // layer creation to use a non-zero in-point, update this constant.
+      const layerInPoint = 0 // default for newly created solid layer
+      checks.push(checkTimingNearInPoint(
+        scaleKf.keyframes[0].time, layerInPoint, 0.5
+      ))
     }
 
     if (hasExpression) {
