@@ -61,7 +61,7 @@
     var baseUrl = cfg.baseUrl || 'https://foundation-models.api.cloud.ru/v1'
     var url = baseUrl + '/chat/completions'
     var apiKey = getApiKey()
-    var timeoutMs = (cfg.cloudChatTimeoutMs) || 120000
+    var timeoutMs = (options && options.timeoutMs) || (cfg.cloudChatTimeoutMs) || 120000
     var abortHandle = ensureAbortHandleApi(options && options.abortHandle)
 
     var body = {
@@ -185,7 +185,7 @@
     var baseUrl = cfg.baseUrl || 'https://foundation-models.api.cloud.ru/v1'
     var url = baseUrl + '/chat/completions'
     var apiKey = getApiKey()
-    var timeoutMs = (cfg.cloudChatTimeoutMs) || 120000
+    var timeoutMs = (options && options.timeoutMs) || (cfg.cloudChatTimeoutMs) || 120000
     var abortHandle = ensureAbortHandleApi(options && options.abortHandle)
     var onTextChunk = (options && options.onTextChunk) || function () {}
     var onReasoningChunk = (options && options.onReasoningChunk) || function () {}

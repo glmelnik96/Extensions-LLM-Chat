@@ -894,7 +894,8 @@
             var messages = VC.buildMessages(userRequest, agentSummary, dataUrl)
             return window.CHAT_PROVIDER.invoke(VC.VISION_MODEL_ID, messages, {
               max_tokens: 512,
-              temperature: 0.1
+              temperature: 0.1,
+              timeoutMs: 30000
             })
           })
           .then(function (response) {
@@ -1009,6 +1010,8 @@
     } else {
       systemPrompt = window.AGENT_SYSTEM_PROMPT || ''
     }
+    var kbContext = buildKnowledgeBaseContext(correctionText)
+    if (kbContext) systemPrompt += '\n\n## Expression Reference (from documentation)\n\n' + kbContext
 
     showThinking()
 
@@ -1021,6 +1024,7 @@
       temperature: agentCfg.agentTemperature || 0.3,
       streaming: agentCfg.agentStreaming === true,
       thinkingFirstTurn: agentCfg.agentThinkingFirstTurn === true,
+      abortHandle: state.currentAbortHandle,
       onTextChunk: function (chunk) { updateThinkingWithStreamText(chunk) },
       onReasoningChunk: function (chunk) { updateThinkingReasoning(chunk) },
       onToolCall: function (tc) { updateThinkingWithToolCall(tc) },

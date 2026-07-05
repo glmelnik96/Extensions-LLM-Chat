@@ -122,6 +122,27 @@ test('visionCheck: parseVerdict — malformed JSON fails open', () => {
 
 // ── buildCorrectionPrompt ─────────────────────────────────────────────────
 
+test('visionCheck: parseVerdict — ok:false with empty issues array fails open', () => {
+  const v = vc.parseVerdict('{"ok":false,"issues":[]}')
+  assert.strictEqual(v.ok, true, 'should flip to ok:true when no actionable issues')
+  assert.strictEqual(v.issues.length, 0)
+})
+
+test('visionCheck: parseVerdict — ok:false with only-null/coerced issues keeps ok:false when issues remain', () => {
+  const v = vc.parseVerdict('{"ok":false,"issues":[null, 42]}')
+  // null is filtered; 42 coerced to '42' — one actionable issue remains
+  assert.strictEqual(v.ok, false)
+  assert.strictEqual(v.issues.length, 1)
+  assert.strictEqual(v.issues[0], '42')
+})
+
+test('visionCheck: parseVerdict — ok:false with all-null issues fails open', () => {
+  const v = vc.parseVerdict('{"ok":false,"issues":[null, null]}')
+  // all items filtered → zero issues → fail open
+  assert.strictEqual(v.ok, true, 'should flip to ok:true when all issues filtered out')
+  assert.strictEqual(v.issues.length, 0)
+})
+
 test('visionCheck: buildCorrectionPrompt contains issues', () => {
   const prompt = vc.buildCorrectionPrompt(['text is cut off', 'wrong background color'])
   assert.ok(prompt.includes('text is cut off'))
