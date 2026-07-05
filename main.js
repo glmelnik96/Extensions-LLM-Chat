@@ -810,8 +810,9 @@
         var img = new Image()
         img.onload = function () {
           try {
+            if (!img.width || !img.height) { reject(new Error('Frame image has zero dimensions')); return }
             var TARGET_W = 480
-            var scale = TARGET_W / img.width
+            var scale = Math.min(1, TARGET_W / img.width)
             var w = Math.round(img.width * scale)
             var h = Math.round(img.height * scale)
             var canvas = document.createElement('canvas')
@@ -820,6 +821,8 @@
             var ctx = canvas.getContext('2d')
             ctx.drawImage(img, 0, 0, w, h)
             var dataUrl = canvas.toDataURL('image/jpeg', 0.7)
+            canvas.width = 0
+            canvas.height = 0
             resolve(dataUrl)
           } catch (e) { reject(e) }
         }
@@ -895,13 +898,14 @@
             return window.CHAT_PROVIDER.invoke(VC.VISION_MODEL_ID, messages, {
               max_tokens: 512,
               temperature: 0.1,
-              timeoutMs: 30000
+              timeoutMs: 30000,
+              abortHandle: state.currentAbortHandle
             })
           })
           .then(function (response) {
             var content = ''
             if (response && response.choices && response.choices[0]) {
-              content = response.choices[0].message && response.choices[0].message.content || ''
+              content = (response.choices[0].message && response.choices[0].message.content) || ''
             }
             // Account vision tokens in the session counter.
             if (response && response.usage && response.usage.total_tokens > 0) {
