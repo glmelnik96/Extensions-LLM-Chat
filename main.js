@@ -33,12 +33,15 @@
   //  - GLM-4.7        : 4/4 but thrashes on the hardest task (30+ calls,
   //                     up to ~377k tokens); GLM family respects
   //                     enable_thinking:false, so thinking is forced off.
+  //  - Kimi-K2.6      : 262K context, separate `reasoning` field (same as
+  //                     GLM); streaming + tool_calls both work correctly.
   // `thinking` controls the chat_template_kwargs.enable_thinking flag the loop
   // sends; only the GLM family honors it (others ignore the kwarg harmlessly).
   var AVAILABLE_MODELS = [
     { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b', family: 'gpt-oss' },
     { id: 'MiniMaxAI/MiniMax-M2.5', label: 'MiniMax-M2.5', family: 'minimax' },
-    { id: 'zai-org/GLM-4.7', label: 'GLM-4.7', family: 'glm' }
+    { id: 'zai-org/GLM-4.7', label: 'GLM-4.7', family: 'glm' },
+    { id: 'moonshotai/Kimi-K2.6', label: 'Kimi-K2.6', family: 'kimi' }
   ]
   // Default = fastest clean model from the benchmark.
   var DEFAULT_MODEL = AVAILABLE_MODELS[0].id

@@ -13,9 +13,9 @@
        *  spend time "thinking" before the first token, so this is generous. */
       cloudChatTimeoutMs: 300000,
       /** Default model when none is selected. The panel exposes a selector
-       *  (gpt-oss-120b / MiniMax-M2.5 / GLM-4.7 — see AVAILABLE_MODELS in
-       *  main.js); gpt-oss-120b is the fastest clean tool-caller from the
-       *  2026-06-18 benchmark, so it is the default. */
+       *  (gpt-oss-120b / MiniMax-M2.5 / GLM-4.7 / Kimi-K2.6 — see
+       *  AVAILABLE_MODELS in main.js); gpt-oss-120b is the fastest clean
+       *  tool-caller from the 2026-06-18 benchmark, so it is the default. */
       defaultModel: 'openai/gpt-oss-120b',
 
       /** ── Agent mode settings ─────────────────────────────────────────── */
