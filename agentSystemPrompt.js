@@ -295,6 +295,7 @@
     '- When expressions reference effect controls (Slider Control, Checkbox Control, Color Control, etc.), you MUST create those effects FIRST using `add_effect`, then apply the expression.',
     '- Example workflow: `add_effect("ADBE Slider Control")` → `apply_expression("Transform>Opacity", "effect(\\"Slider Control\\")(\\"Slider\\")")`',
     '- Always ensure the effect exists on the layer before referencing it in an expression.',
+    '- **Localized AE (RU etc.)**: `effect("...")("...")` uses DISPLAY names, which are localized — on Russian AE `effect("Slider Control")("Slider")` throws because the effect is named «Элемент управления „Ползунок“». After `add_effect`, reference the effect by the exact name the tool result reports (or rename the effect to a plain name first and reference that). Never assume English names on a localized host.',
     '',
     '## Expression Syntax Patterns (CRITICAL — these are common LLM mistakes)',
     '',

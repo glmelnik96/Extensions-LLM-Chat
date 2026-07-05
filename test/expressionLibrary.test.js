@@ -95,6 +95,42 @@ test('exprlib: 2026-07 additions are findable via EN and RU keywords', () => {
   }
 })
 
+test('exprlib: 2026-07 round-2 additions are findable via EN and RU keywords', () => {
+  const cases = [
+    ['checkbox toggle', 'checkbox-toggle'],
+    ['чекбокс', 'checkbox-toggle'],
+    ['dropdown menu', 'dropdown-switch'],
+    ['выпадающий вариант', 'dropdown-switch'],
+    ['box alignment left', 'auto-box-anchored'],
+    ['camera shake', 'camera-shake'],
+    ['землетрясение', 'camera-shake'],
+    ['follow motion path', 'attach-to-path'],
+    ['траектория', 'attach-to-path'],
+    ['trim paths draw on', 'trim-paths-reveal'],
+    ['прорисовка', 'trim-paths-reveal'],
+    ['freeze frame', 'freeze-frame'],
+    ['стоп-кадр', 'freeze-frame'],
+    ['зациклить видео', 'time-remap-loop'],
+    ['timecode', 'timecode'],
+    ['таймкод', 'timecode'],
+    ['depth of field focus', 'autofocus-dof'],
+    ['автофокус', 'autofocus-dof'],
+    ['pin corner responsive', 'pin-to-edge'],
+    ['ужать текст', 'auto-fit-text'],
+    ['constant stroke width', 'keep-stroke-width'],
+    ['толщина', 'keep-stroke-width'],
+    ['heartbeat bpm', 'heartbeat-pulse'],
+    ['пульс сердце', 'heartbeat-pulse'],
+    ['word by word', 'word-by-word-reveal'],
+    ['субтитры', 'word-by-word-reveal']
+  ]
+  for (const [query, id] of cases) {
+    const r = lib.search(query)
+    assert.strictEqual(r.ok, true, query)
+    assert.ok(r.snippets.some(s => s.id === id), `"${query}" should find ${id}, got: ` + r.snippets.map(s => s.id).join(', '))
+  }
+})
+
 test('exprlib: "bounce" still ranks inertial-bounce first after additions', () => {
   const r = lib.search('bounce')
   assert.strictEqual(r.snippets[0].id, 'inertial-bounce')

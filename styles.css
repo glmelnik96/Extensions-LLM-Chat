@@ -600,6 +600,11 @@ body {
   flex-wrap: wrap;
 }
 
+/* Second row (task-level actions) sits tight under the first. */
+.quick-actions + .quick-actions {
+  padding-top: 0;
+}
+
 .quick-action-btn {
   background: transparent;
   border: 1px solid var(--border);
