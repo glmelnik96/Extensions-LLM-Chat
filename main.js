@@ -25,6 +25,7 @@
 
   // ── Constants ──────────────────────────────────────────────────────────
   var STORAGE_KEY = 'ae-motion-agent-state'
+  var VISION_CHECK_KEY = 'ae-motion-agent-vision-check'
 
   // User-selectable models (panel selector). Each entry tuned from the live
   // 8-model × 4-task benchmark (2026-06-18, real AE, Russian prompts):
@@ -85,6 +86,7 @@
     els.statusText = document.getElementById('status-text')
     els.modelStatus = document.getElementById('model-status')
     els.modelSelector = document.getElementById('model-selector')
+    els.visionCheckToggle = document.getElementById('vision-check-toggle')
   }
 
   // Resolve a persisted/selected model id to one of the AVAILABLE_MODELS.
@@ -774,6 +776,305 @@
     })
   }
 
+  // ── Vision check helpers ────────────────────────────────────────────────
+  function isVisionCheckEnabled () {
+    try {
+      var stored = localStorage.getItem(VISION_CHECK_KEY)
+      if (stored === 'false') return false
+    } catch (_) {}
+    return true // default ON
+  }
+
+  function initVisionCheckToggle () {
+    if (!els.visionCheckToggle) return
+    els.visionCheckToggle.checked = isVisionCheckEnabled()
+    els.visionCheckToggle.addEventListener('change', function () {
+      try {
+        localStorage.setItem(VISION_CHECK_KEY, String(els.visionCheckToggle.checked))
+      } catch (_) {}
+    })
+  }
+
+  /**
+   * Downscale a PNG file to a ~480px-wide JPEG data URL via canvas.
+   * Reads the file from disk, draws onto a canvas, returns a data URL.
+   * @param {string} filePath - absolute path to the PNG on disk
+   * @returns {Promise<string>} data:image/jpeg;base64,... string
+   */
+  function downscaleFrameToDataUrl (filePath) {
+    return new Promise(function (resolve, reject) {
+      try {
+        var fs = require('fs')
+        var raw = fs.readFileSync(filePath)
+        var base64 = raw.toString('base64')
+        var img = new Image()
+        img.onload = function () {
+          try {
+            var TARGET_W = 480
+            var scale = TARGET_W / img.width
+            var w = Math.round(img.width * scale)
+            var h = Math.round(img.height * scale)
+            var canvas = document.createElement('canvas')
+            canvas.width = w
+            canvas.height = h
+            var ctx = canvas.getContext('2d')
+            ctx.drawImage(img, 0, 0, w, h)
+            var dataUrl = canvas.toDataURL('image/jpeg', 0.7)
+            resolve(dataUrl)
+          } catch (e) { reject(e) }
+        }
+        img.onerror = function () { reject(new Error('Failed to decode frame image')) }
+        img.src = 'data:image/png;base64,' + base64
+      } catch (e) { reject(e) }
+    })
+  }
+
+  /**
+   * Poll until a file exists and has size > 0 on disk.
+   * capture_comp_frame resolves before the PNG finishes writing.
+   * @param {string} filePath
+   * @param {number} intervalMs - polling interval (default 500)
+   * @param {number} timeoutMs  - total timeout (default 10000)
+   * @returns {Promise<void>}
+   */
+  function pollFileReady (filePath, intervalMs, timeoutMs) {
+    intervalMs = intervalMs || 500
+    timeoutMs = timeoutMs || 10000
+    var fs = require('fs')
+    return new Promise(function (resolve, reject) {
+      var elapsed = 0
+      var timer = setInterval(function () {
+        elapsed += intervalMs
+        try {
+          var stat = fs.statSync(filePath)
+          if (stat.size > 0) {
+            clearInterval(timer)
+            resolve()
+            return
+          }
+        } catch (_) {}
+        if (elapsed >= timeoutMs) {
+          clearInterval(timer)
+          reject(new Error('Frame file not ready after ' + timeoutMs + 'ms'))
+        }
+      }, intervalMs)
+    })
+  }
+
+  /**
+   * Run the vision check flow after a successful mutating agent run.
+   * Captures the comp frame, downscales, sends to M3, returns verdict.
+   * On any error, fails open (returns ok:true) and logs to console.
+   *
+   * @param {string} userRequest   - the original user message text
+   * @param {string} agentSummary  - the agent's text response
+   * @param {Object} session       - the current session object
+   * @param {boolean} isCorrectionRound - true if this is already the correction pass
+   * @returns {Promise<{ok: boolean, issues: string[], correctionRan: boolean}>}
+   */
+  function runVisionCheck (userRequest, agentSummary, session, isCorrectionRound) {
+    var VC = window.PURE_VISION_CHECK
+    if (!VC) {
+      console.warn('[vision] PURE_VISION_CHECK not loaded')
+      return Promise.resolve({ ok: true, issues: [], correctionRan: false })
+    }
+
+    setStatus('Visual check...')
+    var failOpen = { ok: true, issues: [], correctionRan: false }
+
+    return window.HOST_BRIDGE.executeToolCall('capture_comp_frame', {})
+      .then(function (captureResult) {
+        if (!captureResult || !captureResult.ok || !captureResult.path) {
+          console.warn('[vision] capture failed:', captureResult)
+          return failOpen
+        }
+        return pollFileReady(captureResult.path)
+          .then(function () { return downscaleFrameToDataUrl(captureResult.path) })
+          .then(function (dataUrl) {
+            var messages = VC.buildMessages(userRequest, agentSummary, dataUrl)
+            return window.CHAT_PROVIDER.invoke(VC.VISION_MODEL_ID, messages, {
+              max_tokens: 512,
+              temperature: 0.1
+            })
+          })
+          .then(function (response) {
+            var content = ''
+            if (response && response.choices && response.choices[0]) {
+              content = response.choices[0].message && response.choices[0].message.content || ''
+            }
+            // Account vision tokens in the session counter.
+            if (response && response.usage && response.usage.total_tokens > 0) {
+              session.totalTokens = (session.totalTokens || 0) + response.usage.total_tokens
+            }
+            var verdict = VC.parseVerdict(content)
+            if (verdict.ok) {
+              setStatus('Visual check: OK')
+              session.messages.push({ role: 'system', text: 'Visual check: OK' })
+              renderTranscript()
+              persistState()
+              return { ok: true, issues: [], correctionRan: false }
+            }
+
+            // Verdict has issues
+            var issueNote = 'Visual check found issues:\n' + verdict.issues.map(function (s) { return '- ' + s }).join('\n')
+            session.messages.push({ role: 'system', text: issueNote })
+            renderTranscript()
+            persistState()
+
+            if (isCorrectionRound) {
+              // Already ran one correction — hard stop, no second correction.
+              setStatus('Visual check: issues remain after correction')
+              return { ok: false, issues: verdict.issues, correctionRan: false }
+            }
+
+            // Run ONE correction round.
+            setStatus('Fixing visual issues...')
+            var correctionText = VC.buildCorrectionPrompt(verdict.issues)
+            return runCorrectionLoop(correctionText, session, userRequest)
+              .then(function (corrResult) {
+                return { ok: false, issues: verdict.issues, correctionRan: true, correctionResult: corrResult }
+              })
+          })
+      })
+      .catch(function (err) {
+        console.warn('[vision] error (failing open):', err)
+        setStatus('Visual check: skipped (error)')
+        return failOpen
+      })
+  }
+
+  /**
+   * Run a single correction agent-loop pass. The correction prompt becomes
+   * a new user message in the conversation, and the agent fixes the issues.
+   * After the correction loop, run vision check again but with isCorrectionRound=true
+   * so it NEVER triggers a second correction (hard bound).
+   *
+   * Undo semantics: correction-round mutations are ADDED to lastMutatingToolCount
+   * so a single Undo reverts both the original run and the correction.
+   */
+  function runCorrectionLoop (correctionText, session, originalUserRequest) {
+    // Push correction as a user message in the conversation.
+    session.messages.push({ role: 'user', text: correctionText })
+    session.updatedAt = Date.now()
+    renderTranscript()
+    persistState()
+
+    // Build API messages the same way handleSend does.
+    var apiMessages = []
+    for (var i = 0; i < session.messages.length; i++) {
+      var m = session.messages[i]
+      if (m.role === 'user') {
+        apiMessages.push({ role: 'user', content: m.text })
+      } else if (m.role === 'assistant') {
+        if (m.toolCalls && m.toolCalls.length > 0) {
+          var toolCallDefs = []
+          for (var tc = 0; tc < m.toolCalls.length; tc++) {
+            var call = m.toolCalls[tc]
+            toolCallDefs.push({
+              id: call.id,
+              type: 'function',
+              function: {
+                name: call.name,
+                arguments: JSON.stringify(call.args || {})
+              }
+            })
+          }
+          var assistantApiMsg = { role: 'assistant', tool_calls: toolCallDefs }
+          if (m.text) assistantApiMsg.content = m.text
+          apiMessages.push(assistantApiMsg)
+
+          for (var tr = 0; tr < m.toolCalls.length; tr++) {
+            var tcResult = m.toolCalls[tr]
+            apiMessages.push({
+              role: 'tool',
+              tool_call_id: tcResult.id,
+              content: JSON.stringify(tcResult.result || { ok: true })
+            })
+          }
+        } else if (m.text) {
+          apiMessages.push({ role: 'assistant', content: m.text })
+        }
+      }
+    }
+
+    var agentCfg = window.EXTENSIONS_LLM_CHAT_CONFIG || {}
+    var maxConversationTokens = agentCfg.maxConversationTokens || 120000
+    var maxSteps = getAgentMaxSteps(agentCfg)
+    apiMessages = pruneConversation(apiMessages, maxConversationTokens)
+
+    var systemPrompt = ''
+    if (window.AGENT_SYSTEM_PROMPT_BUILDER && typeof window.AGENT_SYSTEM_PROMPT_BUILDER.build === 'function') {
+      var built = window.AGENT_SYSTEM_PROMPT_BUILDER.build(correctionText)
+      systemPrompt = built && built.prompt ? built.prompt : (window.AGENT_SYSTEM_PROMPT || '')
+    } else {
+      systemPrompt = window.AGENT_SYSTEM_PROMPT || ''
+    }
+
+    showThinking()
+
+    return window.AGENT_TOOL_LOOP.runAgentLoop({
+      modelId: session.model,
+      systemPrompt: systemPrompt,
+      messages: apiMessages,
+      tools: (window.AGENT_TOOL_REGISTRY && window.AGENT_TOOL_REGISTRY.tools) || [],
+      maxSteps: maxSteps,
+      temperature: agentCfg.agentTemperature || 0.3,
+      streaming: agentCfg.agentStreaming === true,
+      thinkingFirstTurn: agentCfg.agentThinkingFirstTurn === true,
+      onTextChunk: function (chunk) { updateThinkingWithStreamText(chunk) },
+      onReasoningChunk: function (chunk) { updateThinkingReasoning(chunk) },
+      onToolCall: function (tc) { updateThinkingWithToolCall(tc) },
+      onStepStart: function (stepIdx) {
+        _setThinkingLabel('Correction · step ' + (stepIdx + 1) + '/' + maxSteps)
+      },
+      onStepComplete: function (stepIdx, results) {
+        setStatus('Correction step ' + (stepIdx + 1))
+      }
+    }).then(function (result) {
+      removeThinking()
+
+      var READ_ONLY_TOOLS = (window.AGENT_TOOL_LOOP && window.AGENT_TOOL_LOOP.READ_ONLY_TOOLS) || {}
+      var corrMutating = 0
+      var allCalls = result.toolCallLog || []
+      for (var ci = 0; ci < allCalls.length; ci++) {
+        if (!READ_ONLY_TOOLS[allCalls[ci].name] && allCalls[ci].status === 'ok') {
+          corrMutating++
+        }
+      }
+      // ADD correction mutations to existing count (single Undo scope).
+      state.lastMutatingToolCount += corrMutating
+      updateUndoButton()
+
+      var assistantMsg = {
+        role: 'assistant',
+        text: result.content || '',
+        toolCalls: serializeToolCalls(allCalls)
+      }
+      session.messages.push(assistantMsg)
+      session.updatedAt = Date.now()
+
+      if (result.usage && result.usage.total_tokens > 0) {
+        session.totalTokens = (session.totalTokens || 0) + result.usage.total_tokens
+      }
+
+      renderTranscript()
+      persistState()
+
+      // Run vision check AFTER correction, but with isCorrectionRound=true
+      // so it can never trigger yet another correction (hard bound: max 1).
+      var corrAgentSummary = result.content || ''
+      return runVisionCheck(originalUserRequest, corrAgentSummary, session, true)
+    }).catch(function (err) {
+      removeThinking()
+      var errMsg = (err && err.message) || String(err)
+      session.messages.push({ role: 'system', text: 'Correction error: ' + errMsg })
+      renderTranscript()
+      persistState()
+      console.warn('[vision] correction loop error:', err)
+      return { ok: false, correctionError: errMsg }
+    })
+  }
+
   // ── Handle Send ────────────────────────────────────────────────────────
   function handleSend () {
     if (state.isRequestInFlight) return
@@ -946,6 +1247,17 @@
       setStatus('Ready' + usageNote)
       renderTranscript()
       persistState()
+
+      // ── Vision check (post-agent) ──────────────────────────────────
+      // Trigger only when: toggle enabled, run succeeded, mutating calls > 0.
+      if (isVisionCheckEnabled() && mutatingCount > 0 && window.PURE_VISION_CHECK && window.HOST_BRIDGE) {
+        var agentSummary = result.content || ''
+        return runVisionCheck(text, agentSummary, session, false).then(function () {
+          // Update status with final token count after vision + possible correction.
+          var finalUsage = ' | tokens session: ' + (session.totalTokens || 0)
+          setStatus('Ready' + finalUsage)
+        })
+      }
     }).catch(function (err) {
       removeThinking()
       // Preserve already-executed tool calls (P0-3): the layers/keyframes may
@@ -1555,6 +1867,7 @@
     renderModelSelector()
 
     bindEvents()
+    initVisionCheckToggle()
     setStatus('Ready')
     updateUndoButton()
     refreshActiveCompNote(true)

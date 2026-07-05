@@ -20,6 +20,10 @@
         <div id="status-line" class="status-line">
           <span id="status-text">Ready</span>
           <span id="model-status" class="model-status model-status-unknown">model: unknown</span>
+          <label class="vision-toggle" title="Visual check after changes (~5s, MiniMax-M3)">
+            <input type="checkbox" id="vision-check-toggle" checked />
+            <span class="vision-toggle-label">Visual check</span>
+          </label>
         </div>
 
         <!-- Quick actions: two demand-ranked rows (2026-07 research).
@@ -86,6 +90,7 @@
     <script src="./lib/pure/prune.js"></script>
     <script src="./lib/pure/expressionLibrary.js"></script>
     <script src="./lib/pure/theme.js"></script>
+    <script src="./lib/pure/visionCheck.js"></script>
 
     <!-- Agent modules -->
     <script src="./toolRegistry.js"></script>
