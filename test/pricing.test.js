@@ -171,3 +171,44 @@ test('pricing: formatRub — negative/NaN coerced to 0', () => {
   assert.strictEqual(P.formatRub(NaN), '0 ₽')
   assert.strictEqual(P.formatRub(undefined), '0 ₽')
 })
+
+// ── Issue 1: negative token clamp ────────────────────────────────────────────
+
+test('pricing: costFor — negative promptTokens clamped to 0 (no negative cost)', () => {
+  // Negative tokens from a malformed API response must not reduce accumulated cost.
+  const r = P.costFor('openai/gpt-oss-120b', -5000, 0, P.DEFAULT_PRICING)
+  assert.strictEqual(r.rub, 0)
+  assert.strictEqual(r.known, true)
+})
+
+test('pricing: costFor — Infinity tokens clamped to 0', () => {
+  const r = P.costFor('openai/gpt-oss-120b', Infinity, 0, P.DEFAULT_PRICING)
+  assert.strictEqual(r.rub, 0)
+  assert.strictEqual(r.known, true)
+})
+
+test('pricing: mergePricing + costFor — negative rate override floors to 0', () => {
+  // A negative config rate must not produce negative rub.
+  const badTable = P.mergePricing(P.DEFAULT_PRICING, {
+    'openai/gpt-oss-120b': { input: -100, output: -200 }
+  })
+  const r = P.costFor('openai/gpt-oss-120b', 1e6, 1e6, badTable)
+  assert.strictEqual(r.rub, 0)
+  assert.strictEqual(r.known, true)
+})
+
+// ── Issue 2: tiny-but-nonzero formatRub ──────────────────────────────────────
+
+test('pricing: formatRub — tiny non-zero shows < 0.0001 ₽', () => {
+  assert.strictEqual(P.formatRub(0.00001), '< 0.0001 ₽')
+  assert.strictEqual(P.formatRub(0.00009999), '< 0.0001 ₽')
+})
+
+test('pricing: formatRub — 0 and negatives are still "0 ₽" not the tiny sentinel', () => {
+  assert.strictEqual(P.formatRub(0), '0 ₽')
+  assert.strictEqual(P.formatRub(-5), '0 ₽')
+})
+
+test('pricing: formatRub — 0.0003 shows real value (>= 0.0001 threshold)', () => {
+  assert.strictEqual(P.formatRub(0.0003), '0.0003 ₽')
+})
