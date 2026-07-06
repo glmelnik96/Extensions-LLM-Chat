@@ -60,6 +60,18 @@
     return m ? m.label : (id || '').split('/').pop()
   }
 
+  // Compute the ruble cost of a single usage event, priced by the model that
+  // produced it (chat model vs. vision model bill very differently). Fail-safe:
+  // returns {rub:0, known:false} if the pricing module is unavailable.
+  function accrueCost (modelId, usage) {
+    if (!window.PURE_PRICING || !usage) return { rub: 0, known: false }
+    var cfg = window.EXTENSIONS_LLM_CHAT_CONFIG || {}
+    var table = window.PURE_PRICING.mergePricing(
+      window.PURE_PRICING.DEFAULT_PRICING, cfg.modelPricing)
+    return window.PURE_PRICING.costFor(
+      modelId, usage.prompt_tokens, usage.completion_tokens, table)
+  }
+
   // ── State ──────────────────────────────────────────────────────────────
   var state = {
     session: null,           // single session object
@@ -122,6 +134,9 @@
         updatedAt: state.session.updatedAt,
         model: state.session.model,
         totalTokens: state.session.totalTokens || 0,
+        promptTokens: state.session.promptTokens || 0,
+        completionTokens: state.session.completionTokens || 0,
+        costRub: state.session.costRub || 0,
         messages: state.session.messages
       } : null
     }
@@ -176,6 +191,9 @@
       updatedAt: Date.now(),
       model: DEFAULT_MODEL,
       totalTokens: 0,
+      promptTokens: 0,
+      completionTokens: 0,
+      costRub: 0,
       messages: []
     }
     persistState()
@@ -907,9 +925,13 @@
             if (response && response.choices && response.choices[0]) {
               content = (response.choices[0].message && response.choices[0].message.content) || ''
             }
-            // Account vision tokens in the session counter.
+            // Account vision tokens in the session counter. Price with the
+            // vision model's own rates (M3) — NOT the chat model's.
             if (response && response.usage && response.usage.total_tokens > 0) {
               session.totalTokens = (session.totalTokens || 0) + response.usage.total_tokens
+              session.promptTokens = (session.promptTokens || 0) + (response.usage.prompt_tokens || 0)
+              session.completionTokens = (session.completionTokens || 0) + (response.usage.completion_tokens || 0)
+              session.costRub = (session.costRub || 0) + accrueCost(VC.VISION_MODEL_ID, response.usage).rub
             }
             var verdict = VC.parseVerdict(content)
             if (verdict.ok) {
@@ -1063,6 +1085,9 @@
 
       if (result.usage && result.usage.total_tokens > 0) {
         session.totalTokens = (session.totalTokens || 0) + result.usage.total_tokens
+        session.promptTokens = (session.promptTokens || 0) + (result.usage.prompt_tokens || 0)
+        session.completionTokens = (session.completionTokens || 0) + (result.usage.completion_tokens || 0)
+        session.costRub = (session.costRub || 0) + accrueCost(session.model, result.usage).rub
       }
 
       renderTranscript()
@@ -1249,8 +1274,19 @@
       var usageNote = ''
       if (result.usage && result.usage.total_tokens > 0) {
         session.totalTokens = (session.totalTokens || 0) + result.usage.total_tokens
-        usageNote = ' | tokens: ' + result.usage.total_tokens +
-          ' (session ' + session.totalTokens + ')'
+        session.promptTokens = (session.promptTokens || 0) + (result.usage.prompt_tokens || 0)
+        session.completionTokens = (session.completionTokens || 0) + (result.usage.completion_tokens || 0)
+        var reqCost = accrueCost(session.model, result.usage)
+        session.costRub = (session.costRub || 0) + reqCost.rub
+        usageNote = ' | tokens: ' + result.usage.total_tokens
+        if (reqCost.rub > 0) {
+          usageNote += ' · ≈ ' + window.PURE_PRICING.formatRub(reqCost.rub)
+        }
+        usageNote += ' (session ' + session.totalTokens
+        if (session.costRub > 0 && window.PURE_PRICING) {
+          usageNote += ' · ≈ ' + window.PURE_PRICING.formatRub(session.costRub)
+        }
+        usageNote += ')'
       }
       setStatus('Ready' + usageNote)
       renderTranscript()
@@ -1263,6 +1299,9 @@
         return runVisionCheck(text, agentSummary, session, false).then(function () {
           // Update status with final token count after vision + possible correction.
           var finalUsage = ' | tokens session: ' + (session.totalTokens || 0)
+          if (session.costRub > 0 && window.PURE_PRICING) {
+            finalUsage += ' · ≈ ' + window.PURE_PRICING.formatRub(session.costRub)
+          }
           setStatus('Ready' + finalUsage)
         })
       }

@@ -44,6 +44,21 @@
        *  faster end-to-end (94s vs 18.8min) with equal-quality output on the
        *  reference task; GLM has no thinking budget, only on/off. */
       agentThinkingFirstTurn: false,
+
+      /** ── Token→ruble pricing (Cloud.ru tariffs) ──────────────────────────
+       *  ₽ per 1,000,000 tokens (Cloud.ru tariffs, update as prices change).
+       *  Cost is priced per usage event with the split input (prompt) / output
+       *  (completion) tokens and the model that produced them — the vision
+       *  model (MiniMax-M3) and the chat model bill at very different rates.
+       *  Any subset can be overridden; unspecified models/fields fall back to
+       *  the built-in DEFAULT_PRICING in lib/pure/pricing.js. */
+      modelPricing: {
+        'openai/gpt-oss-120b': { input: 15.86, output: 61 },
+        'MiniMaxAI/MiniMax-M2.5': { input: 353.8, output: 475.8 },
+        'zai-org/GLM-4.7': { input: 549, output: 793 },
+        'moonshotai/Kimi-K2.6': { input: 175.68, output: 725.9 },
+        'MiniMaxAI/MiniMax-M3': { input: 240.22, output: 1008.85 },
+      },
     }
   }
 })()
