@@ -327,6 +327,43 @@ body {
   color: var(--text-dim);
 }
 
+.context-meter {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  cursor: pointer;
+  user-select: none;
+}
+
+.context-meter-bar {
+  display: inline-block;
+  width: 42px;
+  height: 6px;
+  border-radius: 3px;
+  background-color: var(--surface);
+  overflow: hidden;
+}
+
+.context-meter-fill {
+  display: block;
+  width: 0%;
+  height: 100%;
+  border-radius: 3px;
+  background-color: var(--ok);
+  transition: width 0.25s ease;
+}
+
+.context-meter-text {
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
+.context-meter-mid .context-meter-fill { background-color: #d0a000; }
+.context-meter-high .context-meter-fill { background-color: var(--err); }
+.context-meter-high .context-meter-text { color: var(--err); }
+.context-meter:hover .context-meter-bar { outline: 1px solid var(--text-dim); }
+
 .model-badge {
   font-size: 10px;
   color: var(--text-dim);

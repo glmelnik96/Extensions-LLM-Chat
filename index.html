@@ -20,6 +20,10 @@
         <div id="status-line" class="status-line">
           <span id="status-text">Ready</span>
           <span id="model-status" class="model-status model-status-unknown">model: unknown</span>
+          <span id="context-meter" class="context-meter" title="Context sent to the model. As it fills, the oldest history is trimmed from what the model sees — your visible transcript is never touched. Click to compact now.">
+            <span class="context-meter-bar"><span id="context-meter-fill" class="context-meter-fill"></span></span>
+            <span id="context-meter-text" class="context-meter-text">ctx 0%</span>
+          </span>
           <label class="vision-toggle" title="Visual check after changes (~5s, MiniMax-M3)">
             <input type="checkbox" id="vision-check-toggle" checked />
             <span class="vision-toggle-label">Visual check</span>

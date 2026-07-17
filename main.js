@@ -99,6 +99,9 @@
     els.modelStatus = document.getElementById('model-status')
     els.modelSelector = document.getElementById('model-selector')
     els.visionCheckToggle = document.getElementById('vision-check-toggle')
+    els.contextMeter = document.getElementById('context-meter')
+    els.contextMeterFill = document.getElementById('context-meter-fill')
+    els.contextMeterText = document.getElementById('context-meter-text')
   }
 
   // Resolve a persisted/selected model id to one of the AVAILABLE_MODELS.
@@ -276,6 +279,7 @@
   // ── Render: chat transcript ────────────────────────────────────────────
   function renderTranscript () {
     if (!els.chatTranscript) return
+    updateContextMeter()
     els.chatTranscript.innerHTML = ''
     var session = state.session
     if (!session || session.messages.length === 0) {
@@ -584,6 +588,59 @@
     els.modelStatus.textContent = label
     els.modelStatus.className = 'model-status model-status-' + status
     state.lastModelStatus = { status: status, label: label }
+  }
+
+  // ── Context meter ───────────────────────────────────────────────────────
+  // Shows how full the model's INPUT context is relative to the pruning
+  // budget (maxConversationTokens). This is the copy sent to the API, NOT the
+  // visible transcript — pruning trims the oldest history from what the model
+  // sees while session.messages stays intact on screen. Making this visible is
+  // the fix for "growing context silently makes edits expensive/error-prone":
+  // the user can watch it fill and compact on demand before it costs them.
+  function estimateSessionContextTokens () {
+    if (!state.session || !window.PURE_PRUNE) return 0
+    var msgs = state.session.messages || []
+    var est = []
+    for (var i = 0; i < msgs.length; i++) {
+      var m = msgs[i]
+      if (m.role === 'user' || m.role === 'system') {
+        est.push({ role: m.role, content: m.text || '' })
+      } else if (m.role === 'assistant') {
+        if (m.toolCalls && m.toolCalls.length > 0) {
+          var tcs = []
+          for (var t = 0; t < m.toolCalls.length; t++) {
+            tcs.push({ function: { name: m.toolCalls[t].name || '', arguments: JSON.stringify(m.toolCalls[t].args || {}) } })
+          }
+          est.push({ role: 'assistant', content: m.text || '', tool_calls: tcs })
+          for (var r = 0; r < m.toolCalls.length; r++) {
+            est.push({ role: 'tool', content: JSON.stringify(m.toolCalls[r].result || { ok: true }) })
+          }
+        } else if (m.text) {
+          est.push({ role: 'assistant', content: m.text })
+        }
+      }
+    }
+    return window.PURE_PRUNE.estimateTokens(est)
+  }
+
+  function getMaxConversationTokens () {
+    var cfg = window.EXTENSIONS_LLM_CHAT_CONFIG || {}
+    return cfg.maxConversationTokens || 120000
+  }
+
+  function updateContextMeter () {
+    if (!els.contextMeter) return
+    var used = estimateSessionContextTokens()
+    var budget = getMaxConversationTokens()
+    var pct = budget > 0 ? Math.round((used / budget) * 100) : 0
+    var fillPct = Math.max(0, Math.min(100, pct))
+    if (els.contextMeterFill) els.contextMeterFill.style.width = fillPct + '%'
+    var level = pct >= 90 ? 'high' : (pct >= 60 ? 'mid' : 'low')
+    els.contextMeter.className = 'context-meter context-meter-' + level
+    if (els.contextMeterText) els.contextMeterText.textContent = 'ctx ' + pct + '%'
+    els.contextMeter.setAttribute('title',
+      'Model context: ~' + used.toLocaleString() + ' / ' + budget.toLocaleString() + ' tokens (' + pct + '%). ' +
+      'Above 100% the oldest history is trimmed from what the model sees — your visible transcript is never touched. Click to compact now.')
   }
 
   // ── Model selector ───────────────────────────────────────────────────────
@@ -1389,6 +1446,44 @@
     renderTranscript()
   }
 
+  // Manually shrink the model's INPUT context without deleting any message the
+  // user can see. We truncate the RESULT payloads of old tool calls (outside the
+  // protected recent tail) down to a short stub. The tool-call cards stay in the
+  // transcript so the user still sees WHAT ran — only the verbose result body the
+  // model re-reads every turn is collapsed. This is the on-demand version of the
+  // automatic pruning, giving the user direct control over cost.
+  function handleCompactContext () {
+    if (!state.session || state.isRequestInFlight) return
+    var msgs = state.session.messages || []
+    var PROTECT = (window.PURE_PRUNE && window.PURE_PRUNE.PROTECT_RECENT) || 20
+    var CAP = (window.PURE_PRUNE && window.PURE_PRUNE.TOOL_RESULT_CAP) || 400
+    var before = estimateSessionContextTokens()
+    var protectFrom = Math.max(0, msgs.length - PROTECT)
+    var trimmed = 0
+    for (var i = 0; i < protectFrom; i++) {
+      var m = msgs[i]
+      if (m.role !== 'assistant' || !m.toolCalls) continue
+      for (var t = 0; t < m.toolCalls.length; t++) {
+        var tc = m.toolCalls[t]
+        if (tc._compacted) continue
+        var s = JSON.stringify(tc.result || {})
+        if (s.length > CAP) {
+          tc.result = { ok: (tc.result && tc.result.ok) !== false, _compacted: true, note: 'result collapsed to save context (' + s.length + ' chars)' }
+          tc._compacted = true
+          trimmed++
+        }
+      }
+    }
+    persistState()
+    renderTranscript()
+    var after = estimateSessionContextTokens()
+    if (trimmed === 0) {
+      setStatus('Context already compact — nothing older than the protected tail to collapse.')
+    } else {
+      setStatus('Compacted ' + trimmed + ' old tool results · context ~' + before.toLocaleString() + ' → ~' + after.toLocaleString() + ' tokens')
+    }
+  }
+
   // Resolve a writable output directory for exports/reports. Prefers the user's
   // Desktop but GUARANTEES the directory exists before callers write into it.
   // On machines where ~/Desktop is absent (Windows OneDrive desktop redirection,
@@ -1810,6 +1905,7 @@
     if (els.exportErrorsBtn) els.exportErrorsBtn.addEventListener('click', handleExportErrors)
     if (els.reportBtn) els.reportBtn.addEventListener('click', handleGenerateReport)
     if (els.undoBtn) els.undoBtn.addEventListener('click', handleUndo)
+    if (els.contextMeter) els.contextMeter.addEventListener('click', handleCompactContext)
 
     // Model selector (event delegation — buttons are re-rendered on switch).
     if (els.modelSelector) {
