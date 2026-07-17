@@ -525,6 +525,16 @@ body {
   flex-wrap: wrap;
 }
 
+.footer-spacer {
+  flex: 1;
+}
+
+.version-info {
+  font-size: 10px;
+  color: var(--text-dim);
+  white-space: nowrap;
+}
+
 /* ── Thinking/loading indicator ───────────────────────────────────────── */
 
 .agent-thinking {

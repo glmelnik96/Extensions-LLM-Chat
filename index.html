@@ -77,6 +77,9 @@
         <button id="export-sessions-btn" class="btn btn-secondary" title="Export session to JSON on Desktop">Export</button>
         <button id="export-errors-btn" class="btn btn-secondary" title="Export errors only → JSON on Desktop">Errors</button>
         <button id="report-btn" class="btn btn-secondary" title="Analyze session with LLM and generate a bug report on Desktop">Report</button>
+        <span class="footer-spacer"></span>
+        <span id="version-info" class="version-info">v?</span>
+        <button id="update-btn" class="btn btn-secondary" title="Check for updates on GitHub">Update</button>
       </div>
     </div>
 
@@ -96,6 +99,7 @@
     <script src="./lib/pure/theme.js"></script>
     <script src="./lib/pure/visionCheck.js"></script>
     <script src="./lib/pure/pricing.js"></script>
+    <script src="./lib/pure/updater.js"></script>
 
     <!-- Agent modules -->
     <script src="./toolRegistry.js"></script>
@@ -103,6 +107,7 @@
     <script src="./chatProvider.js"></script>
     <script src="./hostBridge.js"></script>
     <script src="./agentToolLoop.js"></script>
+    <script src="./updater.js"></script>
 
     <!-- Main runtime (must be last) -->
     <script src="./main.js"></script>

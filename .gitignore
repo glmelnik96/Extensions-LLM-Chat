@@ -32,3 +32,7 @@ scripts/cost-report-*.json
 
 # Local project memory/artifacts
 .omc/
+
+# Self-updater state (per-install, written by updater.js)
+update-state.json
+.update-staging/
