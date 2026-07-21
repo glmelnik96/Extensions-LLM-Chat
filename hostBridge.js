@@ -90,7 +90,12 @@
               var parsed = JSON.parse(resultStr)
               done(resolve, parsed)
             } catch (parseErr) {
-              done(resolve, { ok: true, message: resultStr, raw: resultStr })
+              // Not JSON. Raw-eval callers (e.g. the Undo script returning a
+              // bare number) legitimately want the string, so still resolve —
+              // but tag it so executeToolCall can distinguish a real JSON tool
+              // result from un-parseable output (which, for a tool, means the
+              // ExtendScript side threw and must NOT be reported as success).
+              done(resolve, { ok: true, message: resultStr, raw: resultStr, _nonJson: true })
             }
           })
         } catch (e) {
@@ -792,7 +797,20 @@
         return Promise.reject(new Error('Unknown tool: ' + toolName))
     }
 
-    var hostPromise = evalHostFunction(call)
+    var hostPromise = evalHostFunction(call).then(function (res) {
+      // Every tool host function returns JSON. A non-JSON result means the
+      // ExtendScript side threw or returned raw text — convert it to an explicit
+      // failure instead of the silent ok:true fallback, so the model, the Undo
+      // counter and the spam guard never mistake a host error for success.
+      if (res && res._nonJson) {
+        return {
+          ok: false,
+          message: 'Host returned a non-JSON result (likely an ExtendScript error): ' +
+            String(res.raw == null ? '' : res.raw).slice(0, 300)
+        }
+      }
+      return res
+    })
     // Cache successful idempotent results so a retry with the same
     // client_op_id returns the original instead of double-creating.
     if (IDEMPOTENT_TOOLS[toolName] && typeof args.client_op_id === 'string' && args.client_op_id.length > 0) {

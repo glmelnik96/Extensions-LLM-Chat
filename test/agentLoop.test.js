@@ -200,6 +200,58 @@ test('loop: reasoning echoed back as reasoning_content on in-loop assistant turn
   assert.strictEqual(assistantTurn.reasoning, undefined, 'original key removed')
 })
 
+test('loop: malformed JSON tool arguments are reported to the model, host not called', async () => {
+  const win = loadLoop()
+  let hostCalls = 0
+  win.HOST_BRIDGE = {
+    executeToolCall () { hostCalls++; return Promise.resolve({ ok: true }) },
+    resetSpamGuard () {}
+  }
+  const calls = scriptProvider(win, [
+    resp({
+      role: 'assistant',
+      content: null,
+      // Truncated / malformed arguments string (a real Cloud.ru failure mode).
+      tool_calls: [{ id: 'c1', type: 'function', function: { name: 'create_layer', arguments: '{"name":"x"' } }]
+    }, 'tool_calls'),
+    resp({ role: 'assistant', content: 'recovered' }, 'stop')
+  ])
+
+  const result = await win.AGENT_TOOL_LOOP.runAgentLoop({
+    modelId: 'm', systemPrompt: 'sp', messages: [{ role: 'user', content: 'hi' }]
+  })
+  assert.strictEqual(hostCalls, 0, 'host must not be called with unparsed args')
+  assert.strictEqual(result.toolCallLog[0].status, 'error')
+  // The model saw an error tool result and must be able to self-correct.
+  const toolMsg = calls[1].messages.find(m => m.role === 'tool')
+  assert.match(toolMsg.content, /not valid JSON/i)
+  assert.strictEqual(result.content, 'recovered')
+})
+
+test('loop: empty-string arguments are treated as no args, not an error', async () => {
+  const win = loadLoop()
+  let seenArgs = null
+  win.HOST_BRIDGE = {
+    executeToolCall (name, args) { seenArgs = args; return Promise.resolve({ ok: true, message: 'ok' }) },
+    resetSpamGuard () {}
+  }
+  scriptProvider(win, [
+    resp({
+      role: 'assistant',
+      content: null,
+      tool_calls: [{ id: 'c1', type: 'function', function: { name: 'get_host_context', arguments: '' } }]
+    }, 'tool_calls'),
+    resp({ role: 'assistant', content: 'done' }, 'stop')
+  ])
+
+  const result = await win.AGENT_TOOL_LOOP.runAgentLoop({
+    modelId: 'm', systemPrompt: 'sp', messages: [{ role: 'user', content: 'hi' }]
+  })
+  assert.ok(seenArgs && typeof seenArgs === 'object', 'args object passed')
+  assert.strictEqual(Object.keys(seenArgs).length, 0, 'empty-string args become {}')
+  assert.strictEqual(result.toolCallLog[0].status, 'ok')
+})
+
 test('loop: tool results are paired to tool_call ids in the conversation', async () => {
   const win = loadLoop()
   fakeHost(win, { create_layer: { ok: true, message: 'Created.' } })

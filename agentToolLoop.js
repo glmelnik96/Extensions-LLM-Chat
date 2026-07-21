@@ -306,13 +306,26 @@
   function buildToolCallThunk (tc, log, onToolCall) {
     return function () {
       var toolName = tc.function.name
+      var rawArgs = tc.function.arguments
       var args = {}
-      try {
-        args = typeof tc.function.arguments === 'string'
-          ? JSON.parse(tc.function.arguments)
-          : (tc.function.arguments || {})
-      } catch (e) {
-        args = {}
+      var argParseError = null
+      if (typeof rawArgs === 'string') {
+        // Models send "{}" for no-arg tools; an empty/whitespace string is not
+        // an error, just no arguments. A non-empty but malformed string IS an
+        // error the model must learn about (previously it was silently coerced
+        // to {} and the call ran with wrong/empty args).
+        if (rawArgs.trim() === '') {
+          args = {}
+        } else {
+          try {
+            args = JSON.parse(rawArgs)
+          } catch (e) {
+            argParseError = (e && e.message) || String(e)
+            args = {}
+          }
+        }
+      } else {
+        args = rawArgs || {}
       }
 
       var logEntry = {
@@ -325,6 +338,22 @@
       }
       log.push(logEntry)
       onToolCall(logEntry)
+
+      // Malformed tool-call arguments: don't hit the host with empty {} and
+      // report a phantom result — tell the model its JSON was invalid so it can
+      // re-issue the call correctly on the next turn.
+      if (argParseError) {
+        var parseErrResult = {
+          ok: false,
+          message: 'Tool arguments were not valid JSON (' + argParseError +
+            '). Re-issue this call with a single well-formed JSON object as the arguments.'
+        }
+        logEntry.result = parseErrResult
+        logEntry.status = 'error'
+        logEntry.endTime = Date.now()
+        onToolCall(logEntry)
+        return Promise.resolve({ id: logEntry.id, content: JSON.stringify(parseErrResult) })
+      }
 
       // Static expression validation before sending to AE.
       var validationWarnings = []
