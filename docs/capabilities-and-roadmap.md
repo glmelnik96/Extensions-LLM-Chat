@@ -34,6 +34,8 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 | `rename_layer` | Rename a layer |
 | `set_layer_3d` | Enable/disable 3D on a layer |
 | `set_blend_mode` | Set layer blending mode |
+| `move_anchor_point` | Reposition a layer's anchor point to a named spot (center, top-left, …) with position compensation so the layer does not visually jump |
+| `stagger_layers` | Offset multiple layers in time (in-point, start time, or their keyframes) by a fixed step — forward or reverse |
 
 #### Shape content
 | Tool | Description |
@@ -49,6 +51,9 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 | `set_keyframes_batch` | Add keyframes to multiple properties/layers in one call |
 | `delete_keyframes` | Delete keyframes at specific times or all |
 | `set_keyframe_easing` | Change interpolation and easing on existing keyframes |
+| `copy_ease` | Copy temporal ease (in/out/both) from one property's keyframes onto another's |
+| `reverse_keyframes` | Reverse keyframe order in place — values and easing mirror around the time span |
+| `randomize_property` | Randomize a property across layers within a range (absolute or offset), optional per-axis |
 | `set_property_value` | Set a static value on any property |
 | `apply_expression` | Apply an AE expression to any expressable property. Returns expression errors for agent self-correction + evaluated value readback. |
 | `apply_expression_batch` | Apply expressions to multiple layer properties in one tool call with per-target success/error details. |

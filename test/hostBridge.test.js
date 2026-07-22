@@ -62,3 +62,59 @@ test('hostBridge: a real EvalScript error prefix rejects', async () => {
     /EvalScript error/
   )
 })
+
+// Capture the ExtendScript call string the bridge builds for a tool call, so we
+// can assert the new advanced tools map to the right host function + args.
+function captureCall (toolName, args) {
+  let captured = null
+  const win = loadHostBridge((script) => {
+    captured = script
+    return '{"ok":true}'
+  })
+  return win.HOST_BRIDGE.executeToolCall(toolName, args).then(() => captured)
+}
+
+test('hostBridge: copy_ease maps to extensionsLlmChat_copyEase', async () => {
+  const call = await captureCall('copy_ease', {
+    source_layer_index: 2, source_property_path: 'Transform>Position', key_indices: [1, 3], mode: 'out'
+  })
+  assert.match(call, /extensionsLlmChat_copyEase\(/)
+  assert.match(call, /"Transform>Position"/)
+  assert.match(call, /\[1,3\]/)
+  assert.match(call, /"out"/)
+})
+
+test('hostBridge: reverse_keyframes maps to extensionsLlmChat_reverseKeyframes', async () => {
+  const call = await captureCall('reverse_keyframes', { layer_index: 1, property_path: 'Transform>Scale' })
+  assert.match(call, /extensionsLlmChat_reverseKeyframes\(1,null,"Transform>Scale"\)/)
+})
+
+test('hostBridge: stagger_layers passes indices, offset and mode', async () => {
+  const call = await captureCall('stagger_layers', { layer_indices: [3, 1, 2], offset: 5, unit: 'frames', mode: 'keyframes' })
+  assert.match(call, /extensionsLlmChat_staggerLayers\(\[3,1,2\],null,5,"frames",null,"keyframes"\)/)
+})
+
+test('hostBridge: randomize_property bundles opts object', async () => {
+  const call = await captureCall('randomize_property', {
+    layer_indices: [1, 2], property_path: 'Transform>Rotation', min: -15, max: 15, mode: 'offset'
+  })
+  assert.match(call, /extensionsLlmChat_randomizeProperty\(\[1,2\],null,"Transform>Rotation",/)
+  assert.match(call, /"min":-15/)
+  assert.match(call, /"max":15/)
+  assert.match(call, /"mode":"offset"/)
+})
+
+test('hostBridge: move_anchor_point maps position', async () => {
+  const call = await captureCall('move_anchor_point', { layer_index: 4, position: 'center' })
+  assert.match(call, /extensionsLlmChat_moveAnchorPoint\(4,null,"center"\)/)
+})
+
+test('hostBridge: new tools reject when required args missing (pre-validation)', async () => {
+  const win = loadHostBridge('{"ok":true}')
+  const a = await win.HOST_BRIDGE.executeToolCall('stagger_layers', { offset: 1 })
+  assert.strictEqual(a.ok, false)
+  assert.match(a.message, /layer_indices/)
+  const b = await win.HOST_BRIDGE.executeToolCall('move_anchor_point', {})
+  assert.strictEqual(b.ok, false)
+  assert.match(b.message, /position/)
+})

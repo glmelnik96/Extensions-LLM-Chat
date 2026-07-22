@@ -2000,6 +2000,395 @@ function extensionsLlmChat_setKeyframeEasing (layerIndex, layerId, propertyPath,
 }
 
 // ============================================================================
+// Advanced keyframe / layer operations
+// ============================================================================
+
+/**
+ * Build an array of `targetDims` KeyframeEase objects from a source ease array,
+ * fanning a shorter source out across every target dimension (dim 0 reused).
+ */
+function _buildEaseArray (sourceEase, targetDims) {
+  var out = [];
+  for (var d = 0; d < targetDims; d++) {
+    var srcIdx = (d < sourceEase.length) ? d : 0;
+    var src = sourceEase[srcIdx];
+    out.push(new KeyframeEase(src.speed, src.influence));
+  }
+  return out;
+}
+
+/**
+ * Resolve a parallel list of layer indices/ids into an array of layer objects.
+ * ids (when present at the same position) take precedence over indices.
+ */
+function _resolveLayerList (comp, layerIndices, layerIds) {
+  var layers = [];
+  var n = (layerIndices && layerIndices.length) ? layerIndices.length : 0;
+  var m = (layerIds && layerIds.length) ? layerIds.length : 0;
+  var count = (n > m) ? n : m;
+  for (var i = 0; i < count; i++) {
+    var idx = (layerIndices && i < layerIndices.length) ? layerIndices[i] : null;
+    var id = (layerIds && i < layerIds.length) ? layerIds[i] : null;
+    var lyr = _resolveLayer(comp, idx, (typeof id === 'number' ? id : null));
+    if (lyr) layers.push(lyr);
+  }
+  return layers;
+}
+
+/**
+ * Copy temporal ease (and interpolation type) from one source keyframe onto
+ * other keyframes of a target property. Dimension-aware.
+ */
+function extensionsLlmChat_copyEase (srcLayerIndex, srcLayerId, srcPropertyPath, srcKeyIndex, tgtLayerIndex, tgtLayerId, tgtPropertyPath, keyIndices, mode) {
+  var result = { ok: false, message: '', count: 0 };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    mode = (mode === 'in' || mode === 'out') ? mode : 'both';
+
+    var srcLayer = _resolveLayer(ctx.comp, srcLayerIndex, srcLayerId);
+    if (!srcLayer) { result.message = 'Source layer not found.'; return resultToJson(result); }
+    var srcProp = _resolveProperty(srcLayer, srcPropertyPath);
+    if (!srcProp || !(srcProp instanceof Property)) { result.message = 'Source property not found or is a group.'; return resultToJson(result); }
+    if (srcProp.numKeys < 1) { result.message = 'Source property "' + srcPropertyPath + '" has no keyframes.'; return resultToJson(result); }
+
+    var srcIdx = (typeof srcKeyIndex === 'number' && srcKeyIndex >= 1 && srcKeyIndex <= srcProp.numKeys) ? srcKeyIndex : srcProp.numKeys;
+    var srcEaseIn = srcProp.keyInTemporalEase(srcIdx);
+    var srcEaseOut = srcProp.keyOutTemporalEase(srcIdx);
+    var srcInterpIn = null, srcInterpOut = null;
+    try { srcInterpIn = srcProp.keyInInterpolationType(srcIdx); srcInterpOut = srcProp.keyOutInterpolationType(srcIdx); } catch (eI) {}
+    if (!srcEaseIn && !srcEaseOut) { result.message = 'Could not read easing from source keyframe #' + srcIdx + '.'; return resultToJson(result); }
+
+    var tgtLayer = (tgtLayerIndex != null || tgtLayerId != null) ? _resolveLayer(ctx.comp, tgtLayerIndex, tgtLayerId) : srcLayer;
+    if (!tgtLayer) { result.message = 'Target layer not found.'; return resultToJson(result); }
+    var tgtPath = (typeof tgtPropertyPath === 'string' && tgtPropertyPath.length) ? tgtPropertyPath : srcPropertyPath;
+    var tgtProp = _resolveProperty(tgtLayer, tgtPath);
+    if (!tgtProp || !(tgtProp instanceof Property)) { result.message = 'Target property not found or is a group.'; return resultToJson(result); }
+    if (tgtProp.numKeys < 1) { result.message = 'Target property "' + tgtPath + '" has no keyframes.'; return resultToJson(result); }
+
+    var indices = [];
+    if (keyIndices && keyIndices.length) {
+      for (var ki = 0; ki < keyIndices.length; ki++) {
+        var v = keyIndices[ki];
+        if (typeof v === 'number' && v >= 1 && v <= tgtProp.numKeys) indices.push(v);
+      }
+    } else {
+      for (var k = 1; k <= tgtProp.numKeys; k++) indices.push(k);
+    }
+
+    _beginToolUndo('Agent: Copy ease');
+    for (var a = 0; a < indices.length; a++) {
+      var idx = indices[a];
+      try {
+        var dims = _getTemporalEaseDims(tgtProp, idx);
+        var easeIn = _buildEaseArray(srcEaseIn, dims);
+        var easeOut = _buildEaseArray(srcEaseOut, dims);
+        if (srcInterpIn !== null) {
+          tgtProp.setInterpolationTypeAtKey(idx,
+            (mode === 'both' || mode === 'in') ? srcInterpIn : tgtProp.keyInInterpolationType(idx),
+            (mode === 'both' || mode === 'out') ? srcInterpOut : tgtProp.keyOutInterpolationType(idx));
+        }
+        if (mode === 'both') {
+          tgtProp.setTemporalEaseAtKey(idx, easeIn, easeOut);
+        } else if (mode === 'in') {
+          tgtProp.setTemporalEaseAtKey(idx, easeIn, tgtProp.keyOutTemporalEase(idx));
+        } else {
+          tgtProp.setTemporalEaseAtKey(idx, tgtProp.keyInTemporalEase(idx), easeOut);
+        }
+        result.count++;
+      } catch (eApply) {
+        try {
+          // Retry 1-dim for spatial properties that rejected the multi-dim array.
+          var e1 = _buildEaseArray(srcEaseIn, 1);
+          var o1 = _buildEaseArray(srcEaseOut, 1);
+          tgtProp.setTemporalEaseAtKey(idx, e1, o1);
+          result.count++;
+        } catch (eRetry) {}
+      }
+    }
+    _endToolUndo();
+    result.ok = true;
+    result.message = 'Copied ' + mode + ' ease from key #' + srcIdx + ' onto ' + result.count + ' keyframe(s) of "' + tgtPath + '".';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'copyEase error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Reverse the keyframe values of a property in time (play backwards), keeping
+ * the original key times and swapping incoming/outgoing ease per keyframe.
+ */
+function extensionsLlmChat_reverseKeyframes (layerIndex, layerId, propertyPath) {
+  var result = { ok: false, message: '', count: 0 };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var prop = _resolveProperty(layer, propertyPath);
+    if (!prop || !(prop instanceof Property)) { result.message = 'Property not found or is a group.'; return resultToJson(result); }
+    if (prop.numKeys < 2) { result.message = 'Need at least 2 keyframes to reverse "' + propertyPath + '".'; return resultToJson(result); }
+
+    var keys = [];
+    for (var k = 1; k <= prop.numKeys; k++) {
+      var kd = { time: prop.keyTime(k), value: prop.keyValue(k) };
+      try { kd.easeIn = prop.keyInTemporalEase(k); kd.easeOut = prop.keyOutTemporalEase(k); } catch (eE) {}
+      try { kd.interpIn = prop.keyInInterpolationType(k); kd.interpOut = prop.keyOutInterpolationType(k); } catch (eT) {}
+      keys.push(kd);
+    }
+
+    var times = [];
+    var values = [];
+    for (var t = 0; t < keys.length; t++) {
+      times.push(keys[t].time);
+      values.push(keys[keys.length - 1 - t].value);
+    }
+
+    _beginToolUndo('Agent: Reverse keyframes');
+    for (var r = prop.numKeys; r >= 1; r--) prop.removeKey(r);
+    for (var n = 0; n < times.length; n++) prop.setValueAtTime(times[n], values[n]);
+
+    for (var e = 0; e < keys.length; e++) {
+      var srcIdx = keys.length - 1 - e;
+      var keyIdx = e + 1;
+      try {
+        if (keys[srcIdx].interpIn !== undefined) {
+          prop.setInterpolationTypeAtKey(keyIdx, keys[srcIdx].interpOut, keys[srcIdx].interpIn);
+        }
+      } catch (e2) {}
+      try {
+        if (keys[srcIdx].easeIn && keys[srcIdx].easeOut) {
+          prop.setTemporalEaseAtKey(keyIdx, keys[srcIdx].easeOut, keys[srcIdx].easeIn);
+        }
+      } catch (e3) {}
+      result.count++;
+    }
+    _endToolUndo();
+    result.ok = true;
+    result.message = 'Reversed ' + result.count + ' keyframes on "' + propertyPath + '".';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'reverseKeyframes error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Shift every keyframe on a property group (recursively) by timeShift seconds.
+ */
+function _shiftPropertyKeyframes (group, timeShift) {
+  for (var i = 1; i <= group.numProperties; i++) {
+    var prop = group.property(i);
+    if (prop.propertyType === PropertyType.PROPERTY) {
+      if (prop.numKeys > 0 && prop.canVaryOverTime) {
+        var keys = [];
+        for (var k = 1; k <= prop.numKeys; k++) keys.push({ time: prop.keyTime(k), value: prop.keyValue(k) });
+        for (var r = prop.numKeys; r >= 1; r--) prop.removeKey(r);
+        for (var n = 0; n < keys.length; n++) prop.setValueAtTime(keys[n].time + timeShift, keys[n].value);
+      }
+    } else if (prop.propertyType === PropertyType.INDEXED_GROUP || prop.propertyType === PropertyType.NAMED_GROUP) {
+      _shiftPropertyKeyframes(prop, timeShift);
+    }
+  }
+}
+
+/**
+ * Offset multiple layers in time to create a cascade/stagger.
+ */
+function extensionsLlmChat_staggerLayers (layerIndices, layerIds, offset, unit, direction, mode) {
+  var result = { ok: false, message: '', count: 0 };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    if (typeof offset !== 'number') { result.message = 'stagger_layers: `offset` must be a number.'; return resultToJson(result); }
+    mode = (mode === 'startTime' || mode === 'keyframes') ? mode : 'inPoint';
+    direction = (direction === 'reverse') ? 'reverse' : 'forward';
+
+    var layers = _resolveLayerList(ctx.comp, layerIndices, layerIds);
+    if (layers.length < 2) { result.message = 'stagger_layers: need at least 2 resolvable layers.'; return resultToJson(result); }
+
+    var amount = offset;
+    if (unit === 'frames') amount = offset * ctx.comp.frameDuration;
+
+    // Sort by comp index ascending.
+    for (var a = 0; a < layers.length - 1; a++) {
+      for (var b = a + 1; b < layers.length; b++) {
+        if (layers[b].index < layers[a].index) { var tmp = layers[a]; layers[a] = layers[b]; layers[b] = tmp; }
+      }
+    }
+    if (direction === 'reverse') layers.reverse();
+
+    _beginToolUndo('Agent: Stagger layers');
+    var baseIn = layers[0].inPoint;
+    for (var s = 0; s < layers.length; s++) {
+      var layer = layers[s];
+      var shift = amount * s;
+      var wasLocked = layer.locked;
+      layer.locked = false;
+      if (mode === 'inPoint') {
+        layer.startTime = layer.startTime + (baseIn + shift - layer.inPoint);
+      } else if (mode === 'startTime') {
+        layer.startTime = layer.startTime + shift;
+      } else {
+        _shiftPropertyKeyframes(layer, shift);
+      }
+      layer.locked = wasLocked;
+      result.count++;
+    }
+    _endToolUndo();
+    result.ok = true;
+    result.message = 'Staggered ' + result.count + ' layers by ' + offset + (unit === 'frames' ? ' frames' : 's') + ' (' + mode + ', ' + direction + ').';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'staggerLayers error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Apply a random value to one property across several layers.
+ */
+function extensionsLlmChat_randomizeProperty (layerIndices, layerIds, propertyPath, opts) {
+  var result = { ok: false, message: '', count: 0 };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    opts = opts || {};
+    var minVal = (typeof opts.min === 'number') ? opts.min : 0;
+    var maxVal = (typeof opts.max === 'number') ? opts.max : 100;
+    var mode = (opts.mode === 'offset') ? 'offset' : 'absolute';
+    var uniform = (opts.uniform === false) ? false : true;
+
+    var layers = _resolveLayerList(ctx.comp, layerIndices, layerIds);
+    if (layers.length < 1) { result.message = 'randomize_property: no resolvable layers.'; return resultToJson(result); }
+
+    function rnd (lo, hi) { return lo + Math.random() * (hi - lo); }
+
+    _beginToolUndo('Agent: Randomize property');
+    for (var i = 0; i < layers.length; i++) {
+      var layer = layers[i];
+      var prop = _resolveProperty(layer, propertyPath);
+      if (!prop || !(prop instanceof Property)) continue;
+      var wasLocked = layer.locked;
+      layer.locked = false;
+      var cur = prop.value;
+      var next;
+      if (cur instanceof Array) {
+        next = [];
+        var uni = rnd(minVal, maxVal);
+        for (var d = 0; d < cur.length; d++) {
+          var lo = minVal, hi = maxVal;
+          if (d === 0 && typeof opts.minX === 'number') lo = opts.minX;
+          if (d === 0 && typeof opts.maxX === 'number') hi = opts.maxX;
+          if (d === 1 && typeof opts.minY === 'number') lo = opts.minY;
+          if (d === 1 && typeof opts.maxY === 'number') hi = opts.maxY;
+          var rv = (uniform && cur.length >= 2 && _isScaleProp(prop)) ? uni : rnd(lo, hi);
+          next.push(mode === 'offset' ? cur[d] + rv : rv);
+        }
+      } else {
+        var rv1 = rnd(minVal, maxVal);
+        next = (mode === 'offset') ? cur + rv1 : rv1;
+      }
+      try { prop.setValue(next); result.count++; } catch (eSet) {}
+      layer.locked = wasLocked;
+    }
+    _endToolUndo();
+    result.ok = true;
+    result.message = 'Randomized "' + propertyPath + '" on ' + result.count + ' layers (range ' + minVal + '..' + maxVal + ', ' + mode + ').';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'randomizeProperty error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+function _isScaleProp (prop) {
+  try { return prop.matchName === 'ADBE Scale'; } catch (e) { return false; }
+}
+
+/**
+ * Move a layer's anchor point to a named position on its content bounds,
+ * compensating Position so the layer does not visually jump.
+ */
+function extensionsLlmChat_moveAnchorPoint (layerIndex, layerId, position) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+
+    var rect;
+    try { rect = layer.sourceRectAtTime(ctx.comp.time, false); }
+    catch (eRect) { result.message = 'move_anchor_point: this layer has no content bounds (sourceRectAtTime unavailable — e.g. camera/light).'; return resultToJson(result); }
+
+    var cx = rect.left + rect.width / 2;
+    var cy = rect.top + rect.height / 2;
+    var target;
+    switch (position) {
+      case 'center':       target = [cx, cy]; break;
+      case 'top-left':     target = [rect.left, rect.top]; break;
+      case 'top':          target = [cx, rect.top]; break;
+      case 'top-right':    target = [rect.left + rect.width, rect.top]; break;
+      case 'left':         target = [rect.left, cy]; break;
+      case 'right':        target = [rect.left + rect.width, cy]; break;
+      case 'bottom-left':  target = [rect.left, rect.top + rect.height]; break;
+      case 'bottom':       target = [cx, rect.top + rect.height]; break;
+      case 'bottom-right': target = [rect.left + rect.width, rect.top + rect.height]; break;
+      default: result.message = 'move_anchor_point: unknown position "' + position + '".'; return resultToJson(result);
+    }
+
+    var xf = layer.property('ADBE Transform Group');
+    var anchorProp = xf.property('ADBE Anchor Point');
+    var posProp = xf.property('ADBE Position');
+    var scaleProp = xf.property('ADBE Scale');
+
+    var oldAnchor = anchorProp.value;
+    var dx = target[0] - oldAnchor[0];
+    var dy = target[1] - oldAnchor[1];
+    var scale = scaleProp.value;
+    var sx = scale[0] / 100;
+    var sy = scale[1] / 100;
+
+    _beginToolUndo('Agent: Move anchor point');
+    if (anchorProp.numKeys > 0) {
+      for (var ak = 1; ak <= anchorProp.numKeys; ak++) {
+        var av = anchorProp.keyValue(ak);
+        anchorProp.setValueAtTime(anchorProp.keyTime(ak), [av[0] + dx, av[1] + dy]);
+      }
+    } else {
+      anchorProp.setValue(target);
+    }
+
+    if (posProp.numKeys > 0) {
+      for (var pk = 1; pk <= posProp.numKeys; pk++) {
+        var pv = posProp.keyValue(pk);
+        if (pv.length === 3) posProp.setValueAtTime(posProp.keyTime(pk), [pv[0] + dx * sx, pv[1] + dy * sy, pv[2]]);
+        else posProp.setValueAtTime(posProp.keyTime(pk), [pv[0] + dx * sx, pv[1] + dy * sy]);
+      }
+    } else {
+      var pos = posProp.value;
+      if (pos.length === 3) posProp.setValue([pos[0] + dx * sx, pos[1] + dy * sy, pos[2]]);
+      else posProp.setValue([pos[0] + dx * sx, pos[1] + dy * sy]);
+    }
+    _endToolUndo();
+    result.ok = true;
+    result.message = 'Moved anchor point of "' + layer.name + '" to ' + position + ' (position compensated).';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'moveAnchorPoint error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+// ============================================================================
 // Property operations
 // ============================================================================
 
@@ -3864,6 +4253,11 @@ function extensionsLlmChat_getCapabilities () {
     'extensionsLlmChat_setPropertyValue',
     'extensionsLlmChat_addKeyframes',
     'extensionsLlmChat_setKeyframeEasing',
+    'extensionsLlmChat_copyEase',
+    'extensionsLlmChat_reverseKeyframes',
+    'extensionsLlmChat_staggerLayers',
+    'extensionsLlmChat_randomizeProperty',
+    'extensionsLlmChat_moveAnchorPoint',
     'extensionsLlmChat_setEffectPropertyValue',
     'extensionsLlmChat_setTextDocument',
     'extensionsLlmChat_addEffect',

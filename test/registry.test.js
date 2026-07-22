@@ -23,9 +23,9 @@ function loadBrowserGlobal (file) {
 const registryWindow = loadBrowserGlobal('toolRegistry.js')
 const tools = registryWindow.AGENT_TOOL_REGISTRY && registryWindow.AGENT_TOOL_REGISTRY.tools
 
-test('registry: exposes 50 tools', () => {
+test('registry: exposes 55 tools', () => {
   assert.ok(Array.isArray(tools), 'tools array exported')
-  assert.strictEqual(tools.length, 50)
+  assert.strictEqual(tools.length, 55)
 })
 
 test('registry: every tool has a valid OpenAI function schema', () => {
@@ -69,6 +69,32 @@ test('registry: add_keyframes points to the batch tool for multi-property work',
   assert.match(t.function.description, /set_keyframes_batch/)
 })
 
+test('registry: advanced keyframe/layer tools registered with correct required[]', () => {
+  const ce = findTool('copy_ease')
+  assert.ok(ce, 'copy_ease registered')
+  assert.strictEqual(JSON.stringify(ce.function.parameters.required), JSON.stringify(['source_property_path']))
+  assert.ok(ce.function.parameters.properties.mode.enum.indexOf('both') !== -1)
+
+  const rk = findTool('reverse_keyframes')
+  assert.ok(rk, 'reverse_keyframes registered')
+  assert.strictEqual(JSON.stringify(rk.function.parameters.required), JSON.stringify(['property_path']))
+
+  const sl = findTool('stagger_layers')
+  assert.ok(sl, 'stagger_layers registered')
+  assert.strictEqual(JSON.stringify(sl.function.parameters.required), JSON.stringify(['layer_indices', 'offset']))
+  assert.ok(sl.function.parameters.properties.mode.enum.indexOf('inPoint') !== -1)
+
+  const rp = findTool('randomize_property')
+  assert.ok(rp, 'randomize_property registered')
+  assert.strictEqual(JSON.stringify(rp.function.parameters.required), JSON.stringify(['layer_indices', 'property_path']))
+
+  const ma = findTool('move_anchor_point')
+  assert.ok(ma, 'move_anchor_point registered')
+  assert.strictEqual(JSON.stringify(ma.function.parameters.required), JSON.stringify(['position']))
+  assert.ok(ma.function.parameters.properties.position.enum.indexOf('center') !== -1)
+  assert.strictEqual(ma.function.parameters.properties.position.enum.length, 9)
+})
+
 // ── agentSystemPrompt.js ────────────────────────────────────────────────────
 
 const promptWindow = loadBrowserGlobal('agentSystemPrompt.js')
@@ -100,7 +126,7 @@ test('prompt: new behavior rules present', () => {
   assert.match(full, /Verify before claiming done/, 'self-verification rule')
   assert.match(full, /brief numbered plan/, 'plan rule')
   assert.ok(!full.includes('No chain-of-thought in the visible response'), 'old no-CoT rule replaced')
-  assert.match(full, /50 tools/, 'tool count updated')
+  assert.match(full, /55 tools/, 'tool count updated')
 })
 
 test('registry: stage-3 tools registered with correct schemas', () => {

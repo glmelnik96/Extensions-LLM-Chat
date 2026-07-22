@@ -179,6 +179,9 @@ Full methodology + bug tables: `docs/superpowers/specs/2026-06-10-deep-audit-rep
 ### Model selector (2026-06-18) — 3 user-selectable models
 Re-added a panel model selector (reversing the brief "predetermined model" decision). `AVAILABLE_MODELS` in `main.js` defines `openai/gpt-oss-120b` (default), `MiniMaxAI/MiniMax-M2.5`, `zai-org/GLM-4.7`; `selectModel()` stores the choice on `session.model` (persisted) and is blocked mid-request; `normalizeModelId` migrates unknown/old ids (e.g. `zai-org/GLM-5.1`) to the default. UI: `#model-selector` buttons (`index.html`), `.model-btn`/`.model-btn-active` (`styles.css`). All three live-verified in real AE via CDP — clean tool dispatch (0 hallucinated tool names) on a simple read and a complex multi-tool rig (null + Slider Control + shape + Opacity↔slider link): gpt-oss-120b 7 calls/~93k tok, GLM-4.7 5 calls/~91k tok, MiniMax-M2.5 11 calls/~225k tok (self-corrected 3 transient expression errors to success).
 
+### Motion-editing tools (2026-07-21) — 5 tools ported from adobe-agent-skills
+Added five motion-design conveniences (50 → 55 tools), each ported from the MIT `adobe-agent-skills` AE scripts and adapted to the 3-layer tool architecture: `copy_ease` (transfer temporal ease in/out/both between properties), `reverse_keyframes` (mirror keyframes in place), `stagger_layers` (time-offset layers by in-point/start-time/keyframes, forward or reverse), `randomize_property` (range randomize across layers, absolute/offset, optional per-axis), `move_anchor_point` (reposition anchor to a named spot with position compensation so the layer doesn't jump). Host handlers under "Advanced keyframe / layer operations" in `host/index.jsx`; all five in the `getCapabilities` probe list. Live-verified in real AE via CDP: ease copy transfers influence, reverse swaps values, stagger offsets start times by the step, randomize lands in range, anchor→center compensates position (no visual jump). Tests: `test/registry.test.js`, `test/hostBridge.test.js` (138 total pass).
+
 ---
 
 ## Live testing against real AE (CDP pipeline)
@@ -199,7 +202,7 @@ ExtendScript (ES3) quirks verified live: `string + Array` throws; `addProperty()
 | Question | File |
 |---|---|
 | User-facing setup, features, install | `README.md` |
-| 50 tools, capabilities, limitations | `docs/capabilities-and-roadmap.md` |
+| 55 tools, capabilities, limitations | `docs/capabilities-and-roadmap.md` |
 | Live AE validation methodology + bug tables | `docs/superpowers/specs/2026-06-10-deep-audit-report.md` |
 | Agent loop architecture, tool categories | `docs/final-architecture.md` |
 | Config fields, loading order, secrets | `docs/configuration.md`, `docs/secret-handling.md` |

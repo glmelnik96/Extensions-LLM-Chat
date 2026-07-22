@@ -172,6 +172,23 @@
       case 'list_available_effects':
         if (!isStr(args.filter)) return 'list_available_effects: missing required `filter` substring (e.g. "glow", "blur").'
         return null
+      case 'copy_ease':
+        if (!isStr(args.source_property_path)) return 'copy_ease: missing required `source_property_path` (e.g. "Transform>Position").'
+        return null
+      case 'reverse_keyframes':
+        if (!isStr(args.property_path)) return 'reverse_keyframes: missing required `property_path`.'
+        return null
+      case 'stagger_layers':
+        if (!isArr(args.layer_indices)) return 'stagger_layers: missing required `layer_indices` array (at least 2 layer indices).'
+        if (typeof args.offset !== 'number') return 'stagger_layers: missing required `offset` number.'
+        return null
+      case 'randomize_property':
+        if (!isArr(args.layer_indices)) return 'randomize_property: missing required `layer_indices` array.'
+        if (!isStr(args.property_path)) return 'randomize_property: missing required `property_path` (e.g. "Transform>Rotation").'
+        return null
+      case 'move_anchor_point':
+        if (!isStr(args.position)) return 'move_anchor_point: missing required `position` (center, top-left, top, top-right, left, right, bottom-left, bottom, bottom-right).'
+        return null
       case 'add_shape_ellipse':
       case 'add_shape_rectangle':
       case 'add_shape_path':
@@ -482,6 +499,55 @@
           toESLiteral(args.out_type || null) + ',' +
           toESLiteral(args.ease_in || null) + ',' +
           toESLiteral(args.ease_out || null) + ')'
+        break
+      case 'copy_ease':
+        call = 'extensionsLlmChat_copyEase(' +
+          toESLiteral(args.source_layer_index !== undefined ? args.source_layer_index : null) + ',' +
+          toESLiteral(args.source_layer_id || null) + ',' +
+          toESLiteral(args.source_property_path) + ',' +
+          toESLiteral(args.source_key_index !== undefined ? args.source_key_index : null) + ',' +
+          toESLiteral(args.target_layer_index !== undefined ? args.target_layer_index : null) + ',' +
+          toESLiteral(args.target_layer_id || null) + ',' +
+          toESLiteral(args.target_property_path || null) + ',' +
+          toESLiteral(args.key_indices || null) + ',' +
+          toESLiteral(args.mode || null) + ')'
+        break
+      case 'reverse_keyframes':
+        call = 'extensionsLlmChat_reverseKeyframes(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral(args.property_path) + ')'
+        break
+      case 'stagger_layers':
+        call = 'extensionsLlmChat_staggerLayers(' +
+          toESLiteral(args.layer_indices || null) + ',' +
+          toESLiteral(args.layer_ids || null) + ',' +
+          toESLiteral(args.offset) + ',' +
+          toESLiteral(args.unit || null) + ',' +
+          toESLiteral(args.direction || null) + ',' +
+          toESLiteral(args.mode || null) + ')'
+        break
+      case 'randomize_property':
+        call = 'extensionsLlmChat_randomizeProperty(' +
+          toESLiteral(args.layer_indices || null) + ',' +
+          toESLiteral(args.layer_ids || null) + ',' +
+          toESLiteral(args.property_path) + ',' +
+          toESLiteral({
+            min: args.min !== undefined ? args.min : null,
+            max: args.max !== undefined ? args.max : null,
+            mode: args.mode || null,
+            minX: args.min_x !== undefined ? args.min_x : null,
+            maxX: args.max_x !== undefined ? args.max_x : null,
+            minY: args.min_y !== undefined ? args.min_y : null,
+            maxY: args.max_y !== undefined ? args.max_y : null,
+            uniform: args.uniform !== undefined ? args.uniform : null
+          }) + ')'
+        break
+      case 'move_anchor_point':
+        call = 'extensionsLlmChat_moveAnchorPoint(' +
+          toESLiteral(args.layer_index !== undefined ? args.layer_index : null) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral(args.position) + ')'
         break
 
       // Property tools

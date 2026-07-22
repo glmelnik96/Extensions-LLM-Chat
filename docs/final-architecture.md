@@ -75,14 +75,14 @@ Key invariants:
 
 ---
 
-## Tool categories (45 tools)
+## Tool categories (55 tools)
 
 | Category | Count | Tools |
 |----------|---:|-------|
 | Read | 10 | `get_detailed_comp_summary`, `get_host_context`, `get_property_value`, `get_expression`, `get_keyframes`, `get_layer_properties`, `get_effect_properties`, `get_mask_info`, `get_markers`, `list_project_items` |
-| Layer ops | 8 | `create_layer`, `delete_layer`, `duplicate_layer`, `reorder_layer`, `set_layer_parent`, `set_layer_timing`, `rename_layer`, `set_layer_3d` |
+| Layer ops | 10 | `create_layer`, `delete_layer`, `duplicate_layer`, `reorder_layer`, `set_layer_parent`, `set_layer_timing`, `rename_layer`, `set_layer_3d`, `move_anchor_point`, `stagger_layers` |
 | Shape content | 3 | `add_shape_rectangle`, `add_shape_ellipse`, `add_shape_path` |
-| Animation | 6 | `add_keyframes`, `delete_keyframes`, `set_keyframe_easing`, `set_property_value`, `apply_expression`, `apply_expression_batch` |
+| Animation | 9 | `add_keyframes`, `delete_keyframes`, `set_keyframe_easing`, `set_property_value`, `apply_expression`, `apply_expression_batch`, `copy_ease`, `reverse_keyframes`, `randomize_property` |
 | Effects | 3 | `add_effect`, `remove_effect`, `set_effect_property` |
 | 3D / Camera / Light | 2 | `set_camera_properties`, `set_light_properties` |
 | Masks | 3 | `add_mask`, `set_mask_properties`, `create_masks_from_text` |

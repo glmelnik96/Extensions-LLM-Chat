@@ -317,6 +317,103 @@
     {
       type: 'function',
       function: {
+        name: 'copy_ease',
+        description: 'Copy the temporal easing (speed + influence, plus interpolation type) from ONE source keyframe onto other keyframes — the "make these ease like that one" operation. Dimension-aware: a 1D source ease is fanned out to every dimension of a multi-dimensional target. Use this instead of hand-computing ease_in/ease_out arrays for each keyframe.',
+        parameters: {
+          type: 'object',
+          properties: {
+            source_layer_index: { type: 'number', description: '1-based index of the layer to copy ease FROM' },
+            source_layer_id: { type: 'number', description: 'Persistent id of the source layer (preferred)' },
+            source_property_path: { type: 'string', description: 'Property to copy ease from, e.g. "Transform>Position"' },
+            source_key_index: { type: 'number', description: '1-based source keyframe index. Omit to use the property\'s LAST keyframe.' },
+            target_layer_index: { type: 'number', description: '1-based index of the layer to apply ease TO. Omit to reuse the source layer.' },
+            target_layer_id: { type: 'number', description: 'Persistent id of the target layer' },
+            target_property_path: { type: 'string', description: 'Property to apply ease to. Omit to reuse source_property_path.' },
+            key_indices: { type: 'array', items: { type: 'number' }, description: '1-based target keyframe indices. Omit to apply to ALL keyframes of the target property.' },
+            mode: { type: 'string', enum: ['both', 'in', 'out'], description: 'Which side of the ease to copy: both (default), incoming only, or outgoing only.' }
+          },
+          required: ['source_property_path']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'reverse_keyframes',
+        description: 'Reverse the keyframe VALUES of a property in time so the animation plays backwards, keeping the original keyframe times in place. Incoming/outgoing easing is swapped per keyframe so the motion feel is preserved. Needs at least 2 keyframes.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID' },
+            property_path: { type: 'string', description: 'Property whose keyframes to reverse, e.g. "Transform>Position"' }
+          },
+          required: ['property_path']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'stagger_layers',
+        description: 'Offset multiple layers in time to create a cascade/stagger. Layer-level timing shift (distinct from set_keyframes_batch, which staggers keyframes within one property). Layers are ordered by their comp index; each successive layer is pushed by offset*i.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_indices: { type: 'array', items: { type: 'number' }, description: '1-based indices of the layers to stagger (at least 2), in any order — they are sorted by comp index.' },
+            layer_ids: { type: 'array', items: { type: 'number' }, description: 'Optional persistent ids, parallel to layer_indices; when present each id takes precedence over the index at the same position.' },
+            offset: { type: 'number', description: 'Time offset between consecutive layers.' },
+            unit: { type: 'string', enum: ['seconds', 'frames'], description: 'Unit for offset (default seconds).' },
+            direction: { type: 'string', enum: ['forward', 'reverse'], description: 'forward = top layer first (default); reverse = bottom layer first.' },
+            mode: { type: 'string', enum: ['inPoint', 'startTime', 'keyframes'], description: 'inPoint (default) aligns then staggers layer in-points; startTime shifts layer start times; keyframes shifts every keyframe on each layer.' }
+          },
+          required: ['layer_indices', 'offset']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'randomize_property',
+        description: 'Give each of several layers a random value on one transform property — for organic variation (scatter positions, jitter rotations, vary scales). Multi-dimensional properties get an independent random per axis unless per-axis ranges are given; scale is uniform by default.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_indices: { type: 'array', items: { type: 'number' }, description: '1-based indices of the layers to randomize.' },
+            layer_ids: { type: 'array', items: { type: 'number' }, description: 'Optional persistent ids, parallel to layer_indices.' },
+            property_path: { type: 'string', description: 'Property to randomize, e.g. "Transform>Rotation", "Transform>Position", "Transform>Scale", "Transform>Opacity".' },
+            min: { type: 'number', description: 'Minimum random value (default 0).' },
+            max: { type: 'number', description: 'Maximum random value (default 100).' },
+            mode: { type: 'string', enum: ['absolute', 'offset'], description: 'absolute (default) sets the value; offset adds the random amount to the current value.' },
+            min_x: { type: 'number', description: 'Per-axis override (X) for multi-dim properties.' },
+            max_x: { type: 'number', description: 'Per-axis override (X).' },
+            min_y: { type: 'number', description: 'Per-axis override (Y).' },
+            max_y: { type: 'number', description: 'Per-axis override (Y).' },
+            uniform: { type: 'boolean', description: 'Scale only: when true (default) X and Y get the same random; false randomizes axes independently.' }
+          },
+          required: ['layer_indices', 'property_path']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'move_anchor_point',
+        description: 'Move a layer\'s anchor point to a named position on its content bounds (center, corners, edges) WITHOUT the layer jumping — the position is compensated by the anchor delta (scaled), and keyframed anchor/position tracks are offset too. Fixes the classic "anchor moved, layer flew off" problem before adding scale/rotation.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID' },
+            position: { type: 'string', enum: ['center', 'top-left', 'top', 'top-right', 'left', 'right', 'bottom-left', 'bottom', 'bottom-right'], description: 'Target anchor position on the layer\'s content bounds.' }
+          },
+          required: ['position']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
         name: 'set_keyframes_batch',
         description: 'Add keyframes to MULTIPLE properties/layers in ONE host call. Preferred over repeated add_keyframes whenever you animate 2+ properties (e.g. Position + Opacity, or several layers). All edits share one undo group. Returns per-target ok/error details — on partial failure, fix and re-send only the failed targets.',
         parameters: {

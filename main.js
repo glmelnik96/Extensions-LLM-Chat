@@ -207,7 +207,7 @@
   // ── Render: welcome hint (empty session) ──────────────────────────────
   var WELCOME_CAPABILITIES = [
     'Выражения — написать, починить, объяснить; линковка свойств (pick-whip); библиотека из 28 проверенных сниппетов',
-    'Анимация — кейфреймы с изингом, batch-операции по нескольким свойствам',
+    'Анимация — кейфреймы с изингом, batch-операции; копирование изинга, реверс кейфреймов, каскад слоёв (stagger), рандомизация свойств',
     'Слои и контент — шейпы, текст, маски, solid/null/adjustment, порядок и парентинг',
     'Эффекты — поиск установленных, добавление с переименованием, настройка параметров',
     '3D — камера, свет, глубина, depth of field',
@@ -218,7 +218,11 @@
     'Сделай счётчик от 0 до 100 за 2 секунды с easing',
     'Привяжи Opacity текста к Scale шейп-слоя',
     'Добавь wiggle к позиции выделенного слоя и объясни параметры',
-    'Текст появляется слева с fade-in и overshoot'
+    'Текст появляется слева с fade-in и overshoot',
+    'Скопируй изинг с первого слоя на остальные выделенные',
+    'Сделай каскад: выдели слои и запусти их появление со сдвигом в 3 кадра',
+    'Поставь якорь выделенного слоя в центр без сдвига картинки',
+    'Немного разбросай поворот выделенных слоёв в пределах ±15°'
   ]
 
   function renderWelcomeHint () {
@@ -825,6 +829,26 @@
       if (lastChar === ';' && /\bvar\s+\w+\s*=[^;]+;\s*$/.test(trimmed)) {
         warnings.push('WARN: Expression ends with a `var` declaration — AE expression must evaluate to a value. Add the final value on its own line (e.g. last line: `myVar`).')
       }
+    }
+
+    // 11. Backtick / template-literal syntax — the AE expression engine is ES3.
+    if (exprText.indexOf('`') >= 0) {
+      warnings.push('WARN: Backtick/template-literal syntax is not supported — the AE expression engine is ES3. Build strings with `+` concatenation and double quotes.')
+    }
+
+    // 12. setValue()/setValueAtTime() are ExtendScript (scripting) methods, not
+    //     valid inside an expression. An expression must END with the value it returns.
+    if (/\.setValue(AtTime)?\s*\(/.test(exprText)) {
+      warnings.push('WARN: setValue()/setValueAtTime() are scripting methods, not valid inside an expression. An expression must end with the value it returns — remove setValue and just return the computed value.')
+    }
+
+    // 13. Unclamped manual progress: `(time - t0) / dur` goes below 0 / above 1
+    //     outside the window, so the property over/undershoots. Skip when the
+    //     expression already guards the range (clamp/linear/ease/Math.min/max),
+    //     loops (%/loopOut), or is string work (substr/split/sourceText).
+    var _hasGuard = /clamp\s*\(|linear\s*\(|\bease(In|Out)?\s*\(|substr|Math\.(min|max)|%|sourceText|split\s*\(|loopOut|loopIn|[<>]=?\s*[01]\s*\?/.test(exprText)
+    if (!_hasGuard && /\(\s*time\b[^)]*\)\s*\/\s*[\w.()\-\s]+/.test(exprText)) {
+      warnings.push('WARN: Manual progress like `(time - t0) / dur` is not clamped — before/after the window it drops below 0 / rises above 1 and the property over/undershoots. Wrap the ratio in `clamp(..., 0, 1)` or use `linear(time, t0, t1, from, to)`, which clamps automatically.')
     }
 
     return warnings
