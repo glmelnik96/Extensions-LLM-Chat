@@ -24,7 +24,7 @@ AI-агент принимает запросы на естественном я
 | Слои | create, delete, duplicate, reorder, parent, timing, rename, 3D toggle, set_blend_mode |
 | Shape content | rectangle, ellipse, custom path (с fill и stroke; результат возвращает готовые property paths) |
 | Анимация | keyframes (add/delete/easing/batch), свойства, expressions (single + batch) |
-| Выражения | search_expression_library (28 проверенных сниппетов), link_properties (pick-whip между свойствами) |
+| Выражения | search_expression_library (54 проверенных сниппетов), link_properties (pick-whip между свойствами) |
 | Эффекты | list_available_effects (поиск по установленным), add (с переименованием), remove, set property |
 | 3D / камера / свет | camera properties, light properties |
 | Маски | add mask, set properties, get mask info, create_shapes_from_text |

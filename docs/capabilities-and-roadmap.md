@@ -57,7 +57,7 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 | `set_property_value` | Set a static value on any property |
 | `apply_expression` | Apply an AE expression to any expressable property. Returns expression errors for agent self-correction + evaluated value readback. |
 | `apply_expression_batch` | Apply expressions to multiple layer properties in one tool call with per-target success/error details. |
-| `search_expression_library` | Search 28 curated expression snippets (`lib/pure/expressionLibrary.js`) — panel-local, no LLM round-trip |
+| `search_expression_library` | Search 54 curated expression snippets (`lib/pure/expressionLibrary.js`) — panel-local, no LLM round-trip |
 | `link_properties` | Pick-whip: link a property to another via auto-generated expression (with optional remap range) |
 
 #### Effects
