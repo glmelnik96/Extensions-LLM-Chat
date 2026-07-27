@@ -65,6 +65,39 @@ body {
   margin-bottom: 6px;
 }
 
+/* ── Chat switcher (multi-chat) ──────────────────────────────────────── */
+
+.session-bar {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  margin-bottom: 6px;
+}
+
+.session-select {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 6px;
+  font-size: 11px;
+  color: var(--text);
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  outline: none;
+  cursor: pointer;
+}
+
+.session-select:focus {
+  border-color: var(--accent-border);
+}
+
+.session-btn {
+  padding: 2px 7px;
+  font-size: 11px;
+  line-height: 1.4;
+  flex: 0 0 auto;
+}
+
 .chat-content {
   display: flex;
   flex-direction: column;
@@ -145,6 +178,36 @@ body {
 .chat-message .msg-text {
   white-space: pre-wrap;
   word-break: break-word;
+}
+
+/* Per-message actions (copy / retry) — quiet until the message is hovered */
+.msg-actions {
+  display: flex;
+  gap: 6px;
+  margin-top: 3px;
+  opacity: 0;
+  transition: opacity 0.12s;
+}
+
+.chat-message:hover .msg-actions { opacity: 1; }
+
+.msg-action-btn {
+  padding: 0 5px;
+  font-size: 9px;
+  line-height: 1.6;
+  text-transform: uppercase;
+  letter-spacing: 0.4px;
+  color: var(--text-faint);
+  background: none;
+  border: 1px solid var(--border-subtle);
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+}
+
+.msg-action-btn:hover {
+  color: var(--text);
+  border-color: var(--border);
+  background-color: var(--surface);
 }
 
 /* Allow HTML rendered markdown in assistant messages */
@@ -668,6 +731,13 @@ body {
   background: var(--accent-bg);
   color: var(--text);
   border-color: var(--accent-border);
+}
+
+/* Management buttons (+ / reset) — visually quieter than action buttons */
+.quick-action-manage {
+  color: var(--text-faint);
+  border-style: dashed;
+  padding: 2px 7px;
 }
 
 /* ── Streaming preview ───────────────────────────────────────────────── */

@@ -294,7 +294,13 @@
     list_project_items: 1,
     capture_comp_frame: 1,
     search_expression_library: 1,
-    list_available_effects: 1
+    list_available_effects: 1,
+    // Panel-local user-library tools: mutate localStorage only — no AE undo
+    // group, so they must not count toward the Undo button, and they are
+    // synchronous JS (no parallelism race).
+    save_user_expression: 1,
+    list_user_expressions: 1,
+    delete_user_expression: 1
   }
 
   /**

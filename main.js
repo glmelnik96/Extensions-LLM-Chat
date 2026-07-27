@@ -26,6 +26,9 @@
   // ── Constants ──────────────────────────────────────────────────────────
   var STORAGE_KEY = 'ae-motion-agent-state'
   var VISION_CHECK_KEY = 'ae-motion-agent-vision-check'
+  var DRAFT_KEY = 'ae-motion-agent-draft'
+  var PENDING_RUN_KEY = 'ae-motion-agent-pending-run'
+  var QUICK_ACTIONS_KEY = 'ae-motion-agent-quick-actions'
 
   // User-selectable models (panel selector). Each entry tuned from the live
   // 8-model × 4-task benchmark (2026-06-18, real AE, Russian prompts):
@@ -74,11 +77,19 @@
 
   // ── State ──────────────────────────────────────────────────────────────
   var state = {
-    session: null,           // single session object
+    sessions: [],            // all chat sessions (multi-chat, 2026-07-27)
+    activeSessionId: null,   // id of the session shown in the transcript
     isRequestInFlight: false,
     currentAbortHandle: null,
     lastMutatingToolCount: 0,
     lastModelStatus: { status: 'unknown', label: 'model: unknown' }
+  }
+
+  function getActiveSession () {
+    for (var i = 0; i < state.sessions.length; i++) {
+      if (state.sessions[i].id === state.activeSessionId) return state.sessions[i]
+    }
+    return null
   }
 
   // ── DOM refs ───────────────────────────────────────────────────────────
@@ -98,6 +109,10 @@
     els.statusText = document.getElementById('status-text')
     els.modelStatus = document.getElementById('model-status')
     els.modelSelector = document.getElementById('model-selector')
+    els.sessionSelect = document.getElementById('session-select')
+    els.sessionNewBtn = document.getElementById('session-new-btn')
+    els.sessionRenameBtn = document.getElementById('session-rename-btn')
+    els.sessionDeleteBtn = document.getElementById('session-delete-btn')
     els.visionCheckToggle = document.getElementById('vision-check-toggle')
     els.contextMeter = document.getElementById('context-meter')
     els.contextMeterFill = document.getElementById('context-meter-fill')
@@ -129,37 +144,25 @@
   }
 
   function buildPersistData () {
-    return {
-      session: state.session ? {
-        id: state.session.id,
-        title: state.session.title,
-        createdAt: state.session.createdAt,
-        updatedAt: state.session.updatedAt,
-        model: state.session.model,
-        totalTokens: state.session.totalTokens || 0,
-        promptTokens: state.session.promptTokens || 0,
-        completionTokens: state.session.completionTokens || 0,
-        costRub: state.session.costRub || 0,
-        messages: state.session.messages
-      } : null
-    }
+    return window.PURE_SESSION_STORE.serializeForPersist(state.sessions, state.activeSessionId)
   }
 
   function persistState () {
+    var active = getActiveSession()
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(buildPersistData()))
       return
     } catch (e) {
-      if (!isQuotaError(e) || !state.session || !state.session.messages || state.session.messages.length <= 2) {
+      if (!isQuotaError(e) || !active || !active.messages || active.messages.length <= 2) {
         console.warn('persistState error:', e)
         return
       }
     }
-    // Quota exceeded: drop the oldest half of the messages (keeping the most
-    // recent context) and retry once so the session isn't silently lost.
-    var msgs = state.session.messages
+    // Quota exceeded: drop the oldest half of the ACTIVE session's messages
+    // (keeping the most recent context) and retry once so it isn't lost.
+    var msgs = active.messages
     var dropCount = Math.floor(msgs.length / 2)
-    state.session.messages = msgs.slice(dropCount)
+    active.messages = msgs.slice(dropCount)
     try {
       localStorage.setItem(STORAGE_KEY, JSON.stringify(buildPersistData()))
       setStatus('Session storage full — dropped ' + dropCount + ' oldest message(s) to save.')
@@ -169,39 +172,296 @@
     }
   }
 
+  // ── Input draft autosave ───────────────────────────────────────────────
+  // A half-typed prompt survives panel reloads (AE restart, panel re-dock,
+  // update). Cleared on successful send.
+  var draftTimer = null
+  function saveDraft () {
+    if (draftTimer) clearTimeout(draftTimer)
+    draftTimer = setTimeout(function () {
+      draftTimer = null
+      try {
+        var v = els.userInput ? els.userInput.value : ''
+        if (v) localStorage.setItem(DRAFT_KEY, v)
+        else localStorage.removeItem(DRAFT_KEY)
+      } catch (_) {}
+    }, 300)
+  }
+
+  function clearDraft () {
+    if (draftTimer) { clearTimeout(draftTimer); draftTimer = null }
+    try { localStorage.removeItem(DRAFT_KEY) } catch (_) {}
+  }
+
+  function restoreDraft () {
+    try {
+      var v = localStorage.getItem(DRAFT_KEY)
+      if (v && els.userInput && !els.userInput.value) {
+        els.userInput.value = v
+        els.userInput.style.height = 'auto'
+        els.userInput.style.height = Math.min(els.userInput.scrollHeight, 120) + 'px'
+      }
+    } catch (_) {}
+  }
+
+  // ── Mid-run persist (crash safety) ─────────────────────────────────────
+  // The final assistant message is only persisted when the run FINISHES; if
+  // AE/the panel dies mid-run, every executed tool call would vanish from the
+  // transcript while the changes stay in the project — the model would then
+  // reason from false state. Each completed step snapshots the partial tool
+  // log to a side key; on boot it is folded back into the session.
+  function savePendingRun (sessionId, runLog) {
+    try {
+      localStorage.setItem(PENDING_RUN_KEY, JSON.stringify({
+        sessionId: sessionId,
+        savedAt: Date.now(),
+        toolCalls: serializeToolCalls(runLog)
+      }))
+    } catch (_) {}
+  }
+
+  function clearPendingRun () {
+    try { localStorage.removeItem(PENDING_RUN_KEY) } catch (_) {}
+  }
+
+  function recoverPendingRun () {
+    var pending = null
+    try { pending = JSON.parse(localStorage.getItem(PENDING_RUN_KEY)) } catch (_) {}
+    clearPendingRun()
+    if (!pending || !pending.sessionId || !pending.toolCalls || pending.toolCalls.length === 0) return
+    var session = null
+    for (var i = 0; i < state.sessions.length; i++) {
+      if (state.sessions[i].id === pending.sessionId) { session = state.sessions[i]; break }
+    }
+    if (!session) return
+    // If the session was updated AFTER the last step snapshot, the run
+    // finished normally and its result is already in the transcript.
+    if ((session.updatedAt || 0) >= (pending.savedAt || 0)) return
+    session.messages.push({ role: 'assistant', text: '', toolCalls: pending.toolCalls })
+    session.messages.push({
+      role: 'system',
+      text: '\u26A0 Panel was reloaded mid-run. ' + pending.toolCalls.length +
+        ' completed tool call(s) were recovered above \u2014 the project may already contain their changes.'
+    })
+    session.updatedAt = Date.now()
+    persistState()
+  }
+
   function loadState () {
     try {
       var raw = localStorage.getItem(STORAGE_KEY)
       if (!raw) return
       var data = JSON.parse(raw)
-      if (data.session) {
-        state.session = data.session
-        state.session.model = normalizeModelId(state.session.model)
+      // Handles both the current { sessions, activeSessionId } shape and the
+      // legacy single-session { session } shape (pre multi-chat upgrade).
+      var store = window.PURE_SESSION_STORE.migratePersisted(data)
+      state.sessions = store.sessions
+      state.activeSessionId = store.activeSessionId
+      for (var i = 0; i < state.sessions.length; i++) {
+        state.sessions[i].model = normalizeModelId(state.sessions[i].model)
       }
     } catch (e) {
       console.warn('loadState error:', e)
     }
   }
 
-  // ── Session management (single session) ────────────────────────────────
+  // ── Session management (multi-chat) ────────────────────────────────────
   function ensureSession () {
-    if (state.session) return state.session
-    var id = 'session_' + Date.now() + '_' + Math.random().toString(36).substr(2, 6)
-    state.session = {
-      id: id,
-      title: 'Session',
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-      model: DEFAULT_MODEL,
-      totalTokens: 0,
-      promptTokens: 0,
-      completionTokens: 0,
-      costRub: 0,
-      messages: []
-    }
+    var active = getActiveSession()
+    if (active) return active
+    // Inherit the model from the previously active chat so a new chat doesn't
+    // silently reset the user's model choice.
+    var prev = state.sessions.length > 0 ? state.sessions[state.sessions.length - 1] : null
+    var session = window.PURE_SESSION_STORE.createSession(
+      prev ? normalizeModelId(prev.model) : DEFAULT_MODEL, state.sessions)
+    state.sessions.push(session)
+    state.activeSessionId = session.id
     persistState()
     renderTranscript()
-    return state.session
+    renderSessionBar()
+    return session
+  }
+
+  // Switch chats. Blocked mid-request for the same reason as model switching:
+  // the running agent loop writes into the session it started with.
+  function switchSession (id) {
+    if (id === state.activeSessionId) return
+    if (state.isRequestInFlight) {
+      setStatus('Finish or stop the current request before switching chats.')
+      renderSessionBar()
+      return
+    }
+    for (var i = 0; i < state.sessions.length; i++) {
+      if (state.sessions[i].id !== id) continue
+      state.activeSessionId = id
+      // Same client_op_id values may repeat across chats — a stale cached
+      // host result from another chat must never be replayed here.
+      if (window.HOST_BRIDGE && typeof window.HOST_BRIDGE.clearIdempotencyCache === 'function') {
+        try { window.HOST_BRIDGE.clearIdempotencyCache() } catch (_) {}
+      }
+      persistState()
+      renderTranscript()
+      renderModelSelector()
+      renderSessionBar()
+      setStatus('Chat: ' + state.sessions[i].title)
+      return
+    }
+    renderSessionBar()
+  }
+
+  function handleNewSession () {
+    if (state.isRequestInFlight) {
+      setStatus('Finish or stop the current request before creating a chat.')
+      return
+    }
+    state.activeSessionId = null
+    var session = ensureSession()
+    renderModelSelector()
+    setStatus('New chat: ' + session.title)
+  }
+
+  function handleRenameSession () {
+    var session = getActiveSession()
+    if (!session) return
+    var next = prompt('Chat name:', session.title)
+    if (next === null) return
+    next = next.replace(/^\s+|\s+$/g, '')
+    if (!next || next === session.title) return
+    session.title = next.slice(0, 60)
+    session.updatedAt = Date.now()
+    persistState()
+    renderSessionBar()
+    setStatus('Chat renamed: ' + session.title)
+  }
+
+  function handleDeleteSession () {
+    var session = getActiveSession()
+    if (!session) return
+    if (state.isRequestInFlight) {
+      setStatus('Finish or stop the current request before deleting a chat.')
+      return
+    }
+    if (!confirm('Delete chat "' + session.title + '" and all its messages? This cannot be undone.')) return
+    var next = []
+    for (var i = 0; i < state.sessions.length; i++) {
+      if (state.sessions[i].id !== session.id) next.push(state.sessions[i])
+    }
+    state.sessions = next
+    state.activeSessionId = next.length > 0 ? next[next.length - 1].id : null
+    if (window.HOST_BRIDGE && typeof window.HOST_BRIDGE.clearIdempotencyCache === 'function') {
+      try { window.HOST_BRIDGE.clearIdempotencyCache() } catch (_) {}
+    }
+    ensureSession() // recreate if the last chat was deleted
+    persistState()
+    renderTranscript()
+    renderModelSelector()
+    renderSessionBar()
+    setStatus('Chat deleted')
+  }
+
+  // Render the chat switcher <select> in the header.
+  function renderSessionBar () {
+    if (!els.sessionSelect) return
+    els.sessionSelect.innerHTML = ''
+    for (var i = 0; i < state.sessions.length; i++) {
+      var s = state.sessions[i]
+      var opt = document.createElement('option')
+      opt.value = s.id
+      opt.textContent = s.title
+      if (s.id === state.activeSessionId) opt.selected = true
+      els.sessionSelect.appendChild(opt)
+    }
+    var only = state.sessions.length <= 1
+    if (els.sessionDeleteBtn) els.sessionDeleteBtn.title = only
+      ? 'Delete this chat (a fresh one is created)'
+      : 'Delete this chat'
+  }
+
+  // ── Quick actions (user-editable) ──────────────────────────────────────
+  // Left-click sends the prompt; right-click edits or deletes the button;
+  // "+" adds a new one; "⟲" resets to the shipped defaults. The full list
+  // persists in localStorage — absent/invalid state falls back to defaults.
+  function getQuickActions () {
+    var raw = null
+    try { raw = localStorage.getItem(QUICK_ACTIONS_KEY) } catch (_) {}
+    return window.PURE_QUICK_ACTIONS.loadActions(raw)
+  }
+
+  function saveQuickActions (actions) {
+    try { localStorage.setItem(QUICK_ACTIONS_KEY, window.PURE_QUICK_ACTIONS.serialize(actions)) } catch (_) {}
+  }
+
+  function renderQuickActions () {
+    var box = document.getElementById('quick-actions')
+    if (!box) return
+    var actions = getQuickActions()
+    box.innerHTML = ''
+    for (var i = 0; i < actions.length; i++) {
+      var a = actions[i]
+      var btn = document.createElement('button')
+      btn.className = 'quick-action-btn'
+      btn.textContent = a.label
+      btn.title = (a.title || a.prompt) + '\n(right-click to edit or delete)'
+      btn.setAttribute('data-prompt', a.prompt)
+      btn.setAttribute('data-qa-id', a.id)
+      box.appendChild(btn)
+    }
+    var addBtn = document.createElement('button')
+    addBtn.className = 'quick-action-btn quick-action-manage'
+    addBtn.id = 'quick-action-add'
+    addBtn.textContent = '+'
+    addBtn.title = 'Add a custom quick action'
+    box.appendChild(addBtn)
+    var resetBtn = document.createElement('button')
+    resetBtn.className = 'quick-action-btn quick-action-manage'
+    resetBtn.id = 'quick-action-reset'
+    resetBtn.textContent = '\u27F2'
+    resetBtn.title = 'Reset quick actions to defaults'
+    box.appendChild(resetBtn)
+  }
+
+  function handleQuickActionAdd () {
+    var label = prompt('Button label (up to 24 chars):', '')
+    if (label === null) return
+    var promptText = prompt('Prompt the button sends to the agent:', '')
+    if (promptText === null) return
+    var next = window.PURE_QUICK_ACTIONS.addAction(getQuickActions(), label, promptText)
+    if (!next) { setStatus('Quick action needs both a label and a prompt.'); return }
+    saveQuickActions(next)
+    renderQuickActions()
+    setStatus('Quick action added')
+  }
+
+  function handleQuickActionEdit (id) {
+    var actions = getQuickActions()
+    var current = null
+    for (var i = 0; i < actions.length; i++) if (actions[i].id === id) current = actions[i]
+    if (!current) return
+    var choice = prompt('Edit "' + current.label + '":\n1 = change label/prompt, 2 = delete\n(Enter 1 or 2)', '1')
+    if (choice === null) return
+    if (choice.replace(/\s/g, '') === '2') {
+      if (!confirm('Delete quick action "' + current.label + '"?')) return
+      saveQuickActions(window.PURE_QUICK_ACTIONS.removeAction(actions, id))
+      renderQuickActions()
+      setStatus('Quick action deleted')
+      return
+    }
+    var label = prompt('Button label:', current.label)
+    if (label === null) return
+    var promptText = prompt('Prompt:', current.prompt)
+    if (promptText === null) return
+    var next = window.PURE_QUICK_ACTIONS.updateAction(actions, id, label, promptText)
+    if (!next) { setStatus('Quick action needs both a label and a prompt.'); return }
+    saveQuickActions(next)
+    renderQuickActions()
+    setStatus('Quick action updated')
+  }
+
+  function handleQuickActionReset () {
+    if (!confirm('Reset quick actions to the default set? Your custom buttons will be removed.')) return
+    try { localStorage.removeItem(QUICK_ACTIONS_KEY) } catch (_) {}
+    renderQuickActions()
+    setStatus('Quick actions reset to defaults')
   }
 
   // ── Render: welcome hint (empty session) ──────────────────────────────
@@ -280,12 +540,72 @@
     return box
   }
 
+  // ── Message actions (copy / retry) ─────────────────────────────────────
+  function copyTextToClipboard (text) {
+    if (navigator.clipboard && navigator.clipboard.writeText) {
+      return navigator.clipboard.writeText(text)
+        .then(function () { return true })
+        .catch(function () { return copyViaExec(text) })
+    }
+    return Promise.resolve(copyViaExec(text))
+  }
+
+  function copyViaExec (text) {
+    try {
+      var ta = document.createElement('textarea')
+      ta.value = text
+      ta.style.cssText = 'position:fixed;left:-9999px;top:0'
+      document.body.appendChild(ta)
+      ta.select()
+      var ok = document.execCommand('copy')
+      document.body.removeChild(ta)
+      return ok
+    } catch (_) { return false }
+  }
+
+  function makeMsgActionBtn (label, title, onClick) {
+    var btn = document.createElement('button')
+    btn.type = 'button'
+    btn.className = 'msg-action-btn'
+    btn.textContent = label
+    btn.title = title
+    btn.addEventListener('click', onClick)
+    return btn
+  }
+
+  function appendMsgActions (div, msg, isUser) {
+    var text = msg.text || ''
+    if (!text) return
+    var row = document.createElement('div')
+    row.className = 'msg-actions'
+    row.appendChild(makeMsgActionBtn('copy', 'Copy message text', function () {
+      var self = this
+      copyTextToClipboard(text).then(function (ok) {
+        self.textContent = ok ? 'copied' : 'failed'
+        setTimeout(function () { self.textContent = 'copy' }, 1200)
+      })
+    }))
+    if (isUser) {
+      row.appendChild(makeMsgActionBtn('retry', 'Send this message again', function () {
+        if (state.isRequestInFlight) {
+          setStatus('Finish or stop the current request before retrying.')
+          return
+        }
+        if (els.userInput) {
+          els.userInput.value = text
+          handleSend()
+        }
+      }))
+    }
+    div.appendChild(row)
+  }
+
   // ── Render: chat transcript ────────────────────────────────────────────
   function renderTranscript () {
     if (!els.chatTranscript) return
     updateContextMeter()
     els.chatTranscript.innerHTML = ''
-    var session = state.session
+    var session = getActiveSession()
     if (!session || session.messages.length === 0) {
       els.chatTranscript.appendChild(renderWelcomeHint())
       return
@@ -305,6 +625,7 @@
         textDiv.className = 'msg-text'
         textDiv.textContent = msg.text
         div.appendChild(textDiv)
+        appendMsgActions(div, msg, true)
 
       } else if (msg.role === 'assistant') {
         div.className = 'chat-message assistant'
@@ -330,6 +651,7 @@
           textDiv2.innerHTML = renderMarkdown(msg.text)
           div.appendChild(textDiv2)
         }
+        appendMsgActions(div, msg, false)
 
       } else if (msg.role === 'system') {
         div.className = 'chat-message system'
@@ -602,8 +924,9 @@
   // the fix for "growing context silently makes edits expensive/error-prone":
   // the user can watch it fill and compact on demand before it costs them.
   function estimateSessionContextTokens () {
-    if (!state.session || !window.PURE_PRUNE) return 0
-    var msgs = state.session.messages || []
+    var session = getActiveSession()
+    if (!session || !window.PURE_PRUNE) return 0
+    var msgs = session.messages || []
     var est = []
     for (var i = 0; i < msgs.length; i++) {
       var m = msgs[i]
@@ -651,7 +974,8 @@
   // Render the selectable model buttons and highlight the active one.
   function renderModelSelector () {
     if (!els.modelSelector) return
-    var active = normalizeModelId(state.session ? state.session.model : DEFAULT_MODEL)
+    var session = getActiveSession()
+    var active = normalizeModelId(session ? session.model : DEFAULT_MODEL)
     els.modelSelector.innerHTML = ''
     for (var i = 0; i < AVAILABLE_MODELS.length; i++) {
       var m = AVAILABLE_MODELS[i]
@@ -1201,7 +1525,17 @@
     // Push user message.
     session.messages.push({ role: 'user', text: text })
     session.updatedAt = Date.now()
+    // Auto-title: a chat still carrying its default name takes its title from
+    // the first message, so the switcher shows what each chat is about.
+    if (session.messages.length === 1 && window.PURE_SESSION_STORE.isDefaultTitle(session.title)) {
+      var autoTitle = window.PURE_SESSION_STORE.titleFromFirstMessage(text)
+      if (autoTitle) {
+        session.title = autoTitle
+        renderSessionBar()
+      }
+    }
     els.userInput.value = ''
+    clearDraft()
     renderTranscript()
     persistState()
 
@@ -1292,6 +1626,8 @@
     }
     if (kbContext) systemPrompt += '\n\n## Expression Reference (from documentation)\n\n' + kbContext
 
+    var runLog = [] // accumulated tool-call log for mid-run crash persistence
+
     window.AGENT_TOOL_LOOP.runAgentLoop({
       modelId: session.model,
       systemPrompt: systemPrompt,
@@ -1313,6 +1649,7 @@
         updateThinkingReasoning(chunk)
       },
       onToolCall: function (tc) {
+        runLog.push(tc) // live reference — result/status fill in as it runs
         updateThinkingWithToolCall(tc)
       },
       onStepStart: function (stepIdx) {
@@ -1324,6 +1661,7 @@
       },
       onStepComplete: function (stepIdx, results) {
         setStatus('Step ' + (stepIdx + 1) + '/' + maxSteps + ' (' + results.length + ' tool calls)')
+        savePendingRun(session.id, runLog)
       }
     }).then(function (result) {
       removeThinking()
@@ -1372,6 +1710,7 @@
       setStatus('Ready' + usageNote)
       renderTranscript()
       persistState()
+      clearPendingRun()
 
       // ── Vision check (post-agent) ──────────────────────────────────
       // Trigger only when: toggle enabled, run succeeded, mutating calls > 0.
@@ -1417,6 +1756,7 @@
       setStatus('Error')
       renderTranscript()
       persistState()
+      clearPendingRun() // partial log is now in the transcript (see above)
     }).then(function () {
       state.isRequestInFlight = false
       state.currentAbortHandle = null
@@ -1456,10 +1796,11 @@
 
   // ── Session actions ────────────────────────────────────────────────────
   function handleClearSession () {
-    if (!state.session) return
+    var session = getActiveSession()
+    if (!session) return
     if (!confirm('Clear all messages? This cannot be undone.')) return
-    state.session.messages = []
-    state.session.updatedAt = Date.now()
+    session.messages = []
+    session.updatedAt = Date.now()
     // Drop any idempotency keys cached by hostBridge so a fresh session
     // starting with the same client_op_id values doesn't return stale
     // host results from the previous run.
@@ -1477,8 +1818,9 @@
   // model re-reads every turn is collapsed. This is the on-demand version of the
   // automatic pruning, giving the user direct control over cost.
   function handleCompactContext () {
-    if (!state.session || state.isRequestInFlight) return
-    var msgs = state.session.messages || []
+    var session = getActiveSession()
+    if (!session || state.isRequestInFlight) return
+    var msgs = session.messages || []
     var PROTECT = (window.PURE_PRUNE && window.PURE_PRUNE.PROTECT_RECENT) || 20
     var CAP = (window.PURE_PRUNE && window.PURE_PRUNE.TOOL_RESULT_CAP) || 400
     var before = estimateSessionContextTokens()
@@ -1538,7 +1880,8 @@
       var outPath = path.join(outDir, filename)
       var data = {
         exportedAt: new Date().toISOString(),
-        session: state.session
+        activeSessionId: state.activeSessionId,
+        sessions: state.sessions
       }
       fs.writeFileSync(outPath, JSON.stringify(data, null, 2), 'utf8')
       setStatus('Exported to ~/Desktop/' + filename)
@@ -1559,8 +1902,7 @@
       var outPath = path.join(outDir, filename)
 
       var errorEntries = []
-      // Work with single session (wrap in array for consistent logic)
-      var sessions = state.session ? [state.session] : []
+      var sessions = state.sessions
       for (var si = 0; si < sessions.length; si++) {
         var session = sessions[si]
         var msgs = session.messages || []
@@ -1775,12 +2117,13 @@
       alert('Chat provider not available.')
       return
     }
-    if (!state.session || !state.session.messages || state.session.messages.length === 0) {
+    var activeSession = getActiveSession()
+    if (!activeSession || !activeSession.messages || activeSession.messages.length === 0) {
       alert('No session data to analyze.')
       return
     }
 
-    var allText = serializeSessionForReport(state.session) + '\n\n'
+    var allText = serializeSessionForReport(activeSession) + '\n\n'
 
     if (allText.trim().length < 50) {
       alert('Session is empty, nothing to analyze.')
@@ -1794,7 +2137,7 @@
     if (els.reportBtn) els.reportBtn.disabled = true
 
     // Show progress in chat
-    var session = state.session
+    var session = activeSession
     session.messages.push({ role: 'system', text: '\uD83D\uDCCA Report: analyzing ' + totalChunks + ' chunk(s)...' })
     renderTranscript()
 
@@ -1874,7 +2217,7 @@
         var rawPath = path.join(outDir, rawFilename)
         var rawData = {
           exportedAt: new Date().toISOString(),
-          session: state.session
+          session: session
         }
         fs.writeFileSync(rawPath, JSON.stringify(rawData, null, 2), 'utf8')
 
@@ -1931,6 +2274,16 @@
     if (els.undoBtn) els.undoBtn.addEventListener('click', handleUndo)
     if (els.contextMeter) els.contextMeter.addEventListener('click', handleCompactContext)
 
+    // Chat switcher
+    if (els.sessionSelect) {
+      els.sessionSelect.addEventListener('change', function () {
+        switchSession(this.value)
+      })
+    }
+    if (els.sessionNewBtn) els.sessionNewBtn.addEventListener('click', handleNewSession)
+    if (els.sessionRenameBtn) els.sessionRenameBtn.addEventListener('click', handleRenameSession)
+    if (els.sessionDeleteBtn) els.sessionDeleteBtn.addEventListener('click', handleDeleteSession)
+
     // Model selector (event delegation — buttons are re-rendered on switch).
     if (els.modelSelector) {
       els.modelSelector.addEventListener('click', function (e) {
@@ -1964,24 +2317,46 @@
       els.userInput.addEventListener('input', function () {
         this.style.height = 'auto'
         this.style.height = Math.min(this.scrollHeight, 120) + 'px'
+        saveDraft()
       })
     }
 
-    // Quick actions
-    var quickBtns = document.querySelectorAll('.quick-action-btn')
-    for (var qi = 0; qi < quickBtns.length; qi++) {
-      quickBtns[qi].addEventListener('click', function () {
-        var prompt = this.getAttribute('data-prompt')
-        if (prompt && els.userInput) {
-          els.userInput.value = prompt
+    // Quick actions (event delegation — buttons are re-rendered on edit).
+    var quickBox = document.getElementById('quick-actions')
+    if (quickBox) {
+      quickBox.addEventListener('click', function (e) {
+        var btn = e.target.closest ? e.target.closest('.quick-action-btn') : null
+        if (!btn) return
+        if (btn.id === 'quick-action-add') { handleQuickActionAdd(); return }
+        if (btn.id === 'quick-action-reset') { handleQuickActionReset(); return }
+        var promptText = btn.getAttribute('data-prompt')
+        if (promptText && els.userInput) {
+          els.userInput.value = promptText
           handleSend()
         }
       })
+      quickBox.addEventListener('contextmenu', function (e) {
+        var btn = e.target.closest ? e.target.closest('.quick-action-btn') : null
+        if (!btn) return
+        var id = btn.getAttribute('data-qa-id')
+        if (!id) return
+        e.preventDefault()
+        handleQuickActionEdit(id)
+      })
     }
 
-    // Persist on page unload.
-    window.addEventListener('beforeunload', persistState)
-    window.addEventListener('pagehide', persistState)
+    // Persist on page unload (flush the draft synchronously — the debounce
+    // timer dies with the page).
+    function persistOnUnload () {
+      persistState()
+      try {
+        var v = els.userInput ? els.userInput.value : ''
+        if (v) localStorage.setItem(DRAFT_KEY, v)
+        else localStorage.removeItem(DRAFT_KEY)
+      } catch (_) {}
+    }
+    window.addEventListener('beforeunload', persistOnUnload)
+    window.addEventListener('pagehide', persistOnUnload)
     window.addEventListener('focus', function () { refreshActiveCompNote(true) })
   }
 
@@ -2026,12 +2401,15 @@
     initHostThemeSync()
     cacheDomRefs()
     loadState()
+    recoverPendingRun()
+    restoreDraft()
 
-    // Ensure single session exists
+    // Ensure at least one chat exists and render the switcher.
     ensureSession()
-    state.session.model = normalizeModelId(state.session.model)
     renderTranscript()
     renderModelSelector()
+    renderSessionBar()
+    renderQuickActions()
 
     bindEvents()
     initVisionCheckToggle()
@@ -2044,7 +2422,8 @@
     var secrets = (window.EXTENSIONS_LLM_CHAT_SECRETS) || {}
     var cfg = (window.EXTENSIONS_LLM_CHAT_CONFIG) || {}
     var apiKey = secrets.apiKey || cfg.apiKey || ''
-    var modelLabel = getModelLabel(state.session ? state.session.model : DEFAULT_MODEL)
+    var initSession = getActiveSession()
+    var modelLabel = getModelLabel(initSession ? initSession.model : DEFAULT_MODEL)
     if (apiKey) {
       setModelStatus('ok', modelLabel)
     } else {

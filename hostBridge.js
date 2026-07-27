@@ -115,6 +115,20 @@
   // (single source of truth, shared with the test harness).
   var toESLiteral = (window.PURE_ES && window.PURE_ES.toESLiteral)
 
+  // User expression library persistence (panel-local; used by the
+  // save/list/delete_user_expression tools and merged into library search).
+  function loadUserSnippets () {
+    if (!window.PURE_USER_EXPR_LIB) return []
+    try {
+      return window.PURE_USER_EXPR_LIB.loadSnippets(window.localStorage.getItem(window.PURE_USER_EXPR_LIB.STORAGE_KEY))
+    } catch (_) { return [] }
+  }
+  function saveUserSnippets (snippets) {
+    try {
+      window.localStorage.setItem(window.PURE_USER_EXPR_LIB.STORAGE_KEY, window.PURE_USER_EXPR_LIB.serialize(snippets))
+    } catch (_) { /* quota — snippet stays for this session only */ }
+  }
+
   /**
    * Validate that critical tool calls include their required arguments.
    * Returns null when args look ok, or an error string for the agent.
@@ -197,6 +211,20 @@
         }
         if (toolName === 'add_shape_path' && !(args.vertices && args.vertices.length >= 2)) {
           return 'add_shape_path: missing required `vertices` (array of at least 2 [x,y] points).'
+        }
+        return null
+      case 'set_track_matte':
+        if (!isStr(args.matte_type)) return 'set_track_matte: missing required `matte_type` (alpha, alpha_inverted, luma, luma_inverted, none).'
+        return null
+      case 'set_time_remap':
+        if (typeof args.enabled !== 'boolean') return 'set_time_remap: missing required `enabled` boolean.'
+        return null
+      case 'split_layer':
+        if (typeof args.time !== 'number') return 'split_layer: missing required `time` (seconds, strictly inside the layer span).'
+        return null
+      case 'open_comp':
+        if (typeof args.comp_id !== 'number' && !isStr(args.comp_name)) {
+          return 'open_comp: provide `comp_id` (preferred, from list_project_items) or `comp_name`.'
         }
         return null
     }
@@ -748,11 +776,61 @@
         break
 
       // Expression library — panel-local, no AE round trip.
+      // Merges the user's personal snippets (localStorage) into the search.
       case 'search_expression_library':
         if (!(window.PURE_EXPR_LIB && typeof window.PURE_EXPR_LIB.search === 'function')) {
           return Promise.resolve({ ok: false, message: 'Expression library module not loaded.' })
         }
-        return Promise.resolve(window.PURE_EXPR_LIB.search(args.query, args.max_results))
+        return Promise.resolve(window.PURE_EXPR_LIB.search(args.query, args.max_results, loadUserSnippets()))
+
+      // User expression library — panel-local CRUD over localStorage.
+      case 'save_user_expression': {
+        if (!window.PURE_USER_EXPR_LIB) {
+          return Promise.resolve({ ok: false, message: 'User expression library module not loaded.' })
+        }
+        var uxList = loadUserSnippets()
+        var uxNext = window.PURE_USER_EXPR_LIB.addSnippet(uxList, {
+          name: args.name,
+          expression: args.expression,
+          keywords: args.keywords,
+          target: args.target,
+          notes: args.notes
+        })
+        if (!uxNext) {
+          return Promise.resolve({ ok: false, message: 'save_user_expression: `name` and `expression` must be non-empty.' })
+        }
+        saveUserSnippets(uxNext)
+        var uxSaved = uxNext[uxNext.length - 1]
+        return Promise.resolve({
+          ok: true,
+          message: 'Saved "' + uxSaved.name + '" (id: ' + uxSaved.id + ') to the user expression library. It is now findable via search_expression_library. Library size: ' + uxNext.length + ' user snippet(s).',
+          id: uxSaved.id
+        })
+      }
+      case 'list_user_expressions': {
+        if (!window.PURE_USER_EXPR_LIB) {
+          return Promise.resolve({ ok: false, message: 'User expression library module not loaded.' })
+        }
+        var uxAll = loadUserSnippets()
+        return Promise.resolve({
+          ok: true,
+          message: uxAll.length > 0
+            ? (uxAll.length + ' user snippet(s) in the personal library. Delete with delete_user_expression by id.')
+            : 'The user expression library is empty. Save snippets with save_user_expression.',
+          snippets: uxAll
+        })
+      }
+      case 'delete_user_expression': {
+        if (!window.PURE_USER_EXPR_LIB) {
+          return Promise.resolve({ ok: false, message: 'User expression library module not loaded.' })
+        }
+        var uxRest = window.PURE_USER_EXPR_LIB.removeSnippet(loadUserSnippets(), args.id)
+        if (uxRest === null) {
+          return Promise.resolve({ ok: false, message: 'delete_user_expression: no snippet with id "' + args.id + '". Call list_user_expressions to see valid ids.' })
+        }
+        saveUserSnippets(uxRest)
+        return Promise.resolve({ ok: true, message: 'Deleted snippet "' + args.id + '". ' + uxRest.length + ' user snippet(s) remain.' })
+      }
 
       // Property linking
       case 'link_properties':
@@ -823,7 +901,9 @@
             width: args.width || undefined,
             height: args.height || undefined,
             duration: args.duration || undefined,
-            frameRate: args.frame_rate || undefined
+            frameRate: args.frame_rate || undefined,
+            bgColor: args.bg_color || undefined,
+            motionBlur: typeof args.motion_blur === 'boolean' ? args.motion_blur : undefined
           }) + ')'
         break
 
@@ -857,6 +937,54 @@
           toESLiteral(args.layer_index) + ',' +
           toESLiteral(args.layer_id || null) + ',' +
           toESLiteral(args.blend_mode) + ')'
+        break
+
+      // Track matte / switches / time remap / split / open comp
+      case 'set_track_matte':
+        call = 'extensionsLlmChat_setTrackMatte(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral(args.matte_type) + ',' +
+          toESLiteral(typeof args.matte_layer_index === 'number' ? args.matte_layer_index : null) + ',' +
+          toESLiteral(typeof args.matte_layer_id === 'number' ? args.matte_layer_id : null) + ')'
+        break
+
+      case 'set_layer_switches':
+        call = 'extensionsLlmChat_setLayerSwitches(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral({
+            enabled: typeof args.enabled === 'boolean' ? args.enabled : undefined,
+            motion_blur: typeof args.motion_blur === 'boolean' ? args.motion_blur : undefined,
+            adjustment: typeof args.adjustment === 'boolean' ? args.adjustment : undefined,
+            shy: typeof args.shy === 'boolean' ? args.shy : undefined,
+            solo: typeof args.solo === 'boolean' ? args.solo : undefined,
+            locked: typeof args.locked === 'boolean' ? args.locked : undefined,
+            guide: typeof args.guide === 'boolean' ? args.guide : undefined,
+            collapse_transformation: typeof args.collapse_transformation === 'boolean' ? args.collapse_transformation : undefined,
+            effects_active: typeof args.effects_active === 'boolean' ? args.effects_active : undefined,
+            audio_enabled: typeof args.audio_enabled === 'boolean' ? args.audio_enabled : undefined
+          }) + ')'
+        break
+
+      case 'set_time_remap':
+        call = 'extensionsLlmChat_setTimeRemap(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral(!!args.enabled) + ')'
+        break
+
+      case 'split_layer':
+        call = 'extensionsLlmChat_splitLayer(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral(args.time) + ')'
+        break
+
+      case 'open_comp':
+        call = 'extensionsLlmChat_openComp(' +
+          toESLiteral(typeof args.comp_id === 'number' ? args.comp_id : null) + ',' +
+          toESLiteral(args.comp_name || null) + ')'
         break
 
       default:

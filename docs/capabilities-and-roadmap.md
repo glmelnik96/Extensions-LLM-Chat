@@ -5,7 +5,7 @@
 ### Agent Tool System
 The extension works as an AI agent that can inspect, create, and modify After Effects compositions through tool calls. The LLM plans a sequence of actions, executes them one by one via ExtendScript, and reports results.
 
-**Supported tools (50):**
+**Supported tools (63):**
 
 #### Read (inspection)
 | Tool | Description |
@@ -36,6 +36,10 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 | `set_blend_mode` | Set layer blending mode |
 | `move_anchor_point` | Reposition a layer's anchor point to a named spot (center, top-left, …) with position compensation so the layer does not visually jump |
 | `stagger_layers` | Offset multiple layers in time (in-point, start time, or their keyframes) by a fixed step — forward or reverse |
+| `set_track_matte` | Set/remove alpha or luma track mattes. Any layer as matte on AE 23+ (`setTrackMatte` API), layer-above fallback on older AE |
+| `set_layer_switches` | Toggle visibility, motion blur, adjustment, shy, solo, locked, guide, collapse transformation, effects active, audio — in one call |
+| `set_time_remap` | Enable/disable time remapping; then animate the "Time Remap" property for freeze frames and speed ramps |
+| `split_layer` | Split a layer at a time into two parts (deterministic duplicate + trim, like Edit > Split Layer) |
 
 #### Shape content
 | Tool | Description |
@@ -57,7 +61,10 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 | `set_property_value` | Set a static value on any property |
 | `apply_expression` | Apply an AE expression to any expressable property. Returns expression errors for agent self-correction + evaluated value readback. |
 | `apply_expression_batch` | Apply expressions to multiple layer properties in one tool call with per-target success/error details. |
-| `search_expression_library` | Search 54 curated expression snippets (`lib/pure/expressionLibrary.js`) — panel-local, no LLM round-trip |
+| `search_expression_library` | Search 54 curated expression snippets (`lib/pure/expressionLibrary.js`) + the user's saved snippets (marked `source:"user"`) — panel-local, no LLM round-trip |
+| `save_user_expression` | Save an expression to the user's personal library (localStorage) — agent-driven, "сохрани это выражение" |
+| `list_user_expressions` | List the user's saved snippets (ids for deletion) |
+| `delete_user_expression` | Delete a saved snippet by id (explicit user request only) |
 | `link_properties` | Pick-whip: link a property to another via auto-generated expression (with optional remap range) |
 
 #### Effects
@@ -98,7 +105,8 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 |------|-------------|
 | `create_comp` | Create a new composition |
 | `precompose_layers` | Precompose selected layers |
-| `set_comp_settings` | Change comp name, dimensions, duration, frame rate |
+| `set_comp_settings` | Change comp name, dimensions, duration, frame rate, background color, comp-level motion blur switch |
+| `open_comp` | Open a comp in the viewer by id/name and make it the active comp for all tools — enables editing inside precomps |
 
 #### Text
 | Tool | Description |
@@ -112,14 +120,17 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 
 ### UI
 
-- **Single chat panel** — single session per project
+- **Multi-chat** (2026-07-27) — multiple named sessions with a header switcher (`#session-select` + new/rename/delete); default `Chat N` titles auto-replaced by the first user message; per-chat model/token/cost counters; legacy single-session storage migrates transparently (`lib/pure/sessionStore.js`)
 - Chat interface with tool-call visualization (collapsible cards showing args + results)
 - **Markdown rendering** in agent responses (headers, bold, italic, code blocks, lists, inline images)
 - **Frame preview** — `capture_comp_frame` results shown as inline images in chat
 - **No-composition warning** — system message when no active comp is detected before sending
 - **Model selector** in chat header — `Cloud.ru` badge + 3 buttons (gpt-oss-120b / MiniMax-M2.5 / GLM-4.7); selection persists per-session, switching blocked mid-request
 - **Live reasoning indicator** — model's `reasoning` stream shown as "Agent reasoning" status (never enters the chat)
-- **Quick action buttons**: Wiggle, Counter, Slide In, Bounce, Preview — one-click common operations
+- **Quick action buttons** (editable, 2026-07-27) — 16 demand-ranked defaults (`lib/pure/quickActions.js`); left-click sends, right-click edits/deletes, `+` adds custom, `⟲` resets; user list persists in localStorage
+- **Input draft autosave** (2026-07-27) — half-typed prompts survive panel reloads
+- **Mid-run crash recovery** (2026-07-27) — completed tool calls of an interrupted run are restored into the transcript with a warning note
+- **Copy/retry message buttons** (2026-07-27) — hover actions: copy on any text message, retry on user messages
 - **Streaming text preview** — agent response text appears in real-time during generation
 - **Textarea auto-resize** — input grows up to ~8 lines as you type
 - **Footer**: Undo, Clear, Export, Errors, Report
@@ -162,7 +173,7 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 
 2. **No motion path control** — cannot set spatial bezier handles on position keyframes (only temporal easing is supported). `setSpatialTangentsAtKey()` exists but is fragile.
 
-3. **Single comp context** — agent always works with the active composition. No explicit comp switching.
+3. ~~**Single comp context**~~ — resolved 2026-07-27: `open_comp` switches the active comp by id/name.
 
 4. **No graph editor control** — easing is set via speed/influence values, not visual curve editing.
 
@@ -208,6 +219,14 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 
 **Stage 3 (2026-06-10, commit `3c22313`)** — editing-assistant prompt reframe, `search_expression_library` (28 snippets), `link_properties`, `list_available_effects`, context trimming.
 
+**Compositing tools (2026-07-27)** — `set_track_matte`, `set_layer_switches`, `set_time_remap`, `split_layer`, `open_comp` (55 → 60 tools); `set_comp_settings` gained `bg_color` (fixed dead `typeof … instanceof Array` branch) + `motion_blur`; markdown renderer code-span mangling fixed (stash/restore placeholders). All five live-verified in real AE via CDP (24-step chain incl. negative cases).
+
+**Panel UX pack (2026-07-27)** — input draft autosave, mid-run crash recovery (partial tool log snapshotted per step, folded back on boot), copy/retry message buttons, editable quick actions (`lib/pure/quickActions.js`, 8 tests). All live-verified via CDP.
+
+**User expression library (2026-07-27)** — personal snippets saved via chat: `save_user_expression` / `list_user_expressions` / `delete_user_expression` (60 → 63 tools, all panel-local over localStorage, `lib/pure/userExpressionLibrary.js`, 8 tests); library search merges them in, marked `source:"user"`. Live-verified via CDP incl. a real agent run picking the save tool unprompted.
+
+**Multi-chat (2026-07-27)** — multiple named sessions: `state.sessions[]` + `activeSessionId`, header switcher with new/rename/delete, first-message auto-titles, transparent migration of the legacy single-session storage (`lib/pure/sessionStore.js`, 10 tests). Live-verified via CDP: migration, lifecycle, message+model isolation across reload, real agent run in the correct chat.
+
 **Live AE validation (2026-06-10, commit `60f2b79`)** — 7 host bugs found & fixed by driving the real panel via CDP (`scripts/cdp-eval.js`): string+Array concat in readback, control-char escaping in `resultToJson`, `add_effect` rename, `_resolveProperty` alias shadowing, `addProperty()` ref invalidation in shape tools, `reorder_layer` rewrite (no `moveTo` on Layer), `precompose_layers` layer_ids support. Details: `docs/superpowers/specs/2026-06-10-deep-audit-report.md`.
 
 ### Future Improvements (only on user request)
@@ -246,7 +265,7 @@ agentSystemPrompt.js  — Agent persona, workflow rules, expression guidance, to
 agentToolLoop.js      — LLM <> tool execution cycle with abort, streaming, expression validation
 chatProvider.js       — Cloud.ru API with retry, SSE streaming
 hostBridge.js         — Tool name -> ExtendScript mapping (single-load host script) + pre-call required-args validation
-toolRegistry.js       — 50 OpenAI-compatible tool definitions
+toolRegistry.js       — 63 OpenAI-compatible tool definitions
 host/index.jsx        — ExtendScript functions (AE operations, shapes, 3D, masks, markers, import)
 main.js               — UI, sessions, markdown, pruning, cancel, batch-undo, KB injection, quick actions
 ```

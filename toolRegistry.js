@@ -850,7 +850,7 @@
       type: 'function',
       function: {
         name: 'search_expression_library',
-        description: 'Search a curated library of battle-tested After Effects expression snippets (inertial bounce, typewriter, wiggle variants, loops, overshoot, stagger by index, auto-fade, squash & stretch, etc.). Returns ready-to-apply expression code with notes and any required controller effects. ALWAYS check here before writing a non-trivial expression from scratch.',
+        description: 'Search a curated library of battle-tested After Effects expression snippets (inertial bounce, typewriter, wiggle variants, loops, overshoot, stagger by index, auto-fade, squash & stretch, etc.) PLUS the user\'s personal saved snippets (marked source:"user"). Returns ready-to-apply expression code with notes and any required controller effects. ALWAYS check here before writing a non-trivial expression from scratch.',
         parameters: {
           type: 'object',
           properties: {
@@ -858,6 +858,50 @@
             max_results: { type: 'number', description: 'Maximum snippets to return (default 5)' }
           },
           required: ['query']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'save_user_expression',
+        description: 'Save an expression to the user\'s personal snippet library (persists in the panel, no AE call). Use when the user asks to save/remember an expression for later. Saved snippets appear in search_expression_library results marked source:"user". Include RU + EN keywords so future searches find it.',
+        parameters: {
+          type: 'object',
+          properties: {
+            name: { type: 'string', description: 'Short human-readable snippet name' },
+            expression: { type: 'string', description: 'The full expression code to save' },
+            keywords: { type: 'string', description: 'Comma-separated search keywords, EN + RU (e.g. "shake, camera, тряска")' },
+            target: { type: 'string', description: 'Property kind the snippet is meant for (e.g. "Position", "Text>Source Text")' },
+            notes: { type: 'string', description: 'Usage hints: placeholders, tuning knobs, required effects' }
+          },
+          required: ['name', 'expression']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'list_user_expressions',
+        description: 'List all snippets in the user\'s personal expression library (id, name, keywords, target, expression, notes). Use before delete_user_expression or when the user asks what is saved.',
+        parameters: {
+          type: 'object',
+          properties: {},
+          required: []
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'delete_user_expression',
+        description: 'Delete a snippet from the user\'s personal expression library by id. Get ids from list_user_expressions. Only do this when the user explicitly asks to remove a saved snippet.',
+        parameters: {
+          type: 'object',
+          properties: {
+            id: { type: 'string', description: 'Snippet id (e.g. "ux_1753600000000_ab12")' }
+          },
+          required: ['id']
         }
       }
     },
@@ -995,7 +1039,7 @@
       type: 'function',
       function: {
         name: 'set_comp_settings',
-        description: 'Modify active composition settings (name, dimensions, duration, frame rate).',
+        description: 'Modify active composition settings (name, dimensions, duration, frame rate, background color, comp-level motion blur switch).',
         parameters: {
           type: 'object',
           properties: {
@@ -1003,7 +1047,9 @@
             width: { type: 'number' },
             height: { type: 'number' },
             duration: { type: 'number' },
-            frame_rate: { type: 'number' }
+            frame_rate: { type: 'number' },
+            bg_color: { type: 'array', items: { type: 'number' }, description: 'Background color RGB [0-1, 0-1, 0-1]' },
+            motion_blur: { type: 'boolean', description: 'Comp-level Motion Blur master switch. Must be ON for per-layer motion blur to render.' }
           },
           required: []
         }
@@ -1068,6 +1114,98 @@
             blend_mode: { type: 'string', description: 'Blend mode: normal, add, multiply, screen, overlay, soft_light, hard_light, difference, color_dodge, color_burn, linear_dodge, linear_burn, darken, lighten, dissolve, stencil_alpha, silhouette_alpha, alpha_add, luminescent_premul' }
           },
           required: ['blend_mode']
+        }
+      }
+    },
+
+    // ── Track matte / switches / time remap / split / open comp ───────────
+    {
+      type: 'function',
+      function: {
+        name: 'set_track_matte',
+        description: 'Set or remove a track matte on a layer (alpha/luma reveals). The matte layer defines transparency for the target layer. Specify matte_layer_index/matte_layer_id to pick any layer as matte (AE 23+); on older AE only the layer directly above works. matte_type "none" removes the matte.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based index of the layer that RECEIVES the matte' },
+            layer_id: { type: 'number', description: 'Persistent layer ID (alternative to index)' },
+            matte_type: { type: 'string', enum: ['alpha', 'alpha_inverted', 'luma', 'luma_inverted', 'none'], description: 'Matte mode. alpha = matte layer alpha channel, luma = matte layer brightness.' },
+            matte_layer_index: { type: 'number', description: '1-based index of the layer to USE as the matte (optional — defaults to the layer directly above)' },
+            matte_layer_id: { type: 'number', description: 'Persistent ID of the matte layer' }
+          },
+          required: ['layer_index', 'matte_type']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'set_layer_switches',
+        description: 'Toggle layer switches: visibility (enabled), motion_blur, adjustment, shy, solo, locked, guide, collapse_transformation (continuous rasterization), effects_active, audio_enabled. Only the switches you pass are changed. NOTE: per-layer motion_blur also needs the comp-level switch — set_comp_settings { motion_blur: true }.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID' },
+            enabled: { type: 'boolean', description: 'Layer visibility (eyeball)' },
+            motion_blur: { type: 'boolean', description: 'Per-layer motion blur switch' },
+            adjustment: { type: 'boolean', description: 'Make this an adjustment layer' },
+            shy: { type: 'boolean' },
+            solo: { type: 'boolean' },
+            locked: { type: 'boolean' },
+            guide: { type: 'boolean', description: 'Guide layer (excluded from render)' },
+            collapse_transformation: { type: 'boolean', description: 'Collapse transformations / continuously rasterize' },
+            effects_active: { type: 'boolean', description: 'Master effects on/off for the layer' },
+            audio_enabled: { type: 'boolean' }
+          },
+          required: ['layer_index']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'set_time_remap',
+        description: 'Enable/disable time remapping on a footage or precomp layer. After enabling, animate the "Time Remap" property (value = source time in seconds) with add_keyframes / set_keyframe_easing for freeze frames and speed ramps. Shape/text/solid layers must be precomposed first.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID' },
+            enabled: { type: 'boolean', description: 'true to enable time remapping, false to disable' }
+          },
+          required: ['layer_index', 'enabled']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'split_layer',
+        description: 'Split a layer at a time (like Edit > Split Layer): the original keeps everything before the split time, a duplicate placed directly above plays everything after. Returns indices/ids of both parts.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID' },
+            time: { type: 'number', description: 'Split time in seconds — must be strictly between the layer in-point and out-point' }
+          },
+          required: ['layer_index', 'time']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'open_comp',
+        description: 'Open a composition in the viewer and make it the ACTIVE comp for all subsequent tools. Use after precompose_layers or create_comp to work inside the result, or to switch between comps. Find comp ids via list_project_items.',
+        parameters: {
+          type: 'object',
+          properties: {
+            comp_id: { type: 'number', description: 'Project item id of the comp (preferred — returned by list_project_items, create_comp, precompose_layers)' },
+            comp_name: { type: 'string', description: 'Exact comp name (fails if ambiguous)' }
+          },
+          required: []
         }
       }
     }

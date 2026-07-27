@@ -29,9 +29,9 @@ Extensions LLM Chat/
 ├── agentToolLoop.js           ← LLM ↔ tool execution cycle (parallel reads, validation, abort)
 ├── chatProvider.js            ← Cloud.ru API, retry on 429/5xx, SSE streaming
 ├── hostBridge.js              ← Tool name → ExtendScript mapping, anti-spam guard, idempotency, validation
-├── toolRegistry.js            ← 50 OpenAI-format tool definitions
+├── toolRegistry.js            ← 60 OpenAI-format tool definitions
 ├── host/
-│   └── index.jsx              ← ExtendScript: ALL AE operations (~3850 lines, 54 functions)
+│   └── index.jsx              ← ExtendScript: ALL AE operations (~4600 lines)
 ├── CSXS/manifest.xml          ← CEP manifest
 ├── lib/
 │   ├── CSInterface.js         ← Adobe CSInterface (tracked in repo)
@@ -182,6 +182,24 @@ Re-added a panel model selector (reversing the brief "predetermined model" decis
 ### Motion-editing tools (2026-07-21) — 5 tools ported from adobe-agent-skills
 Added five motion-design conveniences (50 → 55 tools), each ported from the MIT `adobe-agent-skills` AE scripts and adapted to the 3-layer tool architecture: `copy_ease` (transfer temporal ease in/out/both between properties), `reverse_keyframes` (mirror keyframes in place), `stagger_layers` (time-offset layers by in-point/start-time/keyframes, forward or reverse), `randomize_property` (range randomize across layers, absolute/offset, optional per-axis), `move_anchor_point` (reposition anchor to a named spot with position compensation so the layer doesn't jump). Host handlers under "Advanced keyframe / layer operations" in `host/index.jsx`; all five in the `getCapabilities` probe list. Live-verified in real AE via CDP: ease copy transfers influence, reverse swaps values, stagger offsets start times by the step, randomize lands in range, anchor→center compensates position (no visual jump). Tests: `test/registry.test.js`, `test/hostBridge.test.js` (138 total pass).
 
+### Multi-chat (2026-07-27) — multiple named sessions in the panel
+`state.session` (single object) became `state.sessions[]` + `state.activeSessionId` (`getActiveSession()` accessor in `main.js`); pure logic in `lib/pure/sessionStore.js` (`PURE_SESSION_STORE`: `createSession`, `migratePersisted`, `serializeForPersist`, `titleFromFirstMessage`, `isDefaultTitle`) with 10 tests in `test/sessionStore.test.js`. localStorage shape v2 `{ sessions, activeSessionId }`; legacy `{ session }` migrates transparently on load (old chat becomes the first entry — never lost). Header session bar: `#session-select` + new/rename/delete buttons (`.session-bar` in `styles.css`); switch/new/delete are blocked mid-request (same reason as model switching) and clear the hostBridge idempotency cache (`client_op_id` values may repeat across chats). Default `Chat N` titles are auto-replaced by the first user message (40-char word-boundary cut + ellipsis). Per-chat model/token/cost counters came free (already stored per-session). Quota pruning on persist drops the oldest half of the ACTIVE chat only. Export = all sessions; Report/Errors/Clear/Compact = active chat. Live-verified via CDP: legacy migration, new/rename/switch/delete, message+model isolation across reload, real agent run landing in the correct chat with auto-title (158 tests pass). CDP gotcha: the `beforeunload` persist overwrites seeded localStorage — patch `Storage.prototype.setItem` to a no-op right before `location.reload()` when seeding state.
+
+### Panel UX pack (2026-07-27) — draft autosave, crash recovery, copy/retry, editable quick actions
+Four panel-level features, all live-verified via CDP (166 tests pass):
+- **Draft autosave** — input persists to `ae-motion-agent-draft` (300ms debounce + synchronous flush on unload), restored on boot, cleared on send.
+- **Mid-run crash recovery** — each `onStepComplete` snapshots the partial tool log to `ae-motion-agent-pending-run`; on boot `recoverPendingRun()` folds it back into the owning session as an assistant message + warning system note. Guard: skipped when `session.updatedAt >= savedAt` (run finished normally). Cleared on success/error paths.
+- **Copy/retry buttons** — hover-revealed `.msg-actions` under user (copy+retry) and assistant (copy) messages with non-empty text; clipboard via `navigator.clipboard` with `execCommand` fallback; retry blocked mid-request.
+- **Editable quick actions** — the 16 hardcoded index.html buttons moved to `lib/pure/quickActions.js` (`PURE_QUICK_ACTIONS`, 8 tests); rendered dynamically into a single `#quick-actions` container, user list persists in `ae-motion-agent-quick-actions`. Left-click sends, right-click edits/deletes (prompt-based dialog), `+` adds, `⟲` resets (removes the key → defaults). Stored empty list is legitimate; invalid stored state falls back to defaults. Event delegation on the container (buttons re-render on edit).
+
+### User expression library (2026-07-27) — personal saved snippets
+Users can save their own expressions via chat ("сохрани это выражение") — agent-driven, no dedicated UI. Three panel-local tools (60 → 63): `save_user_expression` (name+expression required; keywords accept comma string or array, normalized lowercase/deduped/max 12), `list_user_expressions`, `delete_user_expression` (by `ux_*` id, explicit request only). Storage: `ae-motion-agent-user-expressions` (`{snippets:[…]}`), pure logic in `lib/pure/userExpressionLibrary.js` (`PURE_USER_EXPR_LIB`, same UMD pattern as quickActions). `PURE_EXPR_LIB.search(query, max, extraSnippets)` gained a third param — hostBridge passes the user's snippets, results are marked `source:"user"` and the message tells the model to prefer them. All three tools are in READ_ONLY_TOOLS (localStorage-only mutations — must NOT count toward the Undo button). 8 new tests (174 total); live-verified via CDP: direct save/search(RU+EN)/list/delete + persistence across reload + unknown-id error, and a real agent send where GLM picked `save_user_expression` unprompted with sensible args.
+
+### Compositing tools (2026-07-27) — 5 tools + markdown fix
+Bug fixes: markdown renderer mangled code spans (`*` inside `` ` `` became `<em>`, `#`/`-` lines inside code blocks became headers/lists) — fixed via stash/restore placeholders in `lib/pure/markdown.js` with 6 regression tests; `setCompSettings` `bgColor` dead branch (`typeof x instanceof Array` — always false).
+
+Added five compositing tools (55 → 60), user-approved: `set_track_matte` (alpha/luma mattes; modern `setTrackMatte()` API with any-layer matte, legacy layer-above fallback), `set_layer_switches` (enabled/motion_blur/adjustment/shy/solo/locked/guide/collapse_transformation/effects_active/audio_enabled; unlock-first/lock-last ordering; warns when comp motion-blur switch is off), `set_time_remap` (enable/disable; animate via `"Time Remap"` property path), `split_layer` (deterministic duplicate+trim, no menu command), `open_comp` (switch active comp by id/name — unlocks editing inside precomps). `set_comp_settings` gained `bg_color` + `motion_blur`. All in the `getCapabilities` probe; prompt section "Track Mattes, Switches, Time Remap, Split, Comp Switching". New consistency tests: every registry tool has a bridge case; every bridge host call exists in index.jsx (148 total pass). Live-verified in real AE via CDP (24-step chain, all pass): matte set/remove/luma-default, switches incl. unlock-first ordering + comp-MB warning, comp bg_color+motion_blur, split at 2.5s (correct in/out on both parts) + out-of-span error, time-remap denial on text + enable on precomp + Time Remap keyframing/readback, open_comp by name/id + bad-id error.
+
 ---
 
 ## Live testing against real AE (CDP pipeline)
@@ -202,7 +220,7 @@ ExtendScript (ES3) quirks verified live: `string + Array` throws; `addProperty()
 | Question | File |
 |---|---|
 | User-facing setup, features, install | `README.md` |
-| 55 tools, capabilities, limitations | `docs/capabilities-and-roadmap.md` |
+| 63 tools, capabilities, limitations | `docs/capabilities-and-roadmap.md` |
 | Live AE validation methodology + bug tables | `docs/superpowers/specs/2026-06-10-deep-audit-report.md` |
 | Agent loop architecture, tool categories | `docs/final-architecture.md` |
 | Config fields, loading order, secrets | `docs/configuration.md`, `docs/secret-handling.md` |
@@ -273,7 +291,7 @@ For external (Obsidian) context, see also:
 ## Boundaries and red flags
 
 **You should escalate (ask user) before:**
-- Adding new tools that mutate AE state outside the current 50
+- Adding new tools that mutate AE state outside the current 60
 - Changing the API provider or the `AVAILABLE_MODELS` selector list (adding/removing/replacing a model)
 - Modifying `_resolveLayer` selection-fallback behavior
 - Changing the localStorage `ae-motion-agent-state` schema (breaks existing sessions)

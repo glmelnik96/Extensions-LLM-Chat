@@ -23,9 +23,9 @@ function loadBrowserGlobal (file) {
 const registryWindow = loadBrowserGlobal('toolRegistry.js')
 const tools = registryWindow.AGENT_TOOL_REGISTRY && registryWindow.AGENT_TOOL_REGISTRY.tools
 
-test('registry: exposes 55 tools', () => {
+test('registry: exposes 63 tools', () => {
   assert.ok(Array.isArray(tools), 'tools array exported')
-  assert.strictEqual(tools.length, 55)
+  assert.strictEqual(tools.length, 63)
 })
 
 test('registry: every tool has a valid OpenAI function schema', () => {
@@ -95,6 +95,33 @@ test('registry: advanced keyframe/layer tools registered with correct required[]
   assert.strictEqual(ma.function.parameters.properties.position.enum.length, 9)
 })
 
+// Every registered tool must have an executeToolCall case in hostBridge.js OR
+// be handled panel-locally (search_expression_library). Guards against the
+// "added to registry, forgot the bridge" failure mode.
+test('registry: every tool is wired in hostBridge.js', () => {
+  const bridgeSrc = fs.readFileSync(path.join(__dirname, '..', 'hostBridge.js'), 'utf8')
+  const PANEL_LOCAL = new Set(['search_expression_library'])
+  for (const t of tools) {
+    const name = t.function.name
+    if (PANEL_LOCAL.has(name)) continue
+    assert.ok(bridgeSrc.includes("case '" + name + "':"), 'hostBridge has case for ' + name)
+  }
+})
+
+// Every host function referenced by the bridge must exist in host/index.jsx.
+test('bridge: every extensionsLlmChat_* call target exists in host/index.jsx', () => {
+  const bridgeSrc = fs.readFileSync(path.join(__dirname, '..', 'hostBridge.js'), 'utf8')
+  const hostSrc = fs.readFileSync(path.join(__dirname, '..', 'host', 'index.jsx'), 'utf8')
+  const called = new Set()
+  const re = /extensionsLlmChat_[A-Za-z0-9_]+/g
+  let m
+  while ((m = re.exec(bridgeSrc)) !== null) called.add(m[0])
+  assert.ok(called.size > 40, 'sanity: bridge references many host functions (' + called.size + ')')
+  for (const fn of called) {
+    assert.ok(hostSrc.includes('function ' + fn + ' (') || hostSrc.includes('function ' + fn + '('), 'host defines ' + fn)
+  }
+})
+
 // ── agentSystemPrompt.js ────────────────────────────────────────────────────
 
 const promptWindow = loadBrowserGlobal('agentSystemPrompt.js')
@@ -126,7 +153,53 @@ test('prompt: new behavior rules present', () => {
   assert.match(full, /Verify before claiming done/, 'self-verification rule')
   assert.match(full, /brief numbered plan/, 'plan rule')
   assert.ok(!full.includes('No chain-of-thought in the visible response'), 'old no-CoT rule replaced')
-  assert.match(full, /55 tools/, 'tool count updated')
+  assert.match(full, /63 tools/, 'tool count updated')
+})
+
+test('registry: compositing tools (2026-07-27) registered with correct schemas', () => {
+  const tm = findTool('set_track_matte')
+  assert.ok(tm, 'set_track_matte registered')
+  assert.strictEqual(JSON.stringify(tm.function.parameters.required), JSON.stringify(['layer_index', 'matte_type']))
+  const mtEnum = tm.function.parameters.properties.matte_type.enum
+  for (const v of ['alpha', 'alpha_inverted', 'luma', 'luma_inverted', 'none']) {
+    assert.ok(mtEnum.indexOf(v) !== -1, 'matte_type enum has ' + v)
+  }
+  assert.ok(tm.function.parameters.properties.matte_layer_index, 'matte layer selectable')
+
+  const sw = findTool('set_layer_switches')
+  assert.ok(sw, 'set_layer_switches registered')
+  assert.strictEqual(JSON.stringify(sw.function.parameters.required), JSON.stringify(['layer_index']))
+  for (const key of ['enabled', 'motion_blur', 'adjustment', 'shy', 'solo', 'locked', 'guide', 'collapse_transformation', 'effects_active', 'audio_enabled']) {
+    assert.ok(sw.function.parameters.properties[key], 'switch present: ' + key)
+    assert.strictEqual(sw.function.parameters.properties[key].type, 'boolean', key + ' is boolean')
+  }
+
+  const tr = findTool('set_time_remap')
+  assert.ok(tr, 'set_time_remap registered')
+  assert.strictEqual(JSON.stringify(tr.function.parameters.required), JSON.stringify(['layer_index', 'enabled']))
+
+  const sp = findTool('split_layer')
+  assert.ok(sp, 'split_layer registered')
+  assert.strictEqual(JSON.stringify(sp.function.parameters.required), JSON.stringify(['layer_index', 'time']))
+
+  const oc = findTool('open_comp')
+  assert.ok(oc, 'open_comp registered')
+  assert.strictEqual(JSON.stringify(oc.function.parameters.required), JSON.stringify([]))
+  assert.ok(oc.function.parameters.properties.comp_id, 'open_comp accepts comp_id')
+  assert.ok(oc.function.parameters.properties.comp_name, 'open_comp accepts comp_name')
+
+  const cs = findTool('set_comp_settings')
+  assert.ok(cs.function.parameters.properties.motion_blur, 'set_comp_settings has motion_blur')
+  assert.ok(cs.function.parameters.properties.bg_color, 'set_comp_settings has bg_color')
+})
+
+test('prompt: compositing guidance present', () => {
+  const full = builder.buildFull()
+  assert.ok(full.includes('## Track Mattes, Switches, Time Remap, Split, Comp Switching'), 'compositing section present')
+  for (const name of ['set_track_matte', 'set_layer_switches', 'set_time_remap', 'split_layer', 'open_comp']) {
+    assert.ok(full.includes(name), 'mentions ' + name)
+  }
+  assert.match(full, /comp switch is on|set_comp_settings\(motion_blur: true\)/, 'warns about comp-level motion blur switch')
 })
 
 test('registry: stage-3 tools registered with correct schemas', () => {

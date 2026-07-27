@@ -13,6 +13,14 @@
         <div id="model-selector" class="model-selector" role="group" aria-label="Model selector"></div>
       </div>
 
+      <!-- Chat switcher: multiple named sessions (2026-07-27) -->
+      <div class="session-bar">
+        <select id="session-select" class="session-select" title="Switch chat"></select>
+        <button id="session-new-btn" class="btn btn-secondary session-btn" title="New chat">+</button>
+        <button id="session-rename-btn" class="btn btn-secondary session-btn" title="Rename this chat">&#9998;</button>
+        <button id="session-delete-btn" class="btn btn-secondary session-btn" title="Delete this chat">&#215;</button>
+      </div>
+
       <!-- Chat content -->
       <div class="chat-content">
         <div id="chat-transcript" class="chat-transcript"></div>
@@ -30,31 +38,11 @@
           </label>
         </div>
 
-        <!-- Quick actions: two demand-ranked rows (2026-07 research).
-             Row 1 = single expressions (wiggle/loop/bounce top every list;
-             auto-resize text box is the most-asked question on Adobe forums).
-             Row 2 = task-level animations (people search for outcomes, not
-             expressions: stagger, pop-in, camera shake, draw-on…). -->
-        <div class="quick-actions" id="quick-actions">
-          <button class="quick-action-btn" data-prompt="Add wiggle(3, 25) to selected layers" title="Apply wiggle expression to selection">Wiggle</button>
-          <button class="quick-action-btn" data-prompt="Loop existing keyframes on selected layers with loopOut cycle" title="Repeat keyframed animation forever">Loop</button>
-          <button class="quick-action-btn" data-prompt="Add bounce easing expression to all keyframes on selected layers" title="Bounce overshoot on keyframes">Bounce</button>
-          <button class="quick-action-btn" data-prompt="Create a counter from 0 to 100 on selected text layer" title="Counter expression on text">Counter</button>
-          <button class="quick-action-btn" data-prompt="Create an auto-resizing background box behind the selected text layer using sourceRectAtTime, anchored so it works with left/right text alignment too" title="Auto-resizing text background (lower third)">Text Box</button>
-          <button class="quick-action-btn" data-prompt="Add auto fade in/out expression to opacity of selected layers" title="Fade at layer in/out points, no keyframes">Fade</button>
-          <button class="quick-action-btn" data-prompt="Make selected layers rotate continuously using a time expression" title="Endless rotation without keyframes">Spin</button>
-          <button class="quick-action-btn" data-prompt="Capture current frame preview" title="Save and show current comp frame">Preview</button>
-        </div>
-        <div class="quick-actions" id="quick-actions-tasks">
-          <button class="quick-action-btn" data-prompt="Stagger the selected layers: offset each layer's animation to start 3 frames after the previous one" title="Cascade layers with 3-frame offsets">Stagger</button>
-          <button class="quick-action-btn" data-prompt="Make selected layers pop in: center each anchor point without shifting the layer, then animate scale 0 to 100 with a spring overshoot at the layer in point" title="Scale 0→100 with overshoot from centered anchor">Pop In</button>
-          <button class="quick-action-btn" data-prompt="Add a typewriter text reveal to the selected text layer" title="Reveal text letter by letter">Typewriter</button>
-          <button class="quick-action-btn" data-prompt="Add camera shake to this composition: an adjustment or null rig with slider-driven wiggle, scaled ~103% so edges never show" title="Slider-controlled camera shake rig">Cam Shake</button>
-          <button class="quick-action-btn" data-prompt="Animate the selected shape layer's stroke drawing on with Trim Paths from 0 to 100" title="Draw-on line reveal via Trim Paths">Draw-On</button>
-          <button class="quick-action-btn" data-prompt="Make selected layers slide in from the left with smooth easing at their in points" title="Eased slide-in entrance">Slide In</button>
-          <button class="quick-action-btn" data-prompt="Apply smooth easy ease with a slight overshoot to all existing keyframes on selected layers" title="Polish existing keyframes: ease + overshoot">Smooth Ease</button>
-          <button class="quick-action-btn" data-prompt="Move the anchor point of each selected layer to its center without shifting the layer" title="Center anchor points (compensated)">Center Anchor</button>
-        </div>
+        <!-- Quick actions: rendered dynamically from lib/pure/quickActions.js
+             (16 demand-ranked defaults, 2026-07 research) merged with the
+             user's edits/additions from localStorage. Left-click = send,
+             right-click = edit/delete, "+" = add, "⟲" = reset to defaults. -->
+        <div class="quick-actions" id="quick-actions"></div>
 
         <div class="chat-input-container">
           <textarea
@@ -95,7 +83,10 @@
     <script src="./lib/pure/esLiteral.js"></script>
     <script src="./lib/pure/markdown.js"></script>
     <script src="./lib/pure/prune.js"></script>
+    <script src="./lib/pure/sessionStore.js"></script>
+    <script src="./lib/pure/quickActions.js"></script>
     <script src="./lib/pure/expressionLibrary.js"></script>
+    <script src="./lib/pure/userExpressionLibrary.js"></script>
     <script src="./lib/pure/theme.js"></script>
     <script src="./lib/pure/visionCheck.js"></script>
     <script src="./lib/pure/pricing.js"></script>
