@@ -2901,7 +2901,9 @@ function extensionsLlmChat_setCompSettings (settings) {
     if (typeof settings.height === 'number') comp.height = settings.height;
     if (typeof settings.duration === 'number') comp.duration = settings.duration;
     if (typeof settings.frameRate === 'number') comp.frameRate = settings.frameRate;
-    if (typeof settings.bgColor instanceof Array) comp.bgColor = settings.bgColor;
+    // Bug fix 2026-07-27: was `typeof settings.bgColor instanceof Array` (always false).
+    if (settings.bgColor instanceof Array) comp.bgColor = settings.bgColor;
+    if (typeof settings.motionBlur === 'boolean') comp.motionBlur = settings.motionBlur;
     _endToolUndo();
     result.ok = true;
     result.message = 'Updated comp settings for "' + comp.name + '".';
@@ -4234,6 +4236,286 @@ function _getTemporalEaseDims (prop, keyIndex) {
 }
 
 // ============================================================================
+// Track matte / layer switches / time remap / split / open comp (2026-07-27)
+// ============================================================================
+
+/**
+ * Set (or remove) a track matte on a layer.
+ * Modern AE (23.0+): uses layer.setTrackMatte(matteLayer, type) — the matte can
+ * be ANY layer. Legacy AE: falls back to layer.trackMatteType, which always
+ * uses the layer directly above as the matte.
+ * @param {string} matteType 'alpha'|'alpha_inverted'|'luma'|'luma_inverted'|'none'
+ */
+function extensionsLlmChat_setTrackMatte (layerIndex, layerId, matteType, matteLayerIndex, matteLayerId) {
+  var result = { ok: false, message: '' };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+
+    var typeMap = {
+      'alpha': TrackMatteType.ALPHA,
+      'alpha_inverted': TrackMatteType.ALPHA_INVERTED,
+      'luma': TrackMatteType.LUMA,
+      'luma_inverted': TrackMatteType.LUMA_INVERTED,
+      'none': TrackMatteType.NO_TRACK_MATTE
+    };
+    var typeKey = String(matteType || '').toLowerCase().replace(/[\s-]/g, '_');
+    var typeVal = typeMap[typeKey];
+    if (typeVal === undefined) {
+      result.message = 'Unknown matte_type: "' + matteType + '". Supported: alpha, alpha_inverted, luma, luma_inverted, none.';
+      return resultToJson(result);
+    }
+
+    var hasModernApi = (typeof layer.setTrackMatte === 'function');
+
+    if (typeKey === 'none') {
+      _beginToolUndo('Agent: Remove track matte');
+      if (hasModernApi && typeof layer.removeTrackMatte === 'function') {
+        layer.removeTrackMatte();
+      } else {
+        layer.trackMatteType = TrackMatteType.NO_TRACK_MATTE;
+      }
+      _endToolUndo();
+      result.ok = true;
+      result.message = 'Track matte removed from "' + layer.name + '".';
+      return resultToJson(result);
+    }
+
+    // Resolve the matte layer (optional in legacy mode — defaults to the layer above).
+    var matteLayer = null;
+    if (matteLayerIndex !== null && matteLayerIndex !== undefined || matteLayerId !== null && matteLayerId !== undefined) {
+      matteLayer = _resolveLayer(ctx.comp, matteLayerIndex, matteLayerId);
+      if (!matteLayer) { result.message = 'Matte layer not found (matte_layer_index=' + matteLayerIndex + ', matte_layer_id=' + matteLayerId + ').'; return resultToJson(result); }
+      if (matteLayer.id === layer.id) { result.message = 'A layer cannot be its own track matte.'; return resultToJson(result); }
+    }
+
+    if (hasModernApi) {
+      if (!matteLayer) {
+        // Default to the layer directly above (classic behavior).
+        if (layer.index <= 1) { result.message = 'No matte layer specified and no layer above "' + layer.name + '". Provide matte_layer_index or matte_layer_id.'; return resultToJson(result); }
+        matteLayer = ctx.comp.layer(layer.index - 1);
+      }
+      _beginToolUndo('Agent: Set track matte');
+      layer.setTrackMatte(matteLayer, typeVal);
+      _endToolUndo();
+      result.ok = true;
+      result.message = 'Track matte on "' + layer.name + '": ' + typeKey + ' from "' + matteLayer.name + '".';
+    } else {
+      // Legacy API: matte is ALWAYS the layer directly above.
+      if (matteLayer && matteLayer.index !== layer.index - 1) {
+        result.message = 'This AE version only supports the layer directly above as matte. "' + matteLayer.name + '" is at index ' + matteLayer.index + ', but "' + layer.name + '" is at index ' + layer.index + '. Use reorder_layer to place the matte at index ' + (layer.index - 1) + ' first.';
+        return resultToJson(result);
+      }
+      if (layer.index <= 1) { result.message = 'No layer above "' + layer.name + '" to use as matte.'; return resultToJson(result); }
+      _beginToolUndo('Agent: Set track matte');
+      layer.trackMatteType = typeVal;
+      _endToolUndo();
+      var above = ctx.comp.layer(layer.index - 1);
+      result.ok = true;
+      result.message = 'Track matte on "' + layer.name + '": ' + typeKey + ' from layer above ("' + above.name + '").';
+    }
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'setTrackMatte error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Toggle common layer switches in one call. Only keys present in `switches`
+ * are touched. Lock ordering: unlocking happens FIRST (a locked layer rejects
+ * changes), locking happens LAST.
+ */
+function extensionsLlmChat_setLayerSwitches (layerIndex, layerId, switches) {
+  var result = { ok: false, message: '', changed: [], warnings: [] };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!switches || typeof switches !== 'object') {
+      result.message = 'No switches provided. Supported: enabled, motion_blur, adjustment, shy, solo, locked, guide, collapse_transformation, effects_active, audio_enabled.';
+      return resultToJson(result);
+    }
+
+    var propMap = {
+      enabled: 'enabled',
+      motion_blur: 'motionBlur',
+      adjustment: 'adjustmentLayer',
+      shy: 'shy',
+      solo: 'solo',
+      guide: 'guideLayer',
+      collapse_transformation: 'collapseTransformation',
+      effects_active: 'effectsActive',
+      audio_enabled: 'audioEnabled'
+    };
+
+    _beginToolUndo('Agent: Layer switches');
+    // Unlock first so other switches can be applied.
+    if (switches.locked === false && layer.locked) {
+      try { layer.locked = false; result.changed.push('locked=false'); } catch (eU) { result.warnings.push('locked: ' + eU.toString()); }
+    }
+    for (var key in propMap) {
+      if (!propMap.hasOwnProperty(key)) continue;
+      if (typeof switches[key] !== 'boolean') continue;
+      var aeProp = propMap[key];
+      try {
+        layer[aeProp] = switches[key];
+        result.changed.push(key + '=' + switches[key]);
+      } catch (eSet) {
+        result.warnings.push(key + ': ' + eSet.toString());
+      }
+    }
+    if (switches.locked === true) {
+      try { layer.locked = true; result.changed.push('locked=true'); } catch (eL) { result.warnings.push('locked: ' + eL.toString()); }
+    }
+    _endToolUndo();
+
+    if (result.changed.length === 0 && result.warnings.length === 0) {
+      result.message = 'No boolean switch values provided. Supported: enabled, motion_blur, adjustment, shy, solo, locked, guide, collapse_transformation, effects_active, audio_enabled.';
+      return resultToJson(result);
+    }
+    result.ok = true;
+    result.message = 'Layer "' + layer.name + '": ' + (result.changed.length ? result.changed.join(', ') : 'nothing changed') +
+      (result.warnings.length ? '. Warnings: ' + result.warnings.join('; ') : '') +
+      ((switches.motion_blur === true && !ctx.comp.motionBlur) ? '. NOTE: comp-level Motion Blur switch is OFF — enable it via set_comp_settings { motion_blur: true } or blur will not render.' : '');
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'setLayerSwitches error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Enable/disable time remapping on a layer. After enabling, animate the
+ * "Time Remap" property with the existing keyframe tools (property_path
+ * "Time Remap") for freeze frames and speed ramps.
+ */
+function extensionsLlmChat_setTimeRemap (layerIndex, layerId, enabled) {
+  var result = { ok: false, message: '', propertyPath: 'Time Remap', numKeys: 0 };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+
+    var can = false;
+    try { can = layer.canSetTimeRemapEnabled; } catch (eCan) { can = false; }
+    if (!can) {
+      result.message = 'Layer "' + layer.name + '" does not support time remapping (only footage and precomp layers do). Precompose it first if you need to retime a ' + _layerTypeString(layer) + '.';
+      return resultToJson(result);
+    }
+
+    _beginToolUndo('Agent: Time remap');
+    layer.timeRemapEnabled = !!enabled;
+    _endToolUndo();
+
+    result.ok = true;
+    if (enabled) {
+      var tr = null;
+      try { tr = layer.property('ADBE Time Remapping'); } catch (eTr) { tr = null; }
+      if (tr) { try { result.numKeys = tr.numKeys; } catch (eK) {} }
+      result.message = 'Time remap enabled on "' + layer.name + '" (' + result.numKeys + ' initial keyframes). Animate property "Time Remap" (value = source time in seconds) with add_keyframes / set_keyframe_easing. For a freeze frame: two keyframes with the same value, or hold interpolation.';
+    } else {
+      result.message = 'Time remap disabled on "' + layer.name + '".';
+    }
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'setTimeRemap error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Split a layer at a time: the original keeps [inPoint, time], a duplicate
+ * (placed directly above) plays [time, outPoint]. Mirrors AE's Edit > Split
+ * Layer, implemented deterministically via duplicate + trim.
+ */
+function extensionsLlmChat_splitLayer (layerIndex, layerId, time) {
+  var result = { ok: false, message: '', firstPart: null, secondPart: null };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (typeof time !== 'number') { result.message = 'split_layer: missing required `time` (seconds).'; return resultToJson(result); }
+    if (time <= layer.inPoint || time >= layer.outPoint) {
+      result.message = 'Split time ' + time + 's is outside the layer\'s visible span (' + layer.inPoint + 's – ' + layer.outPoint + 's). Pick a time strictly inside.';
+      return resultToJson(result);
+    }
+
+    _beginToolUndo('Agent: Split layer');
+    var dup = layer.duplicate(); // lands directly above the original
+    layer.outPoint = time;
+    dup.inPoint = time;
+    _endToolUndo();
+
+    result.ok = true;
+    result.firstPart = { layerIndex: layer.index, layerId: layer.id, layerName: layer.name, inPoint: layer.inPoint, outPoint: layer.outPoint };
+    result.secondPart = { layerIndex: dup.index, layerId: dup.id, layerName: dup.name, inPoint: dup.inPoint, outPoint: dup.outPoint };
+    result.message = 'Split "' + layer.name + '" at ' + time + 's. First part: "' + layer.name + '" (index ' + layer.index + ', until ' + time + 's). Second part: "' + dup.name + '" (index ' + dup.index + ', from ' + time + 's).';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'splitLayer error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Open a composition in the viewer and make it the active comp for all
+ * subsequent tools. Find by comp_id (preferred, from list_project_items /
+ * precompose_layers / create_comp results) or by exact name.
+ */
+function extensionsLlmChat_openComp (compId, compName) {
+  var result = { ok: false, message: '', compId: null, compName: '', width: 0, height: 0, duration: 0, frameRate: 0, numLayers: 0 };
+  try {
+    if (!app || !app.project) { result.message = 'No active project.'; return resultToJson(result); }
+
+    var comp = null;
+    if (typeof compId === 'number') {
+      var byId = null;
+      try { byId = app.project.itemByID(compId); } catch (eId) { byId = null; }
+      if (byId && (byId instanceof CompItem)) comp = byId;
+      if (!comp) { result.message = 'No composition with id ' + compId + '. Use list_project_items to see available comps.'; return resultToJson(result); }
+    } else if (typeof compName === 'string' && compName !== '') {
+      var matches = [];
+      for (var i = 1; i <= app.project.numItems; i++) {
+        var item = app.project.item(i);
+        if ((item instanceof CompItem) && item.name === compName) matches.push(item);
+      }
+      if (matches.length === 0) { result.message = 'No composition named "' + compName + '". Use list_project_items to see available comps.'; return resultToJson(result); }
+      if (matches.length > 1) { result.message = matches.length + ' compositions are named "' + compName + '". Use comp_id instead (see list_project_items).'; return resultToJson(result); }
+      comp = matches[0];
+    } else {
+      result.message = 'open_comp: provide `comp_id` (preferred) or `comp_name`.';
+      return resultToJson(result);
+    }
+
+    comp.openInViewer();
+
+    result.ok = true;
+    result.compId = comp.id;
+    result.compName = comp.name;
+    result.width = comp.width;
+    result.height = comp.height;
+    result.duration = comp.duration;
+    result.frameRate = comp.frameRate;
+    result.numLayers = comp.numLayers;
+    result.message = 'Opened comp "' + comp.name + '" (id ' + comp.id + ', ' + comp.width + 'x' + comp.height + ', ' + comp.numLayers + ' layers, ' + comp.duration.toFixed(2) + 's @ ' + comp.frameRate + 'fps). It is now the active comp for all tools. Use get_detailed_comp_summary to inspect it.';
+    return resultToJson(result);
+  } catch (e) {
+    result.message = 'openComp error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+// ============================================================================
 // Capability handshake — lets the client detect a stale/incomplete host script
 // ============================================================================
 
@@ -4262,7 +4544,12 @@ function extensionsLlmChat_getCapabilities () {
     'extensionsLlmChat_setTextDocument',
     'extensionsLlmChat_addEffect',
     'extensionsLlmChat_addMask',
-    'extensionsLlmChat_saveCompFramePng'
+    'extensionsLlmChat_saveCompFramePng',
+    'extensionsLlmChat_setTrackMatte',
+    'extensionsLlmChat_setLayerSwitches',
+    'extensionsLlmChat_setTimeRemap',
+    'extensionsLlmChat_splitLayer',
+    'extensionsLlmChat_openComp'
   ];
   for (var i = 0; i < probeList.length; i++) {
     var name = probeList[i];
