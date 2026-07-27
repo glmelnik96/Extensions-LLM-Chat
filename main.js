@@ -1795,20 +1795,50 @@
   }
 
   // ── Session actions ────────────────────────────────────────────────────
-  function handleClearSession () {
-    var session = getActiveSession()
-    if (!session) return
-    if (!confirm('Clear all messages? This cannot be undone.')) return
-    session.messages = []
-    session.updatedAt = Date.now()
-    // Drop any idempotency keys cached by hostBridge so a fresh session
-    // starting with the same client_op_id values doesn't return stale
-    // host results from the previous run.
+  // Shared tail of every clear variant: drop any idempotency keys cached by
+  // hostBridge (so a fresh session starting with the same client_op_id values
+  // doesn't return stale host results), then persist + re-render.
+  function finishClear () {
     if (window.HOST_BRIDGE && typeof window.HOST_BRIDGE.clearIdempotencyCache === 'function') {
       try { window.HOST_BRIDGE.clearIdempotencyCache() } catch (_) {}
     }
     persistState()
     renderTranscript()
+  }
+
+  // Guard shared by both clear variants: a running agent loop writes into the
+  // session it started with, so clearing mid-request would resurrect messages.
+  function clearBlockedByRequest () {
+    if (!state.isRequestInFlight) return false
+    setStatus('Finish or stop the current request before clearing.')
+    return true
+  }
+
+  // Clear THIS chat only (left-click on Clear).
+  function handleClearSession () {
+    var session = getActiveSession()
+    if (!session) return
+    if (clearBlockedByRequest()) return
+    if (!confirm('Clear all messages in "' + session.title + '"? Other chats are not affected. This cannot be undone.')) return
+    session.messages = []
+    session.updatedAt = Date.now()
+    finishClear()
+    setStatus('Chat "' + session.title + '" cleared')
+  }
+
+  // Full clear: delete ALL chats and start over with one fresh chat
+  // (right-click on Clear).
+  function handleClearAllSessions () {
+    if (clearBlockedByRequest()) return
+    var n = state.sessions.length
+    if (!confirm('Delete ALL ' + n + ' chat(s) and all their messages? This cannot be undone.')) return
+    state.sessions = []
+    state.activeSessionId = null
+    ensureSession()
+    finishClear()
+    renderModelSelector()
+    renderSessionBar()
+    setStatus('All chats deleted')
   }
 
   // Manually shrink the model's INPUT context without deleting any message the
@@ -2267,7 +2297,15 @@
   // ── Event binding ──────────────────────────────────────────────────────
   function bindEvents () {
     // Footer buttons
-    if (els.clearSessionBtn) els.clearSessionBtn.addEventListener('click', handleClearSession)
+    if (els.clearSessionBtn) {
+      els.clearSessionBtn.addEventListener('click', handleClearSession)
+      // Right-click = full clear (all chats), mirroring quick-action buttons
+      // where contextmenu is the "manage" gesture.
+      els.clearSessionBtn.addEventListener('contextmenu', function (e) {
+        e.preventDefault()
+        handleClearAllSessions()
+      })
+    }
     if (els.exportSessionsBtn) els.exportSessionsBtn.addEventListener('click', handleExportSessions)
     if (els.exportErrorsBtn) els.exportErrorsBtn.addEventListener('click', handleExportErrors)
     if (els.reportBtn) els.reportBtn.addEventListener('click', handleGenerateReport)

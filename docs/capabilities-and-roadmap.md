@@ -134,6 +134,7 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 - **Streaming text preview** — agent response text appears in real-time during generation
 - **Textarea auto-resize** — input grows up to ~8 lines as you type
 - **Footer**: Undo, Clear, Export, Errors, Report
+- **Clear button** (2026-07-28) — left-click clears the CURRENT chat only; right-click deletes ALL chats and starts one fresh; both blocked mid-request
 - **Undo button** — reverts ALL agent actions from last request (batch-undo via N x Cmd+Z)
 - **Stop button** — cancel a running agent mid-execution
 - **Step progress indicator** — shows `Step N/maxSteps` and tool call count during execution
