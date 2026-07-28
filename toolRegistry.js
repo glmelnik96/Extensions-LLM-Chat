@@ -1208,6 +1208,60 @@
           required: []
         }
       }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'transcribe_comp_audio',
+        description: 'Transcribe the ACTIVE comp audio with Whisper (speech-to-text). Renders the comp audio to a temp AIFF via the render queue, uploads it, and returns timed text segments. Segments are cached panel-side — call create_subtitles right after (no need to pass segments back). For comps longer than ~90s of audio, transcribe in chunks via start_time/end_time. Read-only: does not modify the project.',
+        parameters: {
+          type: 'object',
+          properties: {
+            language: { type: 'string', description: 'REQUIRED. ISO 639-1 code of the speech language, e.g. "ru", "en". The endpoint rejects requests without it — ask the user if unsure.' },
+            start_time: { type: 'number', description: 'Optional chunk start in comp seconds (default: comp start)' },
+            end_time: { type: 'number', description: 'Optional chunk end in comp seconds (default: comp end)' }
+          },
+          required: ['language']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'create_subtitles',
+        description: 'Create an animated subtitle layer from transcription segments (uses the segments cached by the last transcribe_comp_audio automatically — normally call with just styling options). Builds readable cues (smart line wrap, splits long phrases), sets Source Text hold keyframes, pins the text block to the bottom/center/top, optionally adds a background box and a per-word reveal animation. Pass `segments` explicitly only to override/correct the cached transcription.',
+        parameters: {
+          type: 'object',
+          properties: {
+            segments: {
+              type: 'array',
+              description: 'Optional override: [{startSec, endSec, text}]. Omit to use the cached transcription.',
+              items: {
+                type: 'object',
+                properties: {
+                  startSec: { type: 'number' },
+                  endSec: { type: 'number' },
+                  text: { type: 'string' }
+                },
+                required: ['startSec', 'endSec', 'text']
+              }
+            },
+            layer_name: { type: 'string', description: 'Subtitle layer name (default "Subtitles")' },
+            font: { type: 'string', description: 'PostScript font name (e.g. "ArialMT"). Default: current AE default' },
+            font_size: { type: 'number', description: 'Font size in px (default ~4.5% of comp height)' },
+            fill_color: { type: 'array', items: { type: 'number' }, description: 'Text color [r,g,b] 0-1 (default white)' },
+            position: { type: 'string', description: '"bottom" (default), "center", or "top"' },
+            box: { type: 'boolean', description: 'Background box behind the text (default true)' },
+            box_color: { type: 'array', items: { type: 'number' }, description: 'Box color [r,g,b] 0-1 (default black)' },
+            box_opacity: { type: 'number', description: 'Box opacity 0-100 (default 60)' },
+            animation: { type: 'string', description: '"word_reveal" (default; words appear one by one) or "none" (whole cue at once)' },
+            max_chars_per_line: { type: 'number', description: 'Line wrap width in characters (default 20)' },
+            max_lines: { type: 'number', description: 'Max lines per cue (default 2)' },
+            max_cue_duration: { type: 'number', description: 'Max seconds per cue before splitting (default 4)' }
+          },
+          required: []
+        }
+      }
     }
   ]
 

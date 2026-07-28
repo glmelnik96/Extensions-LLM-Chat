@@ -5,7 +5,7 @@
 ### Agent Tool System
 The extension works as an AI agent that can inspect, create, and modify After Effects compositions through tool calls. The LLM plans a sequence of actions, executes them one by one via ExtendScript, and reports results.
 
-**Supported tools (63):**
+**Supported tools (65):**
 
 #### Read (inspection)
 | Tool | Description |
@@ -112,6 +112,12 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 | Tool | Description |
 |------|-------------|
 | `set_text_document` | Set text content, font, size, color, justification, tracking, leading |
+
+#### Subtitles
+| Tool | Description |
+|------|-------------|
+| `transcribe_comp_audio` | Render comp audio to AIFF via the render queue and transcribe it with Cloud.ru Whisper (`openai/whisper-large-v3`). `language` (ISO 639-1) is required. Segments are cached panel-side. Optional `start_time`/`end_time` for chunking (24MB upload limit). |
+| `create_subtitles` | Build an animated subtitle layer from cached (or supplied) segments: Source Text hold keyframes per cue, word-by-word reveal via text animator, optional auto-sizing background box, auto-fit font size, styling options (font, color, position, box). |
 
 #### Preview
 | Tool | Description |
@@ -226,6 +232,10 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 
 **User expression library (2026-07-27)** — personal snippets saved via chat: `save_user_expression` / `list_user_expressions` / `delete_user_expression` (60 → 63 tools, all panel-local over localStorage, `lib/pure/userExpressionLibrary.js`, 8 tests); library search merges them in, marked `source:"user"`. Live-verified via CDP incl. a real agent run picking the save tool unprompted.
 
+**Animated subtitles (2026-07-28)** — `transcribe_comp_audio` + `create_subtitles` (63 → 65 tools): render-queue AIFF extraction → Cloud.ru Whisper (`verbose_json`, `language` required — endpoint 400s without it) → `lib/pure/subtitles.js` (char-weighted word alignment, glue-word-aware wrapping, cue splitting) → one text layer with Source Text hold keyframes, word-reveal text animator (matchNames `ADBE Text Range Type2`/`ADBE Text Expressible Amount` live-verified) and optional auto-sizing background box. Segments cached panel-side (`_lastTranscription`) so the model never re-emits them. Live-verified end-to-end on a real BRAW comp (RU speech, 18 cues). Panel task bar has a one-click **Subtitles button** (language select, no LLM round-trip, live stage/elapsed status).
+
+**Silence-aware subtitle timing (2026-07-29)** — raw Whisper segment starts fired text before the voice (speech onset 1.2s vs segment start 0). Ported the Premiere-plugin fix: ffmpeg `silencedetect` on the rendered AIFF (concurrent with the Whisper upload, optional — degrades gracefully without ffmpeg), silences cached and subtracted during word alignment. Plus two refinements: merge silences split by a sub-word voiced blip (< 0.35s, breaths/clicks) and drop a leading voiced sliver (< 0.4s) before a pause — Whisper opens segments on the previous phrase's tail. Live-verified: all cue starts snap exactly to speech onset (0→1.204, 5.0→5.807, 8.0→9.267), text clears during pauses. 13 subtitle tests.
+
 **Multi-chat (2026-07-27)** — multiple named sessions: `state.sessions[]` + `activeSessionId`, header switcher with new/rename/delete, first-message auto-titles, transparent migration of the legacy single-session storage (`lib/pure/sessionStore.js`, 10 tests). Live-verified via CDP: migration, lifecycle, message+model isolation across reload, real agent run in the correct chat.
 
 **Live AE validation (2026-06-10, commit `60f2b79`)** — 7 host bugs found & fixed by driving the real panel via CDP (`scripts/cdp-eval.js`): string+Array concat in readback, control-char escaping in `resultToJson`, `add_effect` rename, `_resolveProperty` alias shadowing, `addProperty()` ref invalidation in shape tools, `reorder_layer` rewrite (no `moveTo` on Layer), `precompose_layers` layer_ids support. Details: `docs/superpowers/specs/2026-06-10-deep-audit-report.md`.
@@ -266,7 +276,7 @@ agentSystemPrompt.js  — Agent persona, workflow rules, expression guidance, to
 agentToolLoop.js      — LLM <> tool execution cycle with abort, streaming, expression validation
 chatProvider.js       — Cloud.ru API with retry, SSE streaming
 hostBridge.js         — Tool name -> ExtendScript mapping (single-load host script) + pre-call required-args validation
-toolRegistry.js       — 63 OpenAI-compatible tool definitions
+toolRegistry.js       — 65 OpenAI-compatible tool definitions
 host/index.jsx        — ExtendScript functions (AE operations, shapes, 3D, masks, markers, import)
 main.js               — UI, sessions, markdown, pruning, cancel, batch-undo, KB injection, quick actions
 ```

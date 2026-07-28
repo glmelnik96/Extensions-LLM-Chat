@@ -60,15 +60,16 @@
   // surfaces the failure instead of stalling.
   var HOST_EVAL_TIMEOUT_MS = 30000
 
-  function evalHostFunction (functionCall) {
+  function evalHostFunction (functionCall, timeoutMs) {
+    var limitMs = (typeof timeoutMs === 'number' && timeoutMs > 0) ? timeoutMs : HOST_EVAL_TIMEOUT_MS
     return ensureHostScriptLoaded().then(function () {
       return new Promise(function (resolve, reject) {
         var settled = false
         var timer = setTimeout(function () {
           if (settled) return
           settled = true
-          reject(new Error('Host call timed out after ' + (HOST_EVAL_TIMEOUT_MS / 1000) + 's: ' + functionCall))
-        }, HOST_EVAL_TIMEOUT_MS)
+          reject(new Error('Host call timed out after ' + (limitMs / 1000) + 's: ' + functionCall))
+        }, limitMs)
         function done (fn, value) {
           if (settled) return
           settled = true
@@ -127,6 +128,228 @@
     try {
       window.localStorage.setItem(window.PURE_USER_EXPR_LIB.STORAGE_KEY, window.PURE_USER_EXPR_LIB.serialize(snippets))
     } catch (_) { /* quota — snippet stays for this session only */ }
+  }
+
+  // ── Transcription (animated subtitles) ────────────────────────────────
+  // Last successful transcription is cached panel-side so create_subtitles
+  // can build cues without the model re-emitting (and possibly mangling)
+  // every segment. Cleared implicitly by a new transcription.
+  var _lastTranscription = null // { segments:[{startSec,endSec,text}], language, durationSec, compName }
+
+  // Rendering comp audio (host, synchronous rq.render) + Whisper upload can
+  // legitimately take minutes on long comps — well past the 30s default.
+  var AUDIO_RENDER_TIMEOUT_MS = 240000
+  var TRANSCRIBE_FETCH_TIMEOUT_MS = 300000
+  var MAX_TRANSCRIBE_UPLOAD_BYTES = 24 * 1024 * 1024 // Cloud.ru rejects larger uploads (Pr-plugin production value)
+
+  // ── Silence detection (subtitle timing) ───────────────────────────────
+  // Whisper segment timestamps include leading/inter-phrase silence, so cues
+  // built from raw segments show text BEFORE the voice (live-measured: speech
+  // onset 1.2s vs segment start 0). The Premiere sibling plugin solves this
+  // with ffmpeg silencedetect: silence intervals are subtracted during word
+  // alignment, snapping cue starts to actual speech. Same approach here —
+  // ffmpeg is optional; without it timing falls back to raw segment spread.
+  var _ffmpegPath // undefined = not probed yet, null = not found
+
+  function _findFfmpeg () {
+    if (_ffmpegPath !== undefined) return _ffmpegPath
+    _ffmpegPath = null
+    try {
+      var fs = require('fs')
+      var candidates = [
+        'C:\\ffmpeg\\bin\\ffmpeg.exe',
+        'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe',
+        '/opt/homebrew/bin/ffmpeg',
+        '/usr/local/bin/ffmpeg',
+        '/usr/bin/ffmpeg'
+      ]
+      for (var i = 0; i < candidates.length; i++) {
+        try { if (fs.existsSync(candidates[i])) { _ffmpegPath = candidates[i]; return _ffmpegPath } } catch (_) {}
+      }
+      var probe = (typeof process !== 'undefined' && process.platform === 'win32') ? 'where ffmpeg' : 'which ffmpeg'
+      var found = String(require('child_process').execSync(probe, { timeout: 5000 })).trim().split(/\r?\n/)[0]
+      if (found && fs.existsSync(found)) _ffmpegPath = found
+    } catch (_) {}
+    return _ffmpegPath
+  }
+
+  /** ffmpeg silencedetect on a local audio file → [{startSec,endSec}] in comp
+   *  time (offsetSec added), or null when ffmpeg is missing/fails. Never rejects. */
+  function _detectSilences (audioPath, offsetSec) {
+    return new Promise(function (resolve) {
+      var bin = _findFfmpeg()
+      if (!bin) return resolve(null)
+      try {
+        require('child_process').execFile(
+          bin,
+          ['-hide_banner', '-nostats', '-i', audioPath, '-af', 'silencedetect=noise=-30dB:d=0.5', '-f', 'null', '-'],
+          { timeout: 120000, maxBuffer: 16 * 1024 * 1024 },
+          function (err, stdout, stderr) {
+            // A killed/timed-out run has PARTIAL stderr — missing silences would
+            // silently degrade timing, so treat it as "no data" (Pr-plugin M3).
+            if (err && (err.killed || err.signal)) return resolve(null)
+            var sils = window.PURE_SUBTITLES.parseSilencedetect(String(stderr || ''), offsetSec)
+            resolve(sils.length ? sils : null)
+          }
+        )
+      } catch (e) { resolve(null) }
+    })
+  }
+
+  /**
+   * transcribe_comp_audio: render active-comp audio to temp AIFF (host),
+   * upload to Cloud.ru Whisper (openai/whisper-large-v3, verbose_json),
+   * normalize segments, cache them for create_subtitles, return them.
+   */
+  function _transcribeCompAudio (args) {
+    var span = {
+      startTime: (typeof args.start_time === 'number') ? args.start_time : null,
+      endTime: (typeof args.end_time === 'number') ? args.end_time : null
+    }
+    var call = 'extensionsLlmChat_renderCompAudio(' + toESLiteral(span) + ')'
+    var audioPath = null
+    return evalHostFunction(call, AUDIO_RENDER_TIMEOUT_MS).then(function (res) {
+      if (!res || res.ok !== true) return res
+      audioPath = res.audioPath
+      var buf
+      try {
+        buf = require('fs').readFileSync(audioPath)
+      } catch (eRead) {
+        return { ok: false, message: 'Rendered audio could not be read from ' + audioPath + ': ' + eRead.message }
+      }
+      if (buf.length > MAX_TRANSCRIBE_UPLOAD_BYTES) {
+        return {
+          ok: false,
+          message: 'Rendered audio is ' + Math.round(buf.length / 1048576) + ' MB — over the ' +
+            Math.round(MAX_TRANSCRIBE_UPLOAD_BYTES / 1048576) + ' MB transcription upload limit. ' +
+            'Transcribe the comp in spans instead: call transcribe_comp_audio with start_time/end_time (~90-second chunks), then create_subtitles once per span or pass merged segments.'
+        }
+      }
+      var cfg = window.EXTENSIONS_LLM_CHAT_CONFIG || {}
+      var secrets = window.EXTENSIONS_LLM_CHAT_SECRETS || {}
+      var apiKey = secrets.apiKey || cfg.apiKey || ''
+      if (!apiKey) return { ok: false, message: 'No Cloud.ru API key configured — transcription unavailable.' }
+      var baseUrl = cfg.baseUrl || 'https://foundation-models.api.cloud.ru/v1'
+      var form = new FormData()
+      form.append('file', new Blob([buf]), 'comp-audio.aif')
+      form.append('model', cfg.transcribeModel || 'openai/whisper-large-v3')
+      form.append('response_format', 'verbose_json')
+      // verbose_json 400s when the language field is absent (verified live) —
+      // the tool schema requires `language`, so it is always present here.
+      form.append('language', String(args.language))
+
+      // Runs concurrently with the Whisper upload — silence detection on a
+      // local file is much faster than the network round-trip.
+      var silencePromise = _detectSilences(audioPath, res.startTime || 0)
+
+      var controller = new AbortController()
+      var timer = setTimeout(function () { controller.abort() }, TRANSCRIBE_FETCH_TIMEOUT_MS)
+      return fetch(baseUrl + '/audio/transcriptions', {
+        method: 'POST',
+        headers: { Authorization: 'Bearer ' + apiKey },
+        body: form,
+        signal: controller.signal
+      }).then(function (resp) {
+        clearTimeout(timer)
+        return resp.text().then(function (text) {
+          if (!resp.ok) {
+            return { ok: false, message: 'Whisper transcription failed: HTTP ' + resp.status + ' — ' + text.slice(0, 300) }
+          }
+          var data
+          try { data = JSON.parse(text) } catch (eJson) {
+            return { ok: false, message: 'Whisper returned non-JSON: ' + text.slice(0, 200) }
+          }
+          var segments = window.PURE_SUBTITLES.normalizeWhisperSegments(data, res.startTime || 0)
+          if (!segments.length) {
+            return { ok: false, message: 'Whisper returned no usable speech segments (comp audio may be silent or in another language than "' + args.language + '").' }
+          }
+          return silencePromise.then(function (silences) {
+            _lastTranscription = {
+              segments: segments,
+              silences: silences,
+              language: args.language,
+              durationSec: res.durationSec
+            }
+            return {
+              ok: true,
+              message: 'Transcribed ' + res.durationSec.toFixed(1) + 's of comp audio: ' + segments.length +
+                ' segment(s), language "' + args.language + '"' +
+                (silences ? '; ' + silences.length + ' silence gap(s) detected — cue timing will snap to actual speech' : '') +
+                '. Segments are cached — call create_subtitles next (no need to pass them back). ' +
+                'To fix wording first, pass corrected segments to create_subtitles explicitly.',
+              language: args.language,
+              durationSec: res.durationSec,
+              segmentCount: segments.length,
+              segments: segments
+            }
+          })
+        })
+      }).catch(function (eFetch) {
+        clearTimeout(timer)
+        return { ok: false, message: 'Whisper transcription request failed: ' + ((eFetch && eFetch.message) || String(eFetch)) }
+      })
+    }).then(function (finalRes) {
+      if (audioPath) { try { require('fs').unlinkSync(audioPath) } catch (_) {} }
+      return finalRes
+    }, function (err) {
+      if (audioPath) { try { require('fs').unlinkSync(audioPath) } catch (_) {} }
+      throw err
+    })
+  }
+
+  /**
+   * create_subtitles: build display cues from segments (explicit args or the
+   * cached last transcription) via PURE_SUBTITLES.buildCues, then create the
+   * animated rig in AE (one undoable host call).
+   */
+  function _createSubtitles (args) {
+    var rawSegments = (args.segments && args.segments.length) ? args.segments
+      : (_lastTranscription && _lastTranscription.segments)
+    if (!rawSegments || !rawSegments.length) {
+      return Promise.resolve({
+        ok: false,
+        message: 'create_subtitles: no segments available. Call transcribe_comp_audio first (its result is cached), or pass `segments` explicitly ([{startSec, endSec, text}]).'
+      })
+    }
+    var segments = window.PURE_SUBTITLES.normalizeWhisperSegments(rawSegments, 0)
+    if (!segments.length) {
+      return Promise.resolve({ ok: false, message: 'create_subtitles: `segments` items must look like {startSec, endSec, text} with endSec > startSec and non-empty text.' })
+    }
+    var cues = window.PURE_SUBTITLES.buildCues(segments, {
+      maxCharsPerLine: (typeof args.max_chars_per_line === 'number') ? args.max_chars_per_line : 20,
+      maxLines: (typeof args.max_lines === 'number') ? args.max_lines : 2,
+      maxDurSec: (typeof args.max_cue_duration === 'number') ? args.max_cue_duration : 4,
+      // Silences from the last transcription's audio (ffmpeg silencedetect):
+      // word alignment subtracts them, so cues start at actual speech onset
+      // instead of the (early) raw Whisper segment start. Also valid for
+      // explicit `segments` — they are wording fixes over the SAME audio.
+      silences: (_lastTranscription && _lastTranscription.silences) || null
+    })
+    if (!cues.length) {
+      return Promise.resolve({ ok: false, message: 'create_subtitles: cue building produced no cues from ' + segments.length + ' segment(s).' })
+    }
+    var hostCues = []
+    for (var i = 0; i < cues.length; i++) {
+      hostCues.push({ startSec: cues[i].startSec, endSec: cues[i].endSec, text: cues[i].text })
+    }
+    var call = 'extensionsLlmChat_createSubtitles(' + toESLiteral(hostCues) + ',' + toESLiteral({
+      layerName: args.layer_name || undefined,
+      font: args.font || undefined,
+      fontSize: (typeof args.font_size === 'number') ? args.font_size : undefined,
+      fillColor: (args.fill_color && args.fill_color.length === 3) ? args.fill_color : undefined,
+      position: args.position || undefined,
+      box: (typeof args.box === 'boolean') ? args.box : undefined,
+      boxColor: (args.box_color && args.box_color.length === 3) ? args.box_color : undefined,
+      boxOpacity: (typeof args.box_opacity === 'number') ? args.box_opacity : undefined,
+      animation: args.animation || undefined
+    }) + ')'
+    // Keyframing hundreds of cues can exceed the 30s default ceiling.
+    return evalHostFunction(call, 120000).then(function (res) {
+      if (res && res._nonJson) {
+        return { ok: false, message: 'Host returned a non-JSON result (likely an ExtendScript error): ' + String(res.raw == null ? '' : res.raw).slice(0, 300) }
+      }
+      return res
+    })
   }
 
   /**
@@ -226,6 +449,11 @@
         if (typeof args.comp_id !== 'number' && !isStr(args.comp_name)) {
           return 'open_comp: provide `comp_id` (preferred, from list_project_items) or `comp_name`.'
         }
+        return null
+      case 'transcribe_comp_audio':
+        // Whisper verbose_json 400s without an explicit language (verified
+        // live against Cloud.ru), so autodetect is not an option here.
+        if (!isStr(args.language)) return 'transcribe_comp_audio: missing required `language` — ISO 639-1 code of the speech language (e.g. "ru", "en"). The Whisper endpoint rejects verbose_json requests without it.'
         return null
     }
     return null
@@ -831,6 +1059,27 @@
         saveUserSnippets(uxRest)
         return Promise.resolve({ ok: true, message: 'Deleted snippet "' + args.id + '". ' + uxRest.length + ' user snippet(s) remain.' })
       }
+
+      // Subtitles — orchestrated in the panel (render audio via host, Whisper
+      // upload via Node fetch, cue building via PURE_SUBTITLES), so these
+      // return directly instead of building a `call` string. Outcomes are
+      // still recorded for the anti-spam guard.
+      case 'transcribe_comp_audio':
+        return _transcribeCompAudio(args).then(function (res) {
+          _recordToolOutcome(toolName, args, res)
+          return res
+        }, function (err) {
+          _recordToolOutcome(toolName, args, { ok: false, message: (err && err.message) || String(err) })
+          throw err
+        })
+      case 'create_subtitles':
+        return _createSubtitles(args).then(function (res) {
+          _recordToolOutcome(toolName, args, res)
+          return res
+        }, function (err) {
+          _recordToolOutcome(toolName, args, { ok: false, message: (err && err.message) || String(err) })
+          throw err
+        })
 
       // Property linking
       case 'link_properties':

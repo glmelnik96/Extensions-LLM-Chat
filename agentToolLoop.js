@@ -300,7 +300,13 @@
     // synchronous JS (no parallelism race).
     save_user_expression: 1,
     list_user_expressions: 1,
-    delete_user_expression: 1
+    delete_user_expression: 1,
+    // Renders audio to a temp file + uploads it — heavy, but does not modify
+    // the project (render queue state is restored), so no Undo counting.
+    // Kept OUT of parallel batches implicitly: the render queue is a shared
+    // singleton, but read-only tools only parallelize with each other and
+    // other reads don't touch the RQ.
+    transcribe_comp_audio: 1
   }
 
   /**

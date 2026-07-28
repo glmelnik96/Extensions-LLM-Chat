@@ -645,11 +645,14 @@ function extensionsLlmChat_saveCompFramePng (pathOrName, persistent) {
         ('0' + d.getDate()).slice(-2);
       var rootFolder = new Folder('~/AE-agent-captures');
       if (!rootFolder.exists) { try { rootFolder.create(); } catch (eR) {} }
+      // Prune BEFORE creating today's folder: the prune sweeps empty dated
+      // subfolders, and saveFrameToPng writes asynchronously — pruning after
+      // deleted the brand-new (still empty) day folder, so the async PNG
+      // write failed with an AE "file could not be found" dialog.
+      try { _pruneOldCaptures(rootFolder, 50); } catch (ePrune) {}
       var dayFolder = new Folder('~/AE-agent-captures/' + datedFolder);
       if (!dayFolder.exists) { try { dayFolder.create(); } catch (eD) {} }
       outFile = new File(dayFolder.fsName + '/' + pathOrName);
-      // Prune old captures: keep newest 50 across all dated subfolders.
-      try { _pruneOldCaptures(rootFolder, 50); } catch (ePrune) {}
     } else {
       outFile = new File(pathOrName);
       try {
@@ -4516,6 +4519,346 @@ function extensionsLlmChat_openComp (compId, compName) {
 }
 
 // ============================================================================
+// Animated subtitles: comp-audio render (for Whisper) + cue keyframing
+// ============================================================================
+
+/**
+ * Render the active comp's audio to a temp AIFF file via the render queue.
+ * Uses the stock audio-only "AIFF 48kHz" output-module template (matched by
+ * substring so localized/renamed variants still work). Other queued items are
+ * temporarily un-queued so rq.render() renders only ours; the RQ item is
+ * removed afterwards, leaving the project unchanged (read-only semantics).
+ * opts: { startTime, endTime } (seconds, optional span inside the comp).
+ * Returns { ok, audioPath, durationSec, startTime }.
+ */
+function extensionsLlmChat_renderCompAudio (opts) {
+  var result = { ok: false, message: '', audioPath: '', durationSec: 0, startTime: 0 };
+  var rqi = null;
+  var restore = [];
+  var rq = null;
+  var dispStartRestore = null;
+  var dispStartComp = null;
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var comp = ctx.comp;
+    var o = opts || {};
+    var start = (typeof o.startTime === 'number' && o.startTime >= 0) ? Math.min(o.startTime, comp.duration) : 0;
+    var end = (typeof o.endTime === 'number' && o.endTime > start) ? Math.min(o.endTime, comp.duration) : comp.duration;
+    if (end - start < 0.1) { result.message = 'Requested audio span is too short (' + (end - start).toFixed(3) + 's).'; return resultToJson(result); }
+
+    // A non-zero displayStartTime (source-timecode comps) makes AE pop a
+    // modal "frames outside of range" warning on our 0-based timeSpanStart.
+    // beginSuppressDialogs does NOT catch it (verified live: scripting froze
+    // until the user clicked OK). Zero it for the render, restore after —
+    // it is display-only and does not shift scripting/keyframe times.
+    try {
+      if (comp.displayStartTime !== 0) {
+        dispStartRestore = comp.displayStartTime;
+        dispStartComp = comp;
+        comp.displayStartTime = 0;
+      }
+    } catch (eDs) {}
+
+    rq = app.project.renderQueue;
+    rqi = rq.items.add(comp);
+    var om = rqi.outputModule(1);
+    var tpls = om.templates;
+    var tplName = null;
+    for (var t = 0; t < tpls.length; t++) {
+      var nm = String(tpls[t]);
+      if (nm.indexOf('_HIDDEN') === 0) continue;
+      if (nm.toUpperCase().indexOf('AIFF') !== -1) { tplName = nm; break; }
+    }
+    if (!tplName) {
+      try { rqi.remove(); } catch (eRm0) {}
+      result.message = 'No AIFF audio output-module template found (render queue templates: ' + tpls.join(', ') + ').';
+      return resultToJson(result);
+    }
+    om.applyTemplate(tplName);
+    try {
+      // NOTE: the setter takes 0-based comp time (verified live: 0 renders the
+      // real audio; adding comp.displayStartTime rendered silence and Whisper
+      // hallucinated). On comps with a non-zero displayStartTime AE still pops
+      // a spurious "frames outside of range" warning against the DISPLAY range
+      // — a modal that freezes scripting — hence the dialog suppression below.
+      rqi.timeSpanStart = start;
+      rqi.timeSpanDuration = end - start;
+    } catch (eSpan) { /* full-comp fallback: span setters missing on old AE */ start = 0; end = comp.duration; }
+    var outFile = new File(Folder.temp.fsName + '/ae-agent-audio-' + (new Date().getTime()) + '.aif');
+    om.file = outFile;
+
+    // Un-queue other items so rq.render() renders only ours.
+    for (var i = 1; i <= rq.numItems; i++) {
+      var it = rq.item(i);
+      if (it === rqi) continue;
+      try {
+        if (it.status === RQItemStatus.QUEUED) { it.render = false; restore.push(i); }
+      } catch (eQ) {}
+    }
+    // Belt and braces: suppress any render warning dialog — a modal here
+    // freezes the synchronous render call past the panel-side timeout.
+    var suppressed = false;
+    try { app.beginSuppressDialogs(); suppressed = true; } catch (eSup) {}
+    try {
+      rq.render(); // synchronous
+    } finally {
+      if (suppressed) { try { app.endSuppressDialogs(false); } catch (eSup2) {} }
+    }
+    for (var r = 0; r < restore.length; r++) {
+      try { rq.item(restore[r]).render = true; } catch (eR) {}
+    }
+    restore = [];
+    try { rqi.remove(); } catch (eRm) {}
+    rqi = null;
+    if (dispStartRestore !== null) {
+      try { dispStartComp.displayStartTime = dispStartRestore; } catch (eDs2) {}
+      dispStartRestore = null;
+    }
+    if (!outFile.exists) {
+      result.message = 'Audio render finished but produced no file (template "' + tplName + '").';
+      return resultToJson(result);
+    }
+    result.ok = true;
+    result.audioPath = outFile.fsName;
+    result.durationSec = end - start;
+    result.startTime = start;
+    result.message = 'Rendered comp audio span ' + start.toFixed(2) + '-' + end.toFixed(2) + 's to AIFF (' + tplName + ').';
+    return resultToJson(result);
+  } catch (e) {
+    // Best-effort restore of the queue on failure.
+    try { for (var r2 = 0; r2 < restore.length; r2++) { rq.item(restore[r2]).render = true; } } catch (x1) {}
+    try { if (rqi) rqi.remove(); } catch (x2) {}
+    try { if (dispStartRestore !== null && dispStartComp) dispStartComp.displayStartTime = dispStartRestore; } catch (x3) {}
+    result.message = 'renderCompAudio error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/** Escape a string for embedding inside a double-quoted expression literal. */
+function _exprQuote (s) {
+  return String(s).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+}
+
+/**
+ * Create an animated subtitle rig from pre-built cues.
+ * cues: [{ startSec, endSec, text }] — text may contain \n (line breaks).
+ * opts: {
+ *   layerName ('Subtitles'), font (PostScript name), fontSize (px, default
+ *   4.5% of comp height), fillColor ([r,g,b] 0..1), position
+ *   ('bottom'|'center'|'top'), box (default true), boxColor ([r,g,b]),
+ *   boxOpacity (0..100, default 60), animation ('word_reveal'|'none')
+ * }
+ * Rig: one text layer with Source Text HOLD keyframes (one per cue + empty-
+ * text keys in gaps), a position expression that pins the text block edge so
+ * 1- and 2-line cues sit consistently, an optional auto-sizing background box
+ * (sourceRectAtTime expressions), and an optional word-by-word reveal
+ * (text animator Opacity 0 + expression selector driven by cue keyframe times).
+ */
+function extensionsLlmChat_createSubtitles (cues, opts) {
+  var result = { ok: false, message: '', layerId: null, layerName: '', boxLayerId: null, cueCount: 0, fontWarning: '' };
+  var undoOpen = false;
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var comp = ctx.comp;
+    if (!cues || !cues.length) { result.message = 'No cues provided.'; return resultToJson(result); }
+    var o = opts || {};
+    var layerName = (typeof o.layerName === 'string' && o.layerName !== '') ? o.layerName : 'Subtitles';
+    // The name is embedded in expressions — keep it quote-safe.
+    layerName = layerName.replace(/["\\]/g, '');
+
+    _beginToolUndo('Agent: Create subtitles');
+    undoOpen = true;
+
+    var textLayer = comp.layers.addText('');
+    textLayer.name = layerName;
+    var textProp = textLayer.property('ADBE Text Properties').property('ADBE Text Document');
+
+    // Base style on the live TextDocument (same pattern as setTextDocument /
+    // createLayer Fix A: mutate value, then setValue).
+    var doc = textProp.value;
+    var requestedFont = (typeof o.font === 'string' && o.font !== '') ? o.font : null;
+    if (requestedFont) { try { doc.font = requestedFont; } catch (eF) {} }
+    var explicitFontSize = (typeof o.fontSize === 'number' && o.fontSize > 0);
+    doc.fontSize = explicitFontSize ? o.fontSize : Math.round(comp.height * 0.045);
+    doc.fillColor = (o.fillColor instanceof Array && o.fillColor.length === 3) ? o.fillColor : [1, 1, 1];
+    try { doc.applyStroke = false; } catch (eSt) {}
+    // The character panel's All Caps state is inherited by addText — reset it
+    // (live bug: subtitles rendered ALL-CAPS from the user's panel state).
+    try { doc.fontCapsOption = FontCapsOption.FONT_NORMAL_CAPS; } catch (eCaps) {}
+    doc.justification = ParagraphJustification.CENTER_JUSTIFY;
+    textProp.setValue(doc);
+
+    // Auto-fit the DEFAULT font size: glyph width varies wildly per font
+    // (live bug: 19-char Cyrillic line = 2541px at 184px font in a 2160px
+    // comp). Measure the widest cue line and shrink to fit 92% comp width.
+    // An explicitly requested fontSize is respected as-is.
+    if (!explicitFontSize) {
+      var widestLine = '';
+      for (var wi = 0; wi < cues.length; wi++) {
+        var wLines = String(cues[wi].text == null ? '' : cues[wi].text).split('\n');
+        for (var wj = 0; wj < wLines.length; wj++) {
+          if (wLines[wj].length > widestLine.length) widestLine = wLines[wj];
+        }
+      }
+      if (widestLine !== '') {
+        var dMeasure = textProp.value;
+        dMeasure.text = widestLine;
+        textProp.setValue(dMeasure);
+        var mRect = textLayer.sourceRectAtTime(0, false);
+        var maxW = comp.width * 0.92;
+        if (mRect.width > maxW && mRect.width > 0) {
+          var dShrink = textProp.value;
+          dShrink.fontSize = Math.max(10, Math.floor(dShrink.fontSize * maxW / mRect.width));
+          textProp.setValue(dShrink);
+        }
+        var dClear = textProp.value;
+        dClear.text = '';
+        textProp.setValue(dClear);
+      }
+    }
+    if (requestedFont) {
+      try {
+        if (textProp.value.font !== requestedFont) {
+          result.fontWarning = 'Requested font "' + requestedFont + '" not found; AE substituted "' + textProp.value.font + '". Use a PostScript name (e.g. "ArialMT", "Arial-BoldMT").';
+        }
+      } catch (eFw) {}
+    }
+
+    // One HOLD keyframe per cue + empty-text keys in gaps. Mutating the
+    // current value and setValueAtTime preserves styling; Source Text keys
+    // are hold-interpolated by AE automatically.
+    var GAP_EPS = 0.08;
+    for (var i = 0; i < cues.length; i++) {
+      var cue = cues[i];
+      var d = textProp.value;
+      d.text = String(cue.text == null ? '' : cue.text);
+      textProp.setValueAtTime(cue.startSec, d);
+      var nextStart = (i + 1 < cues.length) ? cues[i + 1].startSec : null;
+      if (nextStart === null || nextStart - cue.endSec > GAP_EPS) {
+        var dEmpty = textProp.value;
+        dEmpty.text = '';
+        textProp.setValueAtTime(cue.endSec, dEmpty);
+      }
+    }
+
+    // Pin the text block edge via a position expression so 1- and 2-line
+    // cues sit consistently (text position alone moves the BASELINE).
+    var posName = (typeof o.position === 'string') ? o.position : 'bottom';
+    var posExpr;
+    var cw = 'thisComp.width/2';
+    if (posName === 'top') {
+      posExpr = 'var r = sourceRectAtTime(time, false);\n[' + cw + ', ' + Math.round(comp.height * 0.08) + ' - r.top];';
+    } else if (posName === 'center') {
+      posExpr = 'var r = sourceRectAtTime(time, false);\n[' + cw + ', ' + Math.round(comp.height * 0.5) + ' - (r.top + r.height/2)];';
+    } else {
+      posExpr = 'var r = sourceRectAtTime(time, false);\n[' + cw + ', ' + Math.round(comp.height * 0.9) + ' - (r.top + r.height)];';
+    }
+    var posProp = textLayer.property('ADBE Transform Group').property('ADBE Position');
+    posProp.expression = posExpr;
+
+    // Optional word-by-word reveal: animator Opacity 0 + expression selector.
+    // Words inside the current cue fade in sequentially across the first 70%
+    // of the cue duration; empty-text keys (gaps) show nothing anyway.
+    var animation = (typeof o.animation === 'string') ? o.animation : 'word_reveal';
+    if (animation === 'word_reveal') {
+      var animators = textLayer.property('ADBE Text Properties').property('ADBE Text Animators');
+      var animator = animators.addProperty('ADBE Text Animator');
+      animator.name = 'Word Reveal';
+      animator.property('ADBE Text Animator Properties').addProperty('ADBE Text Opacity');
+      // addProperty may invalidate refs — re-resolve by name (learned bug #5).
+      animator = animators.property('Word Reveal');
+      animator.property('ADBE Text Animator Properties').property('ADBE Text Opacity').setValue(0);
+      var selector = animator.property('ADBE Text Selectors').addProperty('ADBE Text Expressible Selector');
+      selector = animators.property('Word Reveal').property('ADBE Text Selectors').property(1);
+      try { selector.property('ADBE Text Range Units'); } catch (eU) {}
+      // Based On = Words. Live-verified matchName on AE 2025 is
+      // 'ADBE Text Range Type2'; keep a display-name fallback just in case.
+      try { selector.property('ADBE Text Range Type2').setValue(3); } catch (eB) {
+        try { selector.property('Based On').setValue(3); } catch (eB2) {}
+      }
+      var amountExpr =
+        'var st = thisLayer.text.sourceText;\n' +
+        'var amt = 0;\n' +
+        'if (st.numKeys > 0) {\n' +
+        '  var k = st.nearestKey(time).index;\n' +
+        '  if (st.key(k).time > time) k--;\n' +
+        '  if (k < 1) { amt = 100; } else {\n' +
+        '    var cs = st.key(k).time;\n' +
+        '    var ce = (k < st.numKeys) ? st.key(k + 1).time : thisLayer.outPoint;\n' +
+        '    var reveal = Math.max(0.001, (ce - cs) * 0.7);\n' +
+        '    var frac = (time - cs) / reveal;\n' +
+        '    amt = ((textIndex - 0.99) / textTotal) <= frac ? 0 : 100;\n' +
+        '  }\n' +
+        '}\n' +
+        'amt';
+      // Live-verified matchName: 'ADBE Text Expressible Amount'. The
+      // display-name fallback ('Amount') would break on localized AE.
+      try {
+        selector.property('ADBE Text Expressible Amount').expression = amountExpr;
+      } catch (eA) {
+        selector.property('Amount').expression = amountExpr;
+      }
+    }
+
+    // Optional auto-sizing background box behind the text.
+    var boxLayer = null;
+    if (o.box !== false) {
+      boxLayer = comp.layers.addShape();
+      boxLayer.name = layerName + ' Box';
+      var rootVec = boxLayer.property('ADBE Root Vectors Group');
+      var grp = rootVec.addProperty('ADBE Vector Group');
+      grp.name = 'Box';
+      grp.property('ADBE Vectors Group').addProperty('ADBE Vector Shape - Rect');
+      grp.property('ADBE Vectors Group').addProperty('ADBE Vector Graphic - Fill');
+      // Re-resolve after addProperty calls (sibling refs get invalidated).
+      grp = boxLayer.property('ADBE Root Vectors Group').property('Box');
+      var boxColor = (o.boxColor instanceof Array && o.boxColor.length === 3) ? o.boxColor : [0, 0, 0];
+      grp.property('ADBE Vectors Group').property('ADBE Vector Graphic - Fill').property('ADBE Vector Fill Color').setValue([boxColor[0], boxColor[1], boxColor[2], 1]);
+      var padX = Math.round((doc.fontSize || 40) * 0.6);
+      var padY = Math.round((doc.fontSize || 40) * 0.4);
+      var qName = _exprQuote(layerName);
+      grp.property('ADBE Vectors Group').property('ADBE Vector Shape - Rect').property('ADBE Vector Rect Size').expression =
+        'var e = [0, 0];\n' +
+        'try {\n' +
+        '  var r = thisComp.layer("' + qName + '").sourceRectAtTime(time, false);\n' +
+        '  if (r.width > 0) e = [r.width + ' + (padX * 2) + ', r.height + ' + (padY * 2) + '];\n' +
+        '} catch (err) {}\n' +
+        'e';
+      boxLayer.property('ADBE Transform Group').property('ADBE Position').expression =
+        'var e = [-10000, -10000];\n' +
+        'try {\n' +
+        '  var L = thisComp.layer("' + qName + '");\n' +
+        '  var r = L.sourceRectAtTime(time, false);\n' +
+        '  if (r.width > 0) e = L.toComp([r.left + r.width / 2, r.top + r.height / 2]);\n' +
+        '} catch (err) {}\n' +
+        'e';
+      var boxOpacity = (typeof o.boxOpacity === 'number') ? Math.max(0, Math.min(100, o.boxOpacity)) : 60;
+      boxLayer.property('ADBE Transform Group').property('ADBE Opacity').setValue(boxOpacity);
+      boxLayer.moveAfter(textLayer);
+    }
+
+    _endToolUndo();
+    undoOpen = false;
+    result.ok = true;
+    result.layerId = textLayer.id;
+    result.layerName = textLayer.name;
+    result.boxLayerId = boxLayer ? boxLayer.id : null;
+    result.cueCount = cues.length;
+    result.message = 'Created subtitle rig "' + textLayer.name + '": ' + cues.length + ' cue(s) as Source Text hold keyframes' +
+      (animation === 'word_reveal' ? ', word-by-word reveal animator' : '') +
+      (boxLayer ? ', auto-sizing background box ("' + boxLayer.name + '")' : '') +
+      '. Position: ' + posName + '.' + (result.fontWarning ? ' WARNING: ' + result.fontWarning : '');
+    return resultToJson(result);
+  } catch (e) {
+    if (undoOpen) { try { _endToolUndo(); } catch (x) {} }
+    result.message = 'createSubtitles error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+// ============================================================================
 // Capability handshake — lets the client detect a stale/incomplete host script
 // ============================================================================
 
@@ -4549,7 +4892,9 @@ function extensionsLlmChat_getCapabilities () {
     'extensionsLlmChat_setLayerSwitches',
     'extensionsLlmChat_setTimeRemap',
     'extensionsLlmChat_splitLayer',
-    'extensionsLlmChat_openComp'
+    'extensionsLlmChat_openComp',
+    'extensionsLlmChat_renderCompAudio',
+    'extensionsLlmChat_createSubtitles'
   ];
   for (var i = 0; i < probeList.length; i++) {
     var name = probeList[i];

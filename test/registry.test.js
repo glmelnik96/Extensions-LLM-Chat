@@ -23,9 +23,9 @@ function loadBrowserGlobal (file) {
 const registryWindow = loadBrowserGlobal('toolRegistry.js')
 const tools = registryWindow.AGENT_TOOL_REGISTRY && registryWindow.AGENT_TOOL_REGISTRY.tools
 
-test('registry: exposes 63 tools', () => {
+test('registry: exposes 65 tools', () => {
   assert.ok(Array.isArray(tools), 'tools array exported')
-  assert.strictEqual(tools.length, 63)
+  assert.strictEqual(tools.length, 65)
 })
 
 test('registry: every tool has a valid OpenAI function schema', () => {
@@ -153,7 +153,7 @@ test('prompt: new behavior rules present', () => {
   assert.match(full, /Verify before claiming done/, 'self-verification rule')
   assert.match(full, /brief numbered plan/, 'plan rule')
   assert.ok(!full.includes('No chain-of-thought in the visible response'), 'old no-CoT rule replaced')
-  assert.match(full, /63 tools/, 'tool count updated')
+  assert.match(full, /65 tools/, 'tool count updated')
 })
 
 test('registry: compositing tools (2026-07-27) registered with correct schemas', () => {
@@ -229,4 +229,30 @@ test('prompt: stage-3 reframe — editing assistant, new tools mentioned', () =>
 
 test('prompt: legacy AGENT_SYSTEM_PROMPT global still exported', () => {
   assert.strictEqual(promptWindow.AGENT_SYSTEM_PROMPT, builder.buildFull())
+})
+
+test('registry: subtitle tools (2026-07-28) registered with correct schemas', () => {
+  const tr = findTool('transcribe_comp_audio')
+  assert.ok(tr, 'transcribe_comp_audio registered')
+  assert.strictEqual(JSON.stringify(tr.function.parameters.required), JSON.stringify(['language']))
+  assert.ok(tr.function.parameters.properties.start_time, 'chunking via start_time')
+  assert.ok(tr.function.parameters.properties.end_time, 'chunking via end_time')
+  assert.match(tr.function.description, /cached/i, 'mentions panel-side segment cache')
+
+  const cs = findTool('create_subtitles')
+  assert.ok(cs, 'create_subtitles registered')
+  assert.strictEqual(JSON.stringify(cs.function.parameters.required), JSON.stringify([]), 'segments optional (cache)')
+  const seg = cs.function.parameters.properties.segments
+  assert.strictEqual(JSON.stringify(seg.items.required), JSON.stringify(['startSec', 'endSec', 'text']))
+  for (const key of ['layer_name', 'font', 'font_size', 'fill_color', 'position', 'box', 'box_color', 'box_opacity', 'animation', 'max_chars_per_line', 'max_lines', 'max_cue_duration']) {
+    assert.ok(cs.function.parameters.properties[key], 'create_subtitles option: ' + key)
+  }
+})
+
+test('prompt: subtitles guidance present', () => {
+  const full = builder.buildFull()
+  assert.ok(full.includes('## Subtitles'), 'subtitles section present')
+  assert.ok(full.includes('transcribe_comp_audio'), 'mentions transcribe tool')
+  assert.ok(full.includes('create_subtitles'), 'mentions create tool')
+  assert.match(full, /ISO 639-1/, 'language requirement explained')
 })

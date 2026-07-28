@@ -44,6 +44,26 @@
              right-click = edit/delete, "+" = add, "⟲" = reset to defaults. -->
         <div class="quick-actions" id="quick-actions"></div>
 
+        <!-- Task bar: one-click tool pipelines that run directly (no LLM
+             round-trip) with live stage/elapsed status. First task: Subtitles
+             (transcribe_comp_audio → create_subtitles). -->
+        <div class="task-bar">
+          <button id="subtitles-btn" class="btn btn-secondary task-btn" title="Transcribe comp audio (Whisper) and build an animated subtitle layer. Pick the spoken language first.">Subtitles</button>
+          <select id="subtitles-lang" class="task-select" title="Spoken language — Whisper requires it">
+            <option value="ru" selected>RU</option>
+            <option value="en">EN</option>
+            <option value="de">DE</option>
+            <option value="es">ES</option>
+            <option value="fr">FR</option>
+            <option value="it">IT</option>
+            <option value="pt">PT</option>
+            <option value="zh">ZH</option>
+            <option value="ja">JA</option>
+            <option value="ko">KO</option>
+          </select>
+          <span id="subtitles-status" class="task-status"></span>
+        </div>
+
         <div class="chat-input-container">
           <textarea
             id="user-input"
@@ -87,6 +107,7 @@
     <script src="./lib/pure/quickActions.js"></script>
     <script src="./lib/pure/expressionLibrary.js"></script>
     <script src="./lib/pure/userExpressionLibrary.js"></script>
+    <script src="./lib/pure/subtitles.js"></script>
     <script src="./lib/pure/theme.js"></script>
     <script src="./lib/pure/visionCheck.js"></script>
     <script src="./lib/pure/pricing.js"></script>

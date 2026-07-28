@@ -114,6 +114,9 @@
     els.sessionRenameBtn = document.getElementById('session-rename-btn')
     els.sessionDeleteBtn = document.getElementById('session-delete-btn')
     els.visionCheckToggle = document.getElementById('vision-check-toggle')
+    els.subtitlesBtn = document.getElementById('subtitles-btn')
+    els.subtitlesLang = document.getElementById('subtitles-lang')
+    els.subtitlesStatus = document.getElementById('subtitles-status')
     els.contextMeter = document.getElementById('context-meter')
     els.contextMeterFill = document.getElementById('context-meter-fill')
     els.contextMeterText = document.getElementById('context-meter-text')
@@ -1766,6 +1769,102 @@
     })
   }
 
+  // ── Subtitles task button ──────────────────────────────────────────────
+  // One-click pipeline that drives the two subtitle tools directly (no LLM
+  // round-trip): transcribe_comp_audio → create_subtitles. Stage + elapsed
+  // seconds are shown in the task bar; the finished run is stored in the
+  // transcript as regular tool calls so the NEXT agent request replays them
+  // and the model knows the subtitle layers exist.
+  var subtitlesTaskTimer = null
+
+  function setSubtitlesStatus (text, isError) {
+    if (!els.subtitlesStatus) return
+    els.subtitlesStatus.textContent = text || ''
+    els.subtitlesStatus.classList.toggle('task-status-error', !!isError)
+    if (els.subtitlesStatus.textContent) els.subtitlesStatus.title = els.subtitlesStatus.textContent
+  }
+
+  function handleSubtitlesTask () {
+    if (state.isRequestInFlight) {
+      setStatus('Finish or stop the current request before running Subtitles.')
+      return
+    }
+    if (!window.HOST_BRIDGE) return
+    var lang = (els.subtitlesLang && els.subtitlesLang.value) || 'ru'
+    var session = ensureSession()
+
+    state.isRequestInFlight = true
+    if (els.sendBtn) els.sendBtn.disabled = true
+    if (els.subtitlesBtn) els.subtitlesBtn.disabled = true
+    if (els.subtitlesLang) els.subtitlesLang.disabled = true
+
+    var startedAt = Date.now()
+    // Rendering + Whisper can legitimately take minutes on long comps — the
+    // ticking elapsed counter is what tells the user the task is alive.
+    var stageLabel = 'Step 1/2: rendering + transcribing audio (' + lang + ')'
+    function tick () {
+      setSubtitlesStatus(stageLabel + '\u2026 ' + Math.round((Date.now() - startedAt) / 1000) + 's', false)
+    }
+    tick()
+    subtitlesTaskTimer = setInterval(tick, 1000)
+    setStatus('Subtitles: working\u2026')
+
+    var taskCalls = []
+    function logTaskCall (name, args, res) {
+      taskCalls.push({
+        id: 'subtask_' + Date.now() + '_' + taskCalls.length,
+        name: name,
+        args: args,
+        result: res,
+        status: (res && res.ok === true) ? 'ok' : 'error',
+        startTime: null,
+        endTime: null
+      })
+    }
+    function finishTask () {
+      if (subtitlesTaskTimer) { clearInterval(subtitlesTaskTimer); subtitlesTaskTimer = null }
+      state.isRequestInFlight = false
+      if (els.sendBtn) els.sendBtn.disabled = false
+      if (els.subtitlesBtn) els.subtitlesBtn.disabled = false
+      if (els.subtitlesLang) els.subtitlesLang.disabled = false
+      if (taskCalls.length > 0) {
+        session.messages.push({ role: 'assistant', text: '', toolCalls: serializeToolCalls(taskCalls) })
+        session.updatedAt = Date.now()
+        renderTranscript()
+        persistState()
+      }
+      refreshActiveCompNote(true)
+    }
+
+    window.HOST_BRIDGE.executeToolCall('transcribe_comp_audio', { language: lang })
+      .then(function (res) {
+        logTaskCall('transcribe_comp_audio', { language: lang }, res)
+        if (!res || res.ok !== true) throw new Error((res && res.message) || 'transcription failed')
+        stageLabel = 'Step 2/2: building subtitle layer (' + res.segmentCount + ' segment' + (res.segmentCount === 1 ? '' : 's') + ')'
+        tick()
+        return window.HOST_BRIDGE.executeToolCall('create_subtitles', {})
+      })
+      .then(function (res) {
+        logTaskCall('create_subtitles', {}, res)
+        if (!res || res.ok !== true) throw new Error((res && res.message) || 'subtitle layer creation failed')
+        // create_subtitles wraps everything in ONE undo group — a single
+        // Undo click reverts the whole rig (text layer + box).
+        state.lastMutatingToolCount = 1
+        updateUndoButton()
+        var secs = Math.round((Date.now() - startedAt) / 1000)
+        setSubtitlesStatus('Done in ' + secs + 's \u2014 ' + res.cueCount + ' cue(s), layer "' + res.layerName + '"', false)
+        setStatus('Ready')
+        finishTask()
+      })
+      .catch(function (err) {
+        var msg = (err && err.message) || String(err)
+        setSubtitlesStatus('Failed: ' + msg, true)
+        setStatus('Subtitles failed')
+        session.messages.push({ role: 'system', text: 'Subtitles task error: ' + msg })
+        finishTask()
+      })
+  }
+
   // ── Handle Undo ────────────────────────────────────────────────────────
   // Reflect the pending agent-action count on the Undo button. Disabled +
   // plain "Undo" when there is nothing to revert — a blind executeCommand(16)
@@ -2310,6 +2409,7 @@
     if (els.exportErrorsBtn) els.exportErrorsBtn.addEventListener('click', handleExportErrors)
     if (els.reportBtn) els.reportBtn.addEventListener('click', handleGenerateReport)
     if (els.undoBtn) els.undoBtn.addEventListener('click', handleUndo)
+    if (els.subtitlesBtn) els.subtitlesBtn.addEventListener('click', handleSubtitlesTask)
     if (els.contextMeter) els.contextMeter.addEventListener('click', handleCompactContext)
 
     // Chat switcher
