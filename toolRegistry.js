@@ -1229,7 +1229,7 @@
       type: 'function',
       function: {
         name: 'create_subtitles',
-        description: 'Create an animated subtitle layer from transcription segments (uses the segments cached by the last transcribe_comp_audio automatically — normally call with just styling options). Builds readable cues (smart line wrap, splits long phrases), sets Source Text hold keyframes, pins the text block to the bottom/center/top, optionally adds a background box and a per-word reveal animation. Pass `segments` explicitly only to override/correct the cached transcription.',
+        description: 'Create an animated subtitle layer from transcription segments (uses the segments cached by the last transcribe_comp_audio automatically — normally call with just styling options). Builds readable cues (smart line wrap, splits long phrases), sets Source Text hold keyframes, pins the text block to the bottom/center/top, optionally adds a background box and a per-word animation (word-by-word reveal or CapCut-style karaoke highlight). Pass `segments` explicitly only to override/correct the cached transcription.',
         parameters: {
           type: 'object',
           properties: {
@@ -1251,12 +1251,14 @@
             font_size: { type: 'number', description: 'Font size in px (default ~4.5% of comp height)' },
             fill_color: { type: 'array', items: { type: 'number' }, description: 'Text color [r,g,b] 0-1 (default white)' },
             position: { type: 'string', description: '"bottom" (default), "center", or "top"' },
-            box: { type: 'boolean', description: 'Background box behind the text (default true)' },
+            box: { type: 'boolean', description: 'Background box behind the text (default true; default false for animation "karaoke", which has its own plate)' },
             box_color: { type: 'array', items: { type: 'number' }, description: 'Box color [r,g,b] 0-1 (default black)' },
             box_opacity: { type: 'number', description: 'Box opacity 0-100 (default 60)' },
-            animation: { type: 'string', description: '"word_reveal" (default; words appear one by one) or "none" (whole cue at once)' },
+            animation: { type: 'string', description: '"word_reveal" (default; words appear one by one), "karaoke" (CapCut style: a colored plate travels under the word being spoken and that word switches color; forces single-line cues), or "none" (whole cue at once)' },
+            highlight_color: { type: 'array', items: { type: 'number' }, description: 'Karaoke plate color [r,g,b] 0-1 (default yellow [1,0.84,0])' },
+            highlight_text_color: { type: 'array', items: { type: 'number' }, description: 'Karaoke color of the spoken word [r,g,b] 0-1 (default near-black)' },
             max_chars_per_line: { type: 'number', description: 'Line wrap width in characters (default 20)' },
-            max_lines: { type: 'number', description: 'Max lines per cue (default 2)' },
+            max_lines: { type: 'number', description: 'Max lines per cue (default 2; ignored for "karaoke")' },
             max_cue_duration: { type: 'number', description: 'Max seconds per cue before splitting (default 4)' }
           },
           required: []

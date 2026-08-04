@@ -135,6 +135,7 @@
   // can build cues without the model re-emitting (and possibly mangling)
   // every segment. Cleared implicitly by a new transcription.
   var _lastTranscription = null // { segments:[{startSec,endSec,text}], language, durationSec, compName }
+  var _fontCache = null // { ok, families:[{f, s:[[style, postScriptName], …]}] }
 
   // Rendering comp audio (host, synchronous rq.render) + Whisper upload can
   // legitimately take minutes on long comps — well past the 30s default.
@@ -315,9 +316,14 @@
     if (!segments.length) {
       return Promise.resolve({ ok: false, message: 'create_subtitles: `segments` items must look like {startSec, endSec, text} with endSec > startSec and non-empty text.' })
     }
+    var animation = args.animation || 'word_reveal'
+    // The karaoke plate is positioned from the text block's own rect, which
+    // only identifies a single line — so karaoke cues are always one line.
+    var maxLines = (animation === 'karaoke') ? 1
+      : ((typeof args.max_lines === 'number') ? args.max_lines : 2)
     var cues = window.PURE_SUBTITLES.buildCues(segments, {
       maxCharsPerLine: (typeof args.max_chars_per_line === 'number') ? args.max_chars_per_line : 20,
-      maxLines: (typeof args.max_lines === 'number') ? args.max_lines : 2,
+      maxLines: maxLines,
       maxDurSec: (typeof args.max_cue_duration === 'number') ? args.max_cue_duration : 4,
       // Silences from the last transcription's audio (ffmpeg silencedetect):
       // word alignment subtracts them, so cues start at actual speech onset
@@ -341,7 +347,10 @@
       box: (typeof args.box === 'boolean') ? args.box : undefined,
       boxColor: (args.box_color && args.box_color.length === 3) ? args.box_color : undefined,
       boxOpacity: (typeof args.box_opacity === 'number') ? args.box_opacity : undefined,
-      animation: args.animation || undefined
+      animation: args.animation || undefined,
+      karaokeTracks: (animation === 'karaoke') ? window.PURE_SUBTITLES.buildKaraokeTracks(cues, 0.08) : undefined,
+      highlightColor: (args.highlight_color && args.highlight_color.length === 3) ? args.highlight_color : undefined,
+      highlightTextColor: (args.highlight_text_color && args.highlight_text_color.length === 3) ? args.highlight_text_color : undefined
     }) + ')'
     // Keyframing hundreds of cues can exceed the 30s default ceiling.
     return evalHostFunction(call, 120000).then(function (res) {
@@ -1290,7 +1299,22 @@
       // Reset the anti-spam streak counters at the start of each new agent
       // run so a previous run's blocked tool can be re-tried. Called from
       // agentToolLoop.runAgentLoop().
-      resetSpamGuard: _resetSpamState
+      resetSpamGuard: _resetSpamState,
+      // Cached transcription (segments + ffmpeg silences) — the panel's
+      // Save/Load transcript buttons read and restore it so subtitles can be
+      // rebuilt in another style without paying for Whisper again.
+      getLastTranscription: function () { return _lastTranscription },
+      setLastTranscription: function (t) { _lastTranscription = t || null },
+      // Installed fonts for the subtitle studio's family/style pickers.
+      // Cached for the panel session — enumerating ~150 families is not free
+      // and the list only changes when the user installs a font.
+      listFonts: function () {
+        if (_fontCache) return Promise.resolve(_fontCache)
+        return evalHostFunction('extensionsLlmChat_listFonts()', 30000).then(function (res) {
+          if (res && res.ok && res.families) _fontCache = res
+          return res || { ok: false, message: 'no result', families: [] }
+        })
+      }
     }
   }
 })()

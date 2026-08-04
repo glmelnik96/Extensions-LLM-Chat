@@ -47,6 +47,7 @@ body {
 }
 
 .panel-root {
+  position: relative; /* anchors the studio overlay */
   display: flex;
   flex-direction: column;
   height: 100vh;
@@ -470,6 +471,13 @@ body {
   border-color: var(--accent);
 }
 
+/* Availability probe (GET /models): a model the account can no longer call is
+   dimmed and struck through, so it is obvious BEFORE a request fails. */
+.model-btn-unavailable {
+  opacity: 0.45;
+  text-decoration: line-through;
+}
+
 /* ── Chat input ──────────────────────────────────────────────────────── */
 
 .chat-input-container {
@@ -749,6 +757,113 @@ body {
   padding: 0 0 4px;
 }
 
+/* ── Studio overlay (subtitles) ──────────────────────────────────────── */
+/* Feature-specific controls live in an overlay above the chat instead of
+   being stacked into the message flow. */
+
+.studio-panel {
+  position: absolute;
+  left: 8px;
+  right: 8px;
+  bottom: 34px;
+  z-index: 20;
+  background-color: var(--bg-deep);
+  border: 1px solid var(--border);
+  border-radius: var(--radius);
+  box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
+  max-height: 78vh;
+  overflow-y: auto;
+}
+
+.studio-head {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 5px 8px;
+  border-bottom: 1px solid var(--border-subtle);
+}
+
+.studio-title {
+  font-size: 11px;
+  font-weight: 600;
+  color: var(--text);
+}
+
+.studio-body {
+  padding: 6px 8px 8px;
+}
+
+.studio-row {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  margin-bottom: 5px;
+}
+
+.studio-row label {
+  flex: 0 0 74px;
+  font-size: 10px;
+  color: var(--text-dim);
+}
+
+.studio-input {
+  flex: 1;
+  min-width: 0;
+  padding: 2px 5px;
+  font-size: 10px;
+  color: var(--text);
+  background-color: var(--surface);
+  border: 1px solid var(--border);
+  border-radius: var(--radius-sm);
+  outline: none;
+}
+
+.studio-input:focus {
+  border-color: var(--accent-border);
+}
+
+.studio-input-num {
+  flex: 0 0 70px;
+}
+
+.studio-input-style {
+  flex: 0 0 96px;
+  background-color: var(--surface);
+  color: var(--text-dim);
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  font-size: 10px;
+  padding: 1px 2px;
+  min-width: 0;
+}
+
+.studio-input-hex {
+  flex: 0 0 80px;
+  font-family: "SF Mono", Menlo, Consolas, monospace;
+}
+
+.color-swatch {
+  width: 18px;
+  height: 14px;
+  flex: 0 0 auto;
+  border: 1px solid var(--border);
+  border-radius: 3px;
+  background-color: #fff;
+}
+
+.studio-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+  margin-top: 8px;
+}
+
+.studio-status {
+  margin-top: 6px;
+  white-space: normal;
+  overflow: visible;
+}
+
 .task-btn {
   font-size: 10px;
   padding: 2px 9px;
@@ -761,6 +876,31 @@ body {
   border-radius: 4px;
   font-size: 10px;
   padding: 1px 2px;
+}
+
+/* macOS parity: a <select> left at the default appearance is drawn by the OS
+   as a native popup button, which IGNORES background-color and enforces its
+   own minimum height — on a dark panel that reads as dark text on light
+   native chrome, and the taller control breaks the studio rows. Windows CEP
+   honours the CSS, which is why this only surfaces on a Mac. Opting out of
+   the native look makes both platforms use the box styled above; the arrow
+   the native widget drew for us is put back as a background chevron. */
+select.task-select,
+select.session-select {
+  -webkit-appearance: none;
+  appearance: none;
+  background-image: url("data:image/svg+xml;charset=utf-8,%3Csvg xmlns='http://www.w3.org/2000/svg' width='8' height='5'%3E%3Cpath d='M0 0h8L4 5z' fill='%238b8b8b'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right 4px center;
+  padding-right: 15px;
+}
+
+/* The open dropdown is an OS-drawn popup: without explicit colors it takes
+   the system palette instead of the panel's. */
+select.task-select option,
+select.session-select option {
+  background-color: var(--surface);
+  color: var(--text);
 }
 
 .task-status {

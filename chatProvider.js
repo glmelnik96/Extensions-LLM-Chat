@@ -342,11 +342,51 @@
     }, 3)
   }
 
+  /**
+   * GET /models — the catalog this account can actually call right now.
+   * The panel marks model buttons available/unavailable from it instead of
+   * letting the user discover a decommissioned model mid-request.
+   * Resolves { ok, models: { id: {functionCalling, contextLength} }, message };
+   * never rejects — a failed probe just leaves availability "unknown".
+   */
+  function listModels (timeoutMs) {
+    var cfg = getConfig()
+    var baseUrl = cfg.baseUrl || 'https://foundation-models.api.cloud.ru/v1'
+    var apiKey = getApiKey()
+    if (!apiKey) return Promise.resolve({ ok: false, models: {}, message: 'no API key configured' })
+    var controller = new AbortController()
+    var timer = setTimeout(function () { controller.abort() }, timeoutMs || 15000)
+    return fetch(baseUrl + '/models', {
+      headers: { Authorization: 'Bearer ' + apiKey },
+      signal: controller.signal
+    }).then(function (resp) {
+      clearTimeout(timer)
+      if (!resp.ok) return { ok: false, models: {}, message: 'HTTP ' + resp.status }
+      return resp.json().then(function (data) {
+        var list = (data && data.data) || []
+        var models = {}
+        for (var i = 0; i < list.length; i++) {
+          var m = list[i]
+          if (!m || !m.id) continue
+          models[m.id] = {
+            functionCalling: m.function_calling === true,
+            contextLength: m.context_length || 0
+          }
+        }
+        return { ok: true, models: models, message: list.length + ' model(s)' }
+      })
+    }).catch(function (e) {
+      clearTimeout(timer)
+      return { ok: false, models: {}, message: (e && e.message) || String(e) }
+    })
+  }
+
   // Export
   if (typeof window !== 'undefined') {
     window.CHAT_PROVIDER = {
       invoke: invoke,
-      parseModelId: parseModelId
+      parseModelId: parseModelId,
+      listModels: listModels
     }
   }
 })()

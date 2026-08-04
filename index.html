@@ -9,7 +9,7 @@
     <div id="app" class="panel-root">
       <!-- Header: provider badge + model selector -->
       <div class="chat-header">
-        <span class="model-badge">Cloud.ru</span>
+        <span id="provider-badge" class="model-badge" title="Click to re-check which models the account can call">Cloud.ru</span>
         <div id="model-selector" class="model-selector" role="group" aria-label="Model selector"></div>
       </div>
 
@@ -45,22 +45,11 @@
         <div class="quick-actions" id="quick-actions"></div>
 
         <!-- Task bar: one-click tool pipelines that run directly (no LLM
-             round-trip) with live stage/elapsed status. First task: Subtitles
-             (transcribe_comp_audio → create_subtitles). -->
+             round-trip). Their controls live in the Subtitles studio overlay
+             (below) so the chat area stays uncluttered; only the opener and a
+             live stage/elapsed status stay here. -->
         <div class="task-bar">
-          <button id="subtitles-btn" class="btn btn-secondary task-btn" title="Transcribe comp audio (Whisper) and build an animated subtitle layer. Pick the spoken language first.">Subtitles</button>
-          <select id="subtitles-lang" class="task-select" title="Spoken language — Whisper requires it">
-            <option value="ru" selected>RU</option>
-            <option value="en">EN</option>
-            <option value="de">DE</option>
-            <option value="es">ES</option>
-            <option value="fr">FR</option>
-            <option value="it">IT</option>
-            <option value="pt">PT</option>
-            <option value="zh">ZH</option>
-            <option value="ja">JA</option>
-            <option value="ko">KO</option>
-          </select>
+          <button id="subtitles-open-btn" class="btn btn-secondary task-btn" title="Open the subtitle studio: language, style, font, size and colors, then transcribe and build">Subtitles&hellip;</button>
           <span id="subtitles-status" class="task-status"></span>
         </div>
 
@@ -75,6 +64,73 @@
             <button id="send-btn" class="btn btn-primary" title="Send message (Enter). Shift+Enter for new line.">Send</button>
             <button id="cancel-btn" class="btn btn-danger" style="display:none" title="Cancel the running agent">Stop</button>
           </div>
+        </div>
+      </div>
+
+      <!-- Subtitles studio (2026-08-04): every subtitle control lives here so
+           it does not mix with the chat/quick actions. Opened from the task
+           bar, closed with × or Esc. Colors are hex fields + a swatch (CEF has
+           no native color picker, so <input type="color"> would be dead). -->
+      <div id="subtitles-panel" class="studio-panel" style="display:none" role="dialog" aria-label="Subtitles studio">
+        <div class="studio-head">
+          <span class="studio-title">Subtitles</span>
+          <button id="subtitles-close-btn" class="btn btn-secondary session-btn" title="Close (Esc)">&#215;</button>
+        </div>
+        <div class="studio-body">
+          <div class="studio-row">
+            <label for="subtitles-lang">Language</label>
+            <select id="subtitles-lang" class="task-select" title="Spoken language — Whisper requires it">
+              <option value="ru" selected>RU</option>
+              <option value="en">EN</option>
+              <option value="de">DE</option>
+              <option value="es">ES</option>
+              <option value="fr">FR</option>
+              <option value="it">IT</option>
+              <option value="pt">PT</option>
+              <option value="zh">ZH</option>
+              <option value="ja">JA</option>
+              <option value="ko">KO</option>
+            </select>
+          </div>
+          <div class="studio-row">
+            <label for="subtitles-style">Style</label>
+            <select id="subtitles-style" class="task-select" title="Animation style: Reveal = words appear one by one; Karaoke = CapCut-style plate under the spoken word; Plain = whole cue at once">
+              <option value="word_reveal" selected>Reveal</option>
+              <option value="karaoke">Karaoke</option>
+              <option value="none">Plain</option>
+            </select>
+          </div>
+          <div class="studio-row">
+            <label for="subtitles-font">Font</label>
+            <select id="subtitles-font" class="task-select studio-input" title="Installed font families, read from After Effects. Default: SB Sans Text."></select>
+            <select id="subtitles-font-style" class="task-select studio-input-style" title="Weight / style of the chosen family"></select>
+          </div>
+          <div class="studio-row">
+            <label for="subtitles-font-size">Size</label>
+            <input id="subtitles-font-size" class="studio-input studio-input-num" type="number" min="8" max="600" step="1" placeholder="Auto" title="Font size in px. Empty = auto-fit to 92% of comp width. The karaoke plate and its padding scale with this value." />
+          </div>
+          <div class="studio-row">
+            <label for="subtitles-color">Text color</label>
+            <input id="subtitles-color" class="studio-input studio-input-hex" type="text" maxlength="7" value="#ffffff" title="Subtitle text color (hex)" />
+            <span id="subtitles-color-sw" class="color-swatch"></span>
+          </div>
+          <div class="studio-row karaoke-only">
+            <label for="subtitles-plate-color">Plate</label>
+            <input id="subtitles-plate-color" class="studio-input studio-input-hex" type="text" maxlength="7" value="#ffd700" title="Karaoke plate color (hex)" />
+            <span id="subtitles-plate-color-sw" class="color-swatch"></span>
+          </div>
+          <div class="studio-row karaoke-only">
+            <label for="subtitles-spoken-color">Spoken word</label>
+            <input id="subtitles-spoken-color" class="studio-input studio-input-hex" type="text" maxlength="7" value="#0f0f0f" title="Color of the word currently on the plate (hex)" />
+            <span id="subtitles-spoken-color-sw" class="color-swatch"></span>
+          </div>
+          <div class="studio-actions">
+            <button id="subtitles-btn" class="btn btn-primary task-btn" title="Transcribe comp audio (Whisper) and build the subtitle layer">Transcribe + build</button>
+            <button id="subtitles-rebuild-btn" class="btn btn-secondary task-btn" title="Build the subtitle layer again from the cached/loaded transcript — no transcription, use it to try another style or colors">Rebuild</button>
+            <button id="transcript-save-btn" class="btn btn-secondary task-btn" title="Save the last transcript (segments + silence map) as JSON on the Desktop">Save transcript</button>
+            <button id="transcript-load-btn" class="btn btn-secondary task-btn" title="Load a saved transcript JSON and reuse it for Rebuild">Load transcript</button>
+          </div>
+          <div id="subtitles-panel-status" class="task-status studio-status"></div>
         </div>
       </div>
 

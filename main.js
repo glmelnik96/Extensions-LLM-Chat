@@ -29,6 +29,7 @@
   var DRAFT_KEY = 'ae-motion-agent-draft'
   var PENDING_RUN_KEY = 'ae-motion-agent-pending-run'
   var QUICK_ACTIONS_KEY = 'ae-motion-agent-quick-actions'
+  var SUBTITLE_SETTINGS_KEY = 'ae-motion-agent-subtitle-settings'
 
   // User-selectable models (panel selector). Each entry tuned from the live
   // 8-model × 4-task benchmark (2026-06-18, real AE, Russian prompts):
@@ -82,7 +83,10 @@
     isRequestInFlight: false,
     currentAbortHandle: null,
     lastMutatingToolCount: 0,
-    lastModelStatus: { status: 'unknown', label: 'model: unknown' }
+    lastModelStatus: { status: 'unknown', label: 'model: unknown' },
+    // { id: {functionCalling, contextLength} } from GET /models, or null while
+    // the availability of the panel's models is unknown (probe not run/failed).
+    modelAvailability: null
   }
 
   function getActiveSession () {
@@ -109,6 +113,7 @@
     els.statusText = document.getElementById('status-text')
     els.modelStatus = document.getElementById('model-status')
     els.modelSelector = document.getElementById('model-selector')
+    els.providerBadge = document.getElementById('provider-badge')
     els.sessionSelect = document.getElementById('session-select')
     els.sessionNewBtn = document.getElementById('session-new-btn')
     els.sessionRenameBtn = document.getElementById('session-rename-btn')
@@ -116,7 +121,21 @@
     els.visionCheckToggle = document.getElementById('vision-check-toggle')
     els.subtitlesBtn = document.getElementById('subtitles-btn')
     els.subtitlesLang = document.getElementById('subtitles-lang')
+    els.subtitlesStyle = document.getElementById('subtitles-style')
     els.subtitlesStatus = document.getElementById('subtitles-status')
+    els.subtitlesPanelStatus = document.getElementById('subtitles-panel-status')
+    els.subtitlesRebuildBtn = document.getElementById('subtitles-rebuild-btn')
+    els.subtitlesPanel = document.getElementById('subtitles-panel')
+    els.subtitlesOpenBtn = document.getElementById('subtitles-open-btn')
+    els.subtitlesCloseBtn = document.getElementById('subtitles-close-btn')
+    els.subtitlesFont = document.getElementById('subtitles-font')
+    els.subtitlesFontStyle = document.getElementById('subtitles-font-style')
+    els.subtitlesFontSize = document.getElementById('subtitles-font-size')
+    els.subtitlesColor = document.getElementById('subtitles-color')
+    els.subtitlesPlateColor = document.getElementById('subtitles-plate-color')
+    els.subtitlesSpokenColor = document.getElementById('subtitles-spoken-color')
+    els.transcriptSaveBtn = document.getElementById('transcript-save-btn')
+    els.transcriptLoadBtn = document.getElementById('transcript-load-btn')
     els.contextMeter = document.getElementById('context-meter')
     els.contextMeterFill = document.getElementById('context-meter-fill')
     els.contextMeterText = document.getElementById('context-meter-text')
@@ -988,8 +1007,55 @@
       btn.textContent = m.label
       btn.setAttribute('data-model-id', m.id)
       btn.setAttribute('title', m.id)
+      // Availability from the last GET /models probe: a model the account can
+      // no longer call (or that lost tool support) is dimmed BEFORE it is used.
+      if (state.modelAvailability) {
+        var info = state.modelAvailability[m.id]
+        if (!info) {
+          btn.className += ' model-btn-unavailable'
+          btn.setAttribute('title', m.id + ' \u2014 NOT available on this account/endpoint')
+        } else if (!info.functionCalling) {
+          btn.className += ' model-btn-unavailable'
+          btn.setAttribute('title', m.id + ' \u2014 served, but without function calling: the agent cannot use tools with it')
+        } else {
+          btn.setAttribute('title', m.id + ' \u2014 available, tools supported' +
+            (info.contextLength ? ', context ' + Math.round(info.contextLength / 1024) + 'K' : ''))
+        }
+      }
       els.modelSelector.appendChild(btn)
     }
+  }
+
+  // Ask the endpoint which models it actually serves (GET /models) and show it
+  // on the provider badge + model buttons. Cheap (one request, no tokens) and
+  // fail-safe: a failed probe leaves availability unknown, nothing is blocked.
+  function probeModelAvailability () {
+    if (!window.CHAT_PROVIDER || typeof window.CHAT_PROVIDER.listModels !== 'function') return
+    if (els.providerBadge) els.providerBadge.textContent = 'Cloud.ru \u2026'
+    window.CHAT_PROVIDER.listModels().then(function (res) {
+      var checkedAt = new Date().toLocaleTimeString()
+      if (!res.ok) {
+        state.modelAvailability = null
+        if (els.providerBadge) {
+          els.providerBadge.textContent = 'Cloud.ru ?'
+          els.providerBadge.title = 'Model availability unknown (' + res.message + ') \u2014 click to re-check'
+        }
+        renderModelSelector()
+        return
+      }
+      state.modelAvailability = res.models
+      var okCount = 0
+      for (var i = 0; i < AVAILABLE_MODELS.length; i++) {
+        var info = res.models[AVAILABLE_MODELS[i].id]
+        if (info && info.functionCalling) okCount++
+      }
+      if (els.providerBadge) {
+        els.providerBadge.textContent = 'Cloud.ru ' + okCount + '/' + AVAILABLE_MODELS.length
+        els.providerBadge.title = okCount + ' of ' + AVAILABLE_MODELS.length + ' panel models available (' +
+          res.message + ', checked ' + checkedAt + ') \u2014 click to re-check'
+      }
+      renderModelSelector()
+    })
   }
 
   // Switch the active model. Blocked mid-request so a run always finishes on the
@@ -1777,31 +1843,258 @@
   // and the model knows the subtitle layers exist.
   var subtitlesTaskTimer = null
 
+  // Status is mirrored into the task bar (visible when the studio is closed)
+  // and into the studio itself, where it can wrap onto several lines.
   function setSubtitlesStatus (text, isError) {
-    if (!els.subtitlesStatus) return
-    els.subtitlesStatus.textContent = text || ''
-    els.subtitlesStatus.classList.toggle('task-status-error', !!isError)
-    if (els.subtitlesStatus.textContent) els.subtitlesStatus.title = els.subtitlesStatus.textContent
+    var targets = [els.subtitlesStatus, els.subtitlesPanelStatus]
+    for (var i = 0; i < targets.length; i++) {
+      if (!targets[i]) continue
+      targets[i].textContent = text || ''
+      targets[i].classList.toggle('task-status-error', !!isError)
+      if (text) targets[i].title = text
+    }
   }
 
-  function handleSubtitlesTask () {
+  function getSubtitleStyle () {
+    var v = (els.subtitlesStyle && els.subtitlesStyle.value) || 'word_reveal'
+    return (v === 'karaoke' || v === 'none') ? v : 'word_reveal'
+  }
+
+  function setTaskControlsDisabled (disabled) {
+    var ctrls = [els.sendBtn, els.subtitlesBtn, els.subtitlesLang, els.subtitlesStyle,
+      els.subtitlesRebuildBtn, els.transcriptSaveBtn, els.transcriptLoadBtn,
+      els.subtitlesFont, els.subtitlesFontStyle, els.subtitlesFontSize, els.subtitlesColor,
+      els.subtitlesPlateColor, els.subtitlesSpokenColor]
+    for (var i = 0; i < ctrls.length; i++) if (ctrls[i]) ctrls[i].disabled = !!disabled
+  }
+
+  // ── Subtitles studio (overlay) ─────────────────────────────────────────
+  // Style/font/size/color controls live in their own overlay so they do not
+  // compete with the chat input and quick actions. Settings persist in
+  // localStorage — a look is usually reused across many comps.
+  var SUBTITLE_COLOR_FIELDS = [
+    { el: 'subtitlesColor', sw: 'subtitles-color-sw', key: 'color', def: '#ffffff' },
+    { el: 'subtitlesPlateColor', sw: 'subtitles-plate-color-sw', key: 'plateColor', def: '#ffd700' },
+    { el: 'subtitlesSpokenColor', sw: 'subtitles-spoken-color-sw', key: 'spokenColor', def: '#0f0f0f' }
+  ]
+
+  // '#rrggbb' → AE's [r,g,b] in 0..1, or null when the field is unusable
+  // (the host then keeps its own default instead of painting things black).
+  function hexToRgb01 (hex) {
+    var m = /^#?([0-9a-fA-F]{6})$/.exec(String(hex == null ? '' : hex).trim())
+    if (!m) return null
+    var n = parseInt(m[1], 16)
+    return [((n >> 16) & 255) / 255, ((n >> 8) & 255) / 255, (n & 255) / 255]
+  }
+
+  function refreshColorSwatches () {
+    for (var i = 0; i < SUBTITLE_COLOR_FIELDS.length; i++) {
+      var f = SUBTITLE_COLOR_FIELDS[i]
+      var input = els[f.el]
+      var sw = document.getElementById(f.sw)
+      if (!input || !sw) continue
+      var ok = !!hexToRgb01(input.value)
+      sw.style.backgroundColor = ok ? input.value : 'transparent'
+      input.classList.toggle('task-status-error', !ok && input.value !== '')
+    }
+  }
+
+  // Karaoke is the only style with a plate / spoken-word color.
+  function refreshSubtitleStyleUI () {
+    var karaoke = getSubtitleStyle() === 'karaoke'
+    var rows = document.querySelectorAll('.karaoke-only')
+    for (var i = 0; i < rows.length; i++) rows[i].style.display = karaoke ? '' : 'none'
+  }
+
+  // ── Font pickers ───────────────────────────────────────────────────────
+  // The family/style lists come from AE itself (app.fonts), so a typo can no
+  // longer produce a silently-substituted font. Families are cached by the
+  // bridge; the style list is rebuilt whenever the family changes.
+  // Preferred family first, then a fallback chain: "SB Sans Text" is a
+  // Windows-side corporate font, so on a Mac the picker would otherwise land
+  // on whatever sorts first alphabetically (a random display face). These
+  // are ordered Mac-system → Windows-system so both platforms get a neutral
+  // sans instead.
+  var SUBTITLE_FAMILY_FALLBACKS = ['SB Sans Text', 'Helvetica Neue', 'Helvetica', 'Arial', 'Segoe UI']
+  var SUBTITLE_DEFAULT_FAMILY = SUBTITLE_FAMILY_FALLBACKS[0]
+  var SUBTITLE_DEFAULT_STYLE = 'Regular'
+  var _fontFamilies = null // [{ f: familyName, s: [[styleName, postScriptName], ...] }]
+  var _wantFamily = SUBTITLE_DEFAULT_FAMILY
+  var _wantStyle = SUBTITLE_DEFAULT_STYLE
+
+  function _findFamily (name) {
+    if (!_fontFamilies || !name) return null
+    for (var i = 0; i < _fontFamilies.length; i++) {
+      if (_fontFamilies[i].f === name) return _fontFamilies[i]
+    }
+    return null
+  }
+
+  // Fill #subtitles-font-style with the selected family's styles, preferring
+  // `want`, then Regular, then whatever the family offers first.
+  function refreshFontStyles (want) {
+    var sel = els.subtitlesFontStyle
+    if (!sel) return
+    var fam = _findFamily(els.subtitlesFont ? els.subtitlesFont.value : '')
+    sel.innerHTML = ''
+    if (!fam) return
+    var pick = 0
+    for (var i = 0; i < fam.s.length; i++) {
+      var opt = document.createElement('option')
+      opt.value = fam.s[i][1] // PostScript name — what AE's TextDocument wants
+      opt.textContent = fam.s[i][0]
+      sel.appendChild(opt)
+      if (want && fam.s[i][0] === want) pick = i
+      else if (!want && fam.s[i][0] === SUBTITLE_DEFAULT_STYLE) pick = i
+    }
+    sel.selectedIndex = pick
+  }
+
+  function populateFontPickers () {
+    var sel = els.subtitlesFont
+    if (!sel || !window.HOST_BRIDGE || !window.HOST_BRIDGE.listFonts) return
+    window.HOST_BRIDGE.listFonts().then(function (res) {
+      if (!res || !res.ok || !res.families || !res.families.length) {
+        setSubtitlesStatus('Could not read the installed fonts \u2014 AE will use its default.', true)
+        return
+      }
+      _fontFamilies = res.families
+      sel.innerHTML = ''
+      for (var i = 0; i < _fontFamilies.length; i++) {
+        var opt = document.createElement('option')
+        opt.value = _fontFamilies[i].f
+        opt.textContent = _fontFamilies[i].f
+        sel.appendChild(opt)
+      }
+      // Saved family → fallback chain → first installed family.
+      var target = null
+      if (_findFamily(_wantFamily)) target = _wantFamily
+      for (var fi = 0; target === null && fi < SUBTITLE_FAMILY_FALLBACKS.length; fi++) {
+        if (_findFamily(SUBTITLE_FAMILY_FALLBACKS[fi])) target = SUBTITLE_FAMILY_FALLBACKS[fi]
+      }
+      sel.value = (target === null) ? _fontFamilies[0].f : target
+      refreshFontStyles(_wantStyle)
+    }).catch(function () {
+      setSubtitlesStatus('Could not read the installed fonts \u2014 AE will use its default.', true)
+    })
+  }
+
+  // Style name of the current selection (what we persist — PostScript names
+  // are not stable across families, the style label is).
+  function currentFontStyleName () {
+    var sel = els.subtitlesFontStyle
+    if (!sel || sel.selectedIndex < 0) return ''
+    var opt = sel.options[sel.selectedIndex]
+    return opt ? opt.textContent : ''
+  }
+
+  function saveSubtitleSettings () {
+    try {
+      var data = {
+        lang: els.subtitlesLang ? els.subtitlesLang.value : 'ru',
+        style: getSubtitleStyle(),
+        fontFamily: els.subtitlesFont ? els.subtitlesFont.value : '',
+        fontStyle: currentFontStyleName(),
+        fontSize: els.subtitlesFontSize ? els.subtitlesFontSize.value : ''
+      }
+      for (var i = 0; i < SUBTITLE_COLOR_FIELDS.length; i++) {
+        var f = SUBTITLE_COLOR_FIELDS[i]
+        data[f.key] = els[f.el] ? els[f.el].value : f.def
+      }
+      localStorage.setItem(SUBTITLE_SETTINGS_KEY, JSON.stringify(data))
+    } catch (_) {}
+  }
+
+  function loadSubtitleSettings () {
+    var data = null
+    try { data = JSON.parse(localStorage.getItem(SUBTITLE_SETTINGS_KEY)) } catch (_) {}
+    if (data && typeof data === 'object') {
+      if (els.subtitlesLang && data.lang) els.subtitlesLang.value = data.lang
+      if (els.subtitlesStyle && data.style) els.subtitlesStyle.value = data.style
+      if (typeof data.fontFamily === 'string' && data.fontFamily) _wantFamily = data.fontFamily
+      if (typeof data.fontStyle === 'string' && data.fontStyle) _wantStyle = data.fontStyle
+      if (els.subtitlesFontSize && typeof data.fontSize === 'string') els.subtitlesFontSize.value = data.fontSize
+      for (var i = 0; i < SUBTITLE_COLOR_FIELDS.length; i++) {
+        var f = SUBTITLE_COLOR_FIELDS[i]
+        if (els[f.el] && typeof data[f.key] === 'string' && data[f.key]) els[f.el].value = data[f.key]
+      }
+    }
+    refreshColorSwatches()
+    refreshSubtitleStyleUI()
+    populateFontPickers()
+  }
+
+  function openSubtitlesPanel () {
+    if (!els.subtitlesPanel) return
+    els.subtitlesPanel.style.display = ''
+    refreshSubtitleStyleUI()
+    if (els.subtitlesStyle) els.subtitlesStyle.focus()
+  }
+
+  function closeSubtitlesPanel () {
+    if (els.subtitlesPanel) els.subtitlesPanel.style.display = 'none'
+  }
+
+  function toggleSubtitlesPanel () {
+    if (!els.subtitlesPanel) return
+    if (els.subtitlesPanel.style.display === 'none') openSubtitlesPanel()
+    else closeSubtitlesPanel()
+  }
+
+  /**
+   * Collect the studio's look settings as create_subtitles arguments. Empty
+   * fields are omitted so the host keeps its own defaults (notably: no font
+   * size = auto-fit to comp width).
+   */
+  function buildSubtitleStyleArgs () {
+    var style = getSubtitleStyle()
+    var out = { animation: style }
+    // The style <option> value is the PostScript name — the only identifier
+    // AE's TextDocument.font accepts without silently substituting a font.
+    var font = els.subtitlesFontStyle ? String(els.subtitlesFontStyle.value || '').trim() : ''
+    if (font) out.font = font
+    var size = els.subtitlesFontSize ? parseFloat(els.subtitlesFontSize.value) : NaN
+    if (isFinite(size) && size > 0) out.font_size = size
+    var fill = els.subtitlesColor ? hexToRgb01(els.subtitlesColor.value) : null
+    if (fill) out.fill_color = fill
+    if (style === 'karaoke') {
+      var plate = els.subtitlesPlateColor ? hexToRgb01(els.subtitlesPlateColor.value) : null
+      if (plate) out.highlight_color = plate
+      var spoken = els.subtitlesSpokenColor ? hexToRgb01(els.subtitlesSpokenColor.value) : null
+      if (spoken) out.highlight_text_color = spoken
+    }
+    return out
+  }
+
+  /**
+   * Run the subtitle pipeline. reuseTranscript=true skips transcription and
+   * builds from the cached/loaded transcript (Rebuild — how a different style
+   * is tried without paying Whisper again).
+   */
+  function runSubtitlesTask (reuseTranscript) {
     if (state.isRequestInFlight) {
       setStatus('Finish or stop the current request before running Subtitles.')
       return
     }
     if (!window.HOST_BRIDGE) return
+    if (reuseTranscript && !window.HOST_BRIDGE.getLastTranscription()) {
+      setSubtitlesStatus('No transcript cached \u2014 run Subtitles or load a saved transcript first.', true)
+      return
+    }
     var lang = (els.subtitlesLang && els.subtitlesLang.value) || 'ru'
+    var style = getSubtitleStyle()
+    var buildArgs = buildSubtitleStyleArgs()
     var session = ensureSession()
 
     state.isRequestInFlight = true
-    if (els.sendBtn) els.sendBtn.disabled = true
-    if (els.subtitlesBtn) els.subtitlesBtn.disabled = true
-    if (els.subtitlesLang) els.subtitlesLang.disabled = true
+    setTaskControlsDisabled(true)
 
     var startedAt = Date.now()
     // Rendering + Whisper can legitimately take minutes on long comps — the
     // ticking elapsed counter is what tells the user the task is alive.
-    var stageLabel = 'Step 1/2: rendering + transcribing audio (' + lang + ')'
+    var stageLabel = reuseTranscript
+      ? 'Rebuilding subtitle layer (' + style + ')'
+      : 'Step 1/2: rendering + transcribing audio (' + lang + ')'
     function tick () {
       setSubtitlesStatus(stageLabel + '\u2026 ' + Math.round((Date.now() - startedAt) / 1000) + 's', false)
     }
@@ -1824,9 +2117,7 @@
     function finishTask () {
       if (subtitlesTaskTimer) { clearInterval(subtitlesTaskTimer); subtitlesTaskTimer = null }
       state.isRequestInFlight = false
-      if (els.sendBtn) els.sendBtn.disabled = false
-      if (els.subtitlesBtn) els.subtitlesBtn.disabled = false
-      if (els.subtitlesLang) els.subtitlesLang.disabled = false
+      setTaskControlsDisabled(false)
       if (taskCalls.length > 0) {
         session.messages.push({ role: 'assistant', text: '', toolCalls: serializeToolCalls(taskCalls) })
         session.updatedAt = Date.now()
@@ -1836,23 +2127,28 @@
       refreshActiveCompNote(true)
     }
 
-    window.HOST_BRIDGE.executeToolCall('transcribe_comp_audio', { language: lang })
+    var first = reuseTranscript
+      ? Promise.resolve(null)
+      : window.HOST_BRIDGE.executeToolCall('transcribe_comp_audio', { language: lang })
+    first
       .then(function (res) {
-        logTaskCall('transcribe_comp_audio', { language: lang }, res)
-        if (!res || res.ok !== true) throw new Error((res && res.message) || 'transcription failed')
-        stageLabel = 'Step 2/2: building subtitle layer (' + res.segmentCount + ' segment' + (res.segmentCount === 1 ? '' : 's') + ')'
-        tick()
-        return window.HOST_BRIDGE.executeToolCall('create_subtitles', {})
+        if (!reuseTranscript) {
+          logTaskCall('transcribe_comp_audio', { language: lang }, res)
+          if (!res || res.ok !== true) throw new Error((res && res.message) || 'transcription failed')
+          stageLabel = 'Step 2/2: building subtitle layer (' + res.segmentCount + ' segment' + (res.segmentCount === 1 ? '' : 's') + ', ' + style + ')'
+          tick()
+        }
+        return window.HOST_BRIDGE.executeToolCall('create_subtitles', buildArgs)
       })
       .then(function (res) {
-        logTaskCall('create_subtitles', {}, res)
+        logTaskCall('create_subtitles', buildArgs, res)
         if (!res || res.ok !== true) throw new Error((res && res.message) || 'subtitle layer creation failed')
         // create_subtitles wraps everything in ONE undo group — a single
         // Undo click reverts the whole rig (text layer + box).
         state.lastMutatingToolCount = 1
         updateUndoButton()
         var secs = Math.round((Date.now() - startedAt) / 1000)
-        setSubtitlesStatus('Done in ' + secs + 's \u2014 ' + res.cueCount + ' cue(s), layer "' + res.layerName + '"', false)
+        setSubtitlesStatus('Done in ' + secs + 's \u2014 ' + res.cueCount + ' cue(s), ' + style + ', layer "' + res.layerName + '"', false)
         setStatus('Ready')
         finishTask()
       })
@@ -1863,6 +2159,77 @@
         session.messages.push({ role: 'system', text: 'Subtitles task error: ' + msg })
         finishTask()
       })
+  }
+
+  // ── Transcript save / load ─────────────────────────────────────────────
+  // The Whisper result (segments + ffmpeg silence map) is cached in memory by
+  // hostBridge only. Saving it to disk makes an expensive transcription
+  // survive a panel reload and lets the same audio be re-styled later.
+  function handleTranscriptSave () {
+    if (!window.HOST_BRIDGE) return
+    var tr = window.HOST_BRIDGE.getLastTranscription()
+    if (!tr || !tr.segments || !tr.segments.length) {
+      setSubtitlesStatus('Nothing to save \u2014 no transcript in this session yet.', true)
+      return
+    }
+    try {
+      var fs = require('fs')
+      var path = require('path')
+      var ts = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19)
+      var outPath = path.join(resolveOutputDir(), 'ae-transcript-' + ts + '.json')
+      fs.writeFileSync(outPath, JSON.stringify({
+        savedAt: new Date().toISOString(),
+        language: tr.language || null,
+        durationSec: tr.durationSec || null,
+        segments: tr.segments,
+        silences: tr.silences || null
+      }, null, 2), 'utf8')
+      setSubtitlesStatus('Transcript saved: ' + outPath, false)
+      setStatus('Transcript saved to ' + outPath)
+    } catch (e) {
+      setSubtitlesStatus('Save failed: ' + ((e && e.message) || String(e)), true)
+    }
+  }
+
+  function pickTranscriptFile () {
+    // CEP's native dialog; fall back to a typed path when the API is absent
+    // (e.g. the panel opened in a plain browser for UI work).
+    try {
+      if (window.cep && window.cep.fs && typeof window.cep.fs.showOpenDialogEx === 'function') {
+        var res = window.cep.fs.showOpenDialogEx(false, false, 'Select a saved transcript JSON', resolveOutputDir(), ['json'])
+        if (res && res.data && res.data.length) return res.data[0]
+        return null
+      }
+    } catch (_) {}
+    var typed = window.prompt('Full path to the transcript JSON:')
+    return typed || null
+  }
+
+  function handleTranscriptLoad () {
+    if (!window.HOST_BRIDGE) return
+    var file = pickTranscriptFile()
+    if (!file) return
+    try {
+      var data = JSON.parse(require('fs').readFileSync(file, 'utf8'))
+      var segments = window.PURE_SUBTITLES.normalizeWhisperSegments(data.segments || data, 0)
+      if (!segments.length) {
+        setSubtitlesStatus('Load failed: no usable segments in ' + file, true)
+        return
+      }
+      var silences = (data.silences && data.silences.length) ? data.silences : null
+      window.HOST_BRIDGE.setLastTranscription({
+        segments: segments,
+        silences: silences,
+        language: data.language || null,
+        durationSec: data.durationSec || null
+      })
+      setSubtitlesStatus('Transcript loaded \u2014 ' + segments.length + ' segment(s)' +
+        (silences ? ', ' + silences.length + ' silence gap(s)' : ', no silence map') +
+        '. Press Rebuild to create the layer.', false)
+      setStatus('Transcript loaded from ' + file)
+    } catch (e) {
+      setSubtitlesStatus('Load failed: ' + ((e && e.message) || String(e)), true)
+    }
   }
 
   // ── Handle Undo ────────────────────────────────────────────────────────
@@ -2409,8 +2776,46 @@
     if (els.exportErrorsBtn) els.exportErrorsBtn.addEventListener('click', handleExportErrors)
     if (els.reportBtn) els.reportBtn.addEventListener('click', handleGenerateReport)
     if (els.undoBtn) els.undoBtn.addEventListener('click', handleUndo)
-    if (els.subtitlesBtn) els.subtitlesBtn.addEventListener('click', handleSubtitlesTask)
+    if (els.providerBadge) els.providerBadge.addEventListener('click', probeModelAvailability)
+    if (els.subtitlesBtn) els.subtitlesBtn.addEventListener('click', function () { runSubtitlesTask(false) })
+    if (els.subtitlesRebuildBtn) els.subtitlesRebuildBtn.addEventListener('click', function () { runSubtitlesTask(true) })
+    if (els.transcriptSaveBtn) els.transcriptSaveBtn.addEventListener('click', handleTranscriptSave)
+    if (els.transcriptLoadBtn) els.transcriptLoadBtn.addEventListener('click', handleTranscriptLoad)
     if (els.contextMeter) els.contextMeter.addEventListener('click', handleCompactContext)
+
+    // Subtitles studio
+    if (els.subtitlesOpenBtn) els.subtitlesOpenBtn.addEventListener('click', toggleSubtitlesPanel)
+    if (els.subtitlesCloseBtn) els.subtitlesCloseBtn.addEventListener('click', closeSubtitlesPanel)
+    if (els.subtitlesStyle) {
+      els.subtitlesStyle.addEventListener('change', function () {
+        refreshSubtitleStyleUI()
+        saveSubtitleSettings()
+      })
+    }
+    if (els.subtitlesFont) {
+      els.subtitlesFont.addEventListener('change', function () {
+        refreshFontStyles(null) // new family → keep Regular, styles differ per family
+        saveSubtitleSettings()
+      })
+    }
+    var studioInputs = [els.subtitlesLang, els.subtitlesFontStyle, els.subtitlesFontSize,
+      els.subtitlesColor, els.subtitlesPlateColor, els.subtitlesSpokenColor]
+    for (var si = 0; si < studioInputs.length; si++) {
+      if (!studioInputs[si]) continue
+      studioInputs[si].addEventListener('input', function () {
+        refreshColorSwatches()
+        saveSubtitleSettings()
+      })
+      studioInputs[si].addEventListener('change', function () {
+        refreshColorSwatches()
+        saveSubtitleSettings()
+      })
+    }
+    document.addEventListener('keydown', function (e) {
+      if (e.key === 'Escape' && els.subtitlesPanel && els.subtitlesPanel.style.display !== 'none') {
+        closeSubtitlesPanel()
+      }
+    })
 
     // Chat switcher
     if (els.sessionSelect) {
@@ -2551,6 +2956,7 @@
 
     bindEvents()
     initVisionCheckToggle()
+    loadSubtitleSettings()
     setStatus('Ready')
     updateUndoButton()
     refreshActiveCompNote(true)
@@ -2564,6 +2970,7 @@
     var modelLabel = getModelLabel(initSession ? initSession.model : DEFAULT_MODEL)
     if (apiKey) {
       setModelStatus('ok', modelLabel)
+      probeModelAvailability()
     } else {
       setModelStatus('unknown', modelLabel + ' (no API key)')
     }

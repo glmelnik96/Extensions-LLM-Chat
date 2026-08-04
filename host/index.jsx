@@ -4646,17 +4646,78 @@ function _exprQuote (s) {
  * opts: {
  *   layerName ('Subtitles'), font (PostScript name), fontSize (px, default
  *   4.5% of comp height), fillColor ([r,g,b] 0..1), position
- *   ('bottom'|'center'|'top'), box (default true), boxColor ([r,g,b]),
- *   boxOpacity (0..100, default 60), animation ('word_reveal'|'none')
+ *   ('bottom'|'center'|'top'), box (default true, false for karaoke),
+ *   boxColor ([r,g,b]), boxOpacity (0..100, default 60),
+ *   animation ('word_reveal'|'karaoke'|'none'),
+ *   karaokeTracks ([{t,index,prefix,word}] from PURE_SUBTITLES.buildKaraokeTracks
+ *   — required for animation 'karaoke'), highlightColor ([r,g,b] plate),
+ *   highlightTextColor ([r,g,b] current word)
  * }
  * Rig: one text layer with Source Text HOLD keyframes (one per cue + empty-
  * text keys in gaps), a position expression that pins the text block edge so
  * 1- and 2-line cues sit consistently, an optional auto-sizing background box
  * (sourceRectAtTime expressions), and an optional word-by-word reveal
- * (text animator Opacity 0 + expression selector driven by cue keyframe times).
+ * (text animator Opacity 0 + expression selector driven by cue keyframe times)
+ * or a CapCut-style karaoke highlight (plate under the spoken word).
  */
+/**
+ * Installed fonts for the panel's font pickers.
+ * app.fonts.allFonts (AE 24.0+) is an array of FAMILIES, each an array of
+ * FontObjects — live-verified on AE 26.3 (148 families). Returned compactly
+ * ({f: family, s: [[style, postScriptName], …]}) because the whole list goes
+ * through evalScript as one JSON string.
+ */
+function extensionsLlmChat_listFonts () {
+  var result = { ok: false, message: '', families: [] };
+  try {
+    if (typeof app.fonts === 'undefined' || !app.fonts.allFonts) {
+      result.message = 'This After Effects build has no app.fonts API (needs AE 24.0+).';
+      return resultToJson(result);
+    }
+    var all = app.fonts.allFonts;
+    for (var i = 0; i < all.length; i++) {
+      var fam = all[i];
+      if (!fam || !fam.length) continue;
+      var styles = [];
+      for (var j = 0; j < fam.length; j++) {
+        styles.push([String(fam[j].styleName), String(fam[j].postScriptName)]);
+      }
+      result.families.push({ f: String(fam[0].familyName), s: styles });
+    }
+    result.ok = true;
+    result.message = 'Found ' + result.families.length + ' font families.';
+    return resultToJson(result);
+  } catch (e) {
+    result.message = 'listFonts error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Pick a subtitle base name whose whole family ("X", "X Plate", "X Box",
+ * "X Measure *") is still free in the comp. AE allows duplicate layer names
+ * but `thisComp.layer("name")` returns the TOPMOST match — so a second rig
+ * built over an existing one would silently drive its plate from the older
+ * rig's measure layers. Iterating on colors/style is a normal workflow, so
+ * the second rig becomes "Subtitles 2" instead.
+ */
+function _subtitlesFreeBaseName (comp, base) {
+  var used = {};
+  var i;
+  for (i = 1; i <= comp.numLayers; i++) used[comp.layer(i).name] = true;
+  function free (name) {
+    return !used[name] && !used[name + ' Plate'] && !used[name + ' Box'] &&
+      !used[name + ' Measure Prefix'] && !used[name + ' Measure Word'];
+  }
+  if (free(base)) return base;
+  for (i = 2; i < 200; i++) {
+    if (free(base + ' ' + i)) return base + ' ' + i;
+  }
+  return base + ' ' + (new Date()).getTime();
+}
+
 function extensionsLlmChat_createSubtitles (cues, opts) {
-  var result = { ok: false, message: '', layerId: null, layerName: '', boxLayerId: null, cueCount: 0, fontWarning: '' };
+  var result = { ok: false, message: '', layerId: null, layerName: '', boxLayerId: null, plateLayerId: null, cueCount: 0, fontWarning: '' };
   var undoOpen = false;
   try {
     var ctx = extensionsLlmChat_resolveActiveComp();
@@ -4665,8 +4726,9 @@ function extensionsLlmChat_createSubtitles (cues, opts) {
     if (!cues || !cues.length) { result.message = 'No cues provided.'; return resultToJson(result); }
     var o = opts || {};
     var layerName = (typeof o.layerName === 'string' && o.layerName !== '') ? o.layerName : 'Subtitles';
-    // The name is embedded in expressions — keep it quote-safe.
+    // The name is embedded in expressions — keep it quote-safe and unique.
     layerName = layerName.replace(/["\\]/g, '');
+    layerName = _subtitlesFreeBaseName(comp, layerName);
 
     _beginToolUndo('Agent: Create subtitles');
     undoOpen = true;
@@ -4802,9 +4864,165 @@ function extensionsLlmChat_createSubtitles (cues, opts) {
       }
     }
 
-    // Optional auto-sizing background box behind the text.
+    // CapCut-style karaoke: a colored plate travels under the word being
+    // spoken and that word switches to the highlight color.
+    // AE's sourceRectAtTime measures the WHOLE text block, so the per-word
+    // rect is reconstructed from two hidden measure text layers that carry the
+    // same style: one keyframed with "words up to and including the current"
+    // (its width = distance from the line's left edge to the word's right
+    // edge) and one with the current word alone (its width = plate width).
+    // Cue selection is a single "Word Index" slider with hold keyframes, so
+    // the whole rig is inspectable and hand-editable in the timeline.
+    var plateLayer = null;
+    var measurePrefix = null;
+    var measureWord = null;
+    if (animation === 'karaoke') {
+      var tracks = (o.karaokeTracks instanceof Array) ? o.karaokeTracks : [];
+      if (!tracks.length) {
+        if (undoOpen) { _endToolUndo(); undoOpen = false; }
+        result.message = 'createSubtitles: animation "karaoke" requires karaokeTracks (word timings).';
+        return resultToJson(result);
+      }
+      var finalDoc = textProp.value;
+      var fsz = finalDoc.fontSize || 40;
+
+      // Word Index slider (hold keys): 1-based word ordinal in the current
+      // cue, 0 while nothing is spoken.
+      var idxFx = textLayer.property('ADBE Effect Parade').addProperty('ADBE Slider Control');
+      idxFx.name = 'Word Index';
+      idxFx = textLayer.property('ADBE Effect Parade').property('Word Index');
+      var idxProp = idxFx.property('ADBE Slider Control-0001');
+      var ti;
+      for (ti = 0; ti < tracks.length; ti++) idxProp.setValueAtTime(tracks[ti].t, tracks[ti].index);
+      for (ti = 1; ti <= idxProp.numKeys; ti++) {
+        try { idxProp.setInterpolationTypeAtKey(ti, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD); } catch (eHold) {}
+      }
+
+      // Highlight color animator on the spoken word.
+      var kAnimators = textLayer.property('ADBE Text Properties').property('ADBE Text Animators');
+      var kAnim = kAnimators.addProperty('ADBE Text Animator');
+      kAnim.name = 'Word Highlight';
+      kAnim.property('ADBE Text Animator Properties').addProperty('ADBE Text Fill Color');
+      kAnim = kAnimators.property('Word Highlight');
+      var hiText = (o.highlightTextColor instanceof Array && o.highlightTextColor.length === 3) ? o.highlightTextColor : [0.06, 0.06, 0.06];
+      var hiProp = kAnim.property('ADBE Text Animator Properties').property('ADBE Text Fill Color');
+      try { hiProp.setValue([hiText[0], hiText[1], hiText[2], 1]); } catch (eC3) { hiProp.setValue([hiText[0], hiText[1], hiText[2]]); }
+      var kSel = kAnim.property('ADBE Text Selectors').addProperty('ADBE Text Expressible Selector');
+      kSel = kAnimators.property('Word Highlight').property('ADBE Text Selectors').property(1);
+      try { kSel.property('ADBE Text Range Type2').setValue(3); } catch (eKb) {
+        try { kSel.property('Based On').setValue(3); } catch (eKb2) {}
+      }
+      // effect("Word Index")(1) — index form survives a localized AE UI.
+      var kAmount = 'textIndex == thisLayer.effect("Word Index")(1) ? 100 : 0';
+      try { kSel.property('ADBE Text Expressible Amount').expression = kAmount; } catch (eKa) {
+        kSel.property('Amount').expression = kAmount;
+      }
+
+      // Hidden measure layers — same TextDocument, so glyph widths match.
+      var mNames = [layerName + ' Measure Prefix', layerName + ' Measure Word'];
+      var mLayers = [];
+      // Reference band (ascender…descender) measured ONCE from a constant
+      // string. Everything vertical is derived from it instead of from each
+      // cue's own ink rect: a cue without descenders would otherwise sit
+      // higher and its plate would look off-centre under the letters.
+      // The string mixes Cyrillic and Latin ascenders/descenders so the band
+      // is the font's real ascender…descender range in both scripts; a word
+      // without ascenders therefore sits low in the plate ON PURPOSE, exactly
+      // as it does in CapCut — the plate must not breathe with each word.
+      var refTop = 0;
+      var refHeight = 0;
+      for (var mi = 0; mi < 2; mi++) {
+        var mLayer = comp.layers.addText('');
+        mLayer.name = mNames[mi];
+        var mProp = mLayer.property('ADBE Text Properties').property('ADBE Text Document');
+        mProp.setValue(finalDoc);
+        if (mi === 0) {
+          var refDoc = mProp.value;
+          refDoc.text = '\u0431\u0434\u0440\u0443HXAyGg';
+          mProp.setValue(refDoc);
+          var refRect = mLayer.sourceRectAtTime(0, false);
+          refTop = refRect.top;
+          refHeight = refRect.height;
+        }
+        for (ti = 0; ti < tracks.length; ti++) {
+          var md = mProp.value;
+          md.text = String((mi === 0 ? tracks[ti].prefix : tracks[ti].word) || '');
+          mProp.setValueAtTime(tracks[ti].t, md);
+        }
+        mLayer.enabled = false;
+        mLayers.push(mLayer);
+      }
+      measurePrefix = mLayers[0];
+      measureWord = mLayers[1];
+
+      // Karaoke cues are single-line, so the text can be pinned by its
+      // BASELINE (a plain value — position of point text IS the baseline
+      // origin). The rect-based expression used elsewhere makes the line jump
+      // vertically whenever a cue happens to have no descenders.
+      if (refHeight > 0) {
+        var baselineY;
+        if (posName === 'top') {
+          baselineY = Math.round(comp.height * 0.08) - refTop;
+        } else if (posName === 'center') {
+          baselineY = Math.round(comp.height * 0.5) - (refTop + refHeight / 2);
+        } else {
+          baselineY = Math.round(comp.height * 0.9) - (refTop + refHeight);
+        }
+        posProp.expression = '';
+        posProp.setValue([comp.width / 2, baselineY]);
+      }
+
+      plateLayer = comp.layers.addShape();
+      plateLayer.name = layerName + ' Plate';
+      var pGrp = plateLayer.property('ADBE Root Vectors Group').addProperty('ADBE Vector Group');
+      pGrp.name = 'Plate';
+      pGrp.property('ADBE Vectors Group').addProperty('ADBE Vector Shape - Rect');
+      pGrp.property('ADBE Vectors Group').addProperty('ADBE Vector Graphic - Fill');
+      pGrp = plateLayer.property('ADBE Root Vectors Group').property('Plate');
+      var hiPlate = (o.highlightColor instanceof Array && o.highlightColor.length === 3) ? o.highlightColor : [1, 0.84, 0];
+      pGrp.property('ADBE Vectors Group').property('ADBE Vector Graphic - Fill').property('ADBE Vector Fill Color').setValue([hiPlate[0], hiPlate[1], hiPlate[2], 1]);
+      var kPadX = Math.round(fsz * 0.25);
+      var kPadY = Math.round(fsz * 0.12);
+      // Constant plate geometry from the reference band (falls back to the
+      // live rect only if the measurement failed).
+      var kPlateH = (refHeight > 0) ? Math.round(refHeight + kPadY * 2) : 0;
+      var kPlateY = (refHeight > 0) ? (refTop + refHeight / 2) : 0;
+      var pRect = pGrp.property('ADBE Vectors Group').property('ADBE Vector Shape - Rect');
+      // Square corners (user preference 2026-08-04) — set explicitly so a
+      // non-zero shape default can never leak in.
+      try { pRect.property('ADBE Vector Rect Roundness').setValue(0); } catch (eR) {}
+      var qText = _exprQuote(layerName);
+      var qPrefix = _exprQuote(mNames[0]);
+      var qWord = _exprQuote(mNames[1]);
+      // Only the width follows the spoken word; the height is the constant
+      // reference band. Zero size while no word is spoken (measure text empty).
+      var kHeightExpr = kPlateH > 0 ? String(kPlateH) : ('rt.height + ' + (kPadY * 2));
+      var kYExpr = kPlateH > 0 ? String(kPlateY) : 'rt.top + rt.height / 2';
+      pRect.property('ADBE Vector Rect Size').expression =
+        'var e = [0, 0];\n' +
+        'try {\n' +
+        '  var rt = thisComp.layer("' + qText + '").sourceRectAtTime(time, false);\n' +
+        '  var rw = thisComp.layer("' + qWord + '").sourceRectAtTime(time, false);\n' +
+        '  if (rw.width > 0 && rt.width > 0) e = [rw.width + ' + (kPadX * 2) + ', ' + kHeightExpr + '];\n' +
+        '} catch (err) {}\n' +
+        'e';
+      plateLayer.property('ADBE Transform Group').property('ADBE Position').expression =
+        'var e = [-10000, -10000];\n' +
+        'try {\n' +
+        '  var T = thisComp.layer("' + qText + '");\n' +
+        '  var rt = T.sourceRectAtTime(time, false);\n' +
+        '  var rp = thisComp.layer("' + qPrefix + '").sourceRectAtTime(time, false);\n' +
+        '  var rw = thisComp.layer("' + qWord + '").sourceRectAtTime(time, false);\n' +
+        '  if (rw.width > 0 && rt.width > 0) e = T.toComp([rt.left + rp.width - rw.width / 2, ' + kYExpr + ']);\n' +
+        '} catch (err) {}\n' +
+        'e';
+    }
+
+    // Optional auto-sizing background box behind the text. Karaoke carries its
+    // own plate, so a full-width box is opt-IN there.
     var boxLayer = null;
-    if (o.box !== false) {
+    var wantBox = (typeof o.box === 'boolean') ? o.box : (animation !== 'karaoke');
+    if (wantBox) {
       boxLayer = comp.layers.addShape();
       boxLayer.name = layerName + ' Box';
       var rootVec = boxLayer.property('ADBE Root Vectors Group');
@@ -4816,8 +5034,11 @@ function extensionsLlmChat_createSubtitles (cues, opts) {
       grp = boxLayer.property('ADBE Root Vectors Group').property('Box');
       var boxColor = (o.boxColor instanceof Array && o.boxColor.length === 3) ? o.boxColor : [0, 0, 0];
       grp.property('ADBE Vectors Group').property('ADBE Vector Graphic - Fill').property('ADBE Vector Fill Color').setValue([boxColor[0], boxColor[1], boxColor[2], 1]);
-      var padX = Math.round((doc.fontSize || 40) * 0.6);
-      var padY = Math.round((doc.fontSize || 40) * 0.4);
+      // Read the FINAL size — `doc` predates the auto-fit shrink above, so
+      // using it would pad a small text block as if it were huge.
+      var boxFsz = textProp.value.fontSize || 40;
+      var padX = Math.round(boxFsz * 0.6);
+      var padY = Math.round(boxFsz * 0.4);
       var qName = _exprQuote(layerName);
       grp.property('ADBE Vectors Group').property('ADBE Vector Shape - Rect').property('ADBE Vector Rect Size').expression =
         'var e = [0, 0];\n' +
@@ -4836,8 +5057,14 @@ function extensionsLlmChat_createSubtitles (cues, opts) {
         'e';
       var boxOpacity = (typeof o.boxOpacity === 'number') ? Math.max(0, Math.min(100, o.boxOpacity)) : 60;
       boxLayer.property('ADBE Transform Group').property('ADBE Opacity').setValue(boxOpacity);
-      boxLayer.moveAfter(textLayer);
     }
+
+    // Stack: text on top, karaoke plate under it, background box under that,
+    // hidden measure layers at the very bottom.
+    if (plateLayer) plateLayer.moveAfter(textLayer);
+    if (boxLayer) boxLayer.moveAfter(plateLayer ? plateLayer : textLayer);
+    if (measurePrefix) measurePrefix.moveToEnd();
+    if (measureWord) measureWord.moveToEnd();
 
     _endToolUndo();
     undoOpen = false;
@@ -4846,8 +5073,10 @@ function extensionsLlmChat_createSubtitles (cues, opts) {
     result.layerName = textLayer.name;
     result.boxLayerId = boxLayer ? boxLayer.id : null;
     result.cueCount = cues.length;
+    result.plateLayerId = plateLayer ? plateLayer.id : null;
     result.message = 'Created subtitle rig "' + textLayer.name + '": ' + cues.length + ' cue(s) as Source Text hold keyframes' +
       (animation === 'word_reveal' ? ', word-by-word reveal animator' : '') +
+      (animation === 'karaoke' ? ', CapCut-style karaoke highlight (plate "' + plateLayer.name + '" + 2 hidden measure layers)' : '') +
       (boxLayer ? ', auto-sizing background box ("' + boxLayer.name + '")' : '') +
       '. Position: ' + posName + '.' + (result.fontWarning ? ' WARNING: ' + result.fontWarning : '');
     return resultToJson(result);

@@ -209,3 +209,94 @@ test('subtitles: leading sub-word sliver before a pause is treated as previous-p
   )
   assert.strictEqual(kept[0].startSec, 8)
 })
+
+test('subtitles: buildKaraokeTracks emits one key per word + a clear key in gaps', () => {
+  const cues = [
+    { startSec: 0, endSec: 2, text: 'привет мир', words: [{ w: 'привет', s: 0, e: 1 }, { w: 'мир', s: 1, e: 2 }] },
+    { startSec: 5, endSec: 6, text: 'снова', words: [{ w: 'снова', s: 5, e: 6 }] }
+  ]
+  const tr = SUB.buildKaraokeTracks(cues)
+  assert.deepStrictEqual(tr, [
+    { t: 0, index: 1, prefix: 'привет', word: 'привет' },
+    { t: 1, index: 2, prefix: 'привет мир', word: 'мир' },
+    { t: 2, index: 0, prefix: '', word: '' },
+    { t: 5, index: 1, prefix: 'снова', word: 'снова' },
+    { t: 6, index: 0, prefix: '', word: '' }
+  ])
+})
+
+test('subtitles: buildKaraokeTracks skips the clear key between back-to-back cues', () => {
+  const cues = [
+    { startSec: 0, endSec: 2, text: 'раз', words: [{ w: 'раз', s: 0, e: 2 }] },
+    { startSec: 2.05, endSec: 3, text: 'два', words: [{ w: 'два', s: 2.05, e: 3 }] }
+  ]
+  const tr = SUB.buildKaraokeTracks(cues)
+  assert.deepStrictEqual(tr.map((k) => [k.t, k.index]), [[0, 1], [2.05, 1], [3, 0]])
+})
+
+test('subtitles: buildKaraokeTracks nudges duplicate key times', () => {
+  // Two words rounding to the same millisecond would otherwise overwrite each
+  // other via setValueAtTime.
+  const cues = [{
+    startSec: 1,
+    endSec: 1.4,
+    text: 'а б',
+    words: [{ w: 'а', s: 1.0001, e: 1.2 }, { w: 'б', s: 1.0002, e: 1.4 }]
+  }]
+  const tr = SUB.buildKaraokeTracks(cues)
+  assert.deepStrictEqual(tr.map((k) => k.t), [1, 1.001, 1.4])
+})
+
+/* ── Typography rules (2026-08-04) ──────────────────────────────────── */
+
+test('subtitles: polishCueEdges drops a terminal period and leading comma', () => {
+  assert.deepStrictEqual(SUB.polishCueEdges(['Привет', 'мир.']), ['Привет', 'мир'])
+  assert.deepStrictEqual(SUB.polishCueEdges([',', 'и', 'дальше,']), ['', 'и', 'дальше'])
+  // meaning-carrying punctuation survives, and so does a closing quote
+  assert.deepStrictEqual(SUB.polishCueEdges(['Что?']), ['Что?'])
+  assert.deepStrictEqual(SUB.polishCueEdges(['Ну…']), ['Ну…'])
+  assert.deepStrictEqual(SUB.polishCueEdges(['«конец».']), ['«конец»'])
+})
+
+test('subtitles: isBadBreakWord flags glue/number/opener, not natural pauses', () => {
+  assert.ok(SUB.isBadBreakWord('в'))
+  assert.ok(SUB.isBadBreakWord('5'))
+  assert.ok(SUB.isBadBreakWord('«'))
+  assert.ok(SUB.isBadBreakWord('—'))
+  // already punctuated => a natural break even for a function word
+  assert.ok(!SUB.isBadBreakWord('что,'))
+  assert.ok(!SUB.isBadBreakWord('кино'))
+})
+
+test('subtitles: buildCues applies R1/R3 (no trailing dot, no hanging preposition)', () => {
+  const cues = SUB.buildCues([
+    { startSec: 0, endSec: 8, text: 'мы пришли в большой красивый дом.' }
+  ], { maxCharsPerLine: 12, maxLines: 1, maxDurSec: 10 })
+  assert.ok(cues.length >= 2)
+  for (const c of cues) {
+    assert.ok(!/\.$/.test(c.text), 'cue ends with a period: ' + c.text)
+    // no cue but the last may end on a preposition
+    if (c !== cues[cues.length - 1]) {
+      const lastWord = c.text.split(/\s+/).pop()
+      assert.ok(!SUB.isGlueWord(lastWord), 'cue ends on a glue word: ' + c.text)
+    }
+    // text and word timings stay in lockstep (karaoke depends on it)
+    assert.strictEqual(c.text.replace(/\n/g, ' '), c.words.map((w) => w.w).join(' '))
+  }
+})
+
+test('subtitles: buildCues never breaks a number from its unit', () => {
+  const wrapped = SUB.wrapCueLines(['стоит', '5', 'кг', 'ровно'], 11, 2)
+  assert.notStrictEqual(wrapped.split('\n')[0].split(' ').pop(), '5')
+})
+
+test('subtitles: R8 pyramid — the top line is the shorter one on a tie', () => {
+  // "аб вгд еёж" → "аб вгд"/"еёж" (6/3) vs "аб"/"вгд еёж" (2/7): the second
+  // is better balanced, so R8 must not override R7 here.
+  const balanced = SUB.wrapCueLines(['аба', 'вгд', 'еёж'], 8, 2).split('\n')
+  assert.strictEqual(balanced.length, 2)
+  // Equal-balance case: both splits spread 4 chars, R8 picks the short top.
+  const tie = SUB.wrapCueLines(['аб', 'вг', 'де', 'жз'], 6, 2).split('\n')
+  assert.strictEqual(tie.length, 2)
+  assert.ok(tie[0].length <= tie[1].length, 'top line longer than bottom: ' + tie.join(' | '))
+})
