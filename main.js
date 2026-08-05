@@ -363,7 +363,11 @@
       setStatus('Finish or stop the current request before deleting a chat.')
       return
     }
-    if (!confirm('Delete chat "' + session.title + '" and all its messages? This cannot be undone.')) return
+    panelConfirm('Delete chat "' + session.title + '" and all its messages? This cannot be undone.')
+      .then(function (yes) { if (yes) _deleteSessionConfirmed(session) })
+  }
+
+  function _deleteSessionConfirmed (session) {
     var next = []
     for (var i = 0; i < state.sessions.length; i++) {
       if (state.sessions[i].id !== session.id) next.push(state.sessions[i])
@@ -480,7 +484,11 @@
   }
 
   function handleQuickActionReset () {
-    if (!confirm('Reset quick actions to the default set? Your custom buttons will be removed.')) return
+    panelConfirm('Reset quick actions to the default set? Your custom buttons will be removed.', 'Reset')
+      .then(function (yes) { if (yes) _quickActionResetConfirmed() })
+  }
+
+  function _quickActionResetConfirmed () {
     try { localStorage.removeItem(QUICK_ACTIONS_KEY) } catch (_) {}
     renderQuickActions()
     setStatus('Quick actions reset to defaults')
@@ -802,6 +810,17 @@
   // thousands of chars and the DOM update is O(length) per chunk.
   var REASONING_TAIL_CAP = 8000
   var reasoningBuffer = ''
+  // Activity log: the thinking label shows only the CURRENT state, so during a
+  // long run everything that already happened is lost and a slow step looks
+  // like a freeze. Every label change is a real state transition, so they are
+  // also appended here (timestamped) and shown in a click-to-expand box.
+  var activityLog = []
+  var ACTIVITY_CAP = 200
+  // Nothing at all is emitted while a non-streaming turn is in flight, so after
+  // this long with no transition the header says so explicitly — "slow" and
+  // "hung" are indistinguishable otherwise.
+  var STALL_HINT_MS = 12000
+  var lastActivityTime = 0
 
   function formatElapsed (ms) {
     var s = Math.floor(ms / 1000)
@@ -814,6 +833,7 @@
     thinkingToolCount = 0
     streamingTextBuffer = ''
     reasoningBuffer = ''
+    activityLog = []
     thinkingEl = document.createElement('div')
     thinkingEl.className = 'agent-thinking'
 
@@ -827,6 +847,9 @@
     dots.className = 'thinking-dots'
     dots.innerHTML = '<span></span><span></span><span></span>'
     header.appendChild(dots)
+    var stall = document.createElement('span')
+    stall.className = 'thinking-stall'
+    header.appendChild(stall)
     var elapsed = document.createElement('span')
     elapsed.className = 'thinking-elapsed'
     elapsed.textContent = '0s'
@@ -836,11 +859,24 @@
     els.chatTranscript.appendChild(thinkingEl)
 
     thinkingStartTime = Date.now()
+    lastActivityTime = thinkingStartTime
     thinkingTimerId = setInterval(function () {
       if (!thinkingEl) return
+      var now = Date.now()
       var el = thinkingEl.querySelector('.thinking-elapsed')
-      if (el) el.textContent = formatElapsed(Date.now() - thinkingStartTime)
+      if (el) el.textContent = formatElapsed(now - thinkingStartTime)
+      // Proof of life while a turn is in flight: without this the only moving
+      // pixel is the total timer, which keeps ticking even if the run died.
+      var stallEl = thinkingEl.querySelector('.thinking-stall')
+      if (stallEl) {
+        var idle = now - lastActivityTime
+        stallEl.textContent = (idle >= STALL_HINT_MS)
+          ? '\u00b7 no reply from model for ' + formatElapsed(idle)
+          : ''
+      }
     }, 1000)
+
+    _pushActivity('run started')
 
     scrollToBottom(true)
   }
@@ -862,6 +898,60 @@
     if (!thinkingEl) return
     var label = thinkingEl.querySelector('.thinking-label')
     if (label) label.textContent = text
+    _pushActivity(text)
+  }
+
+  /**
+   * Record a state transition. Consecutive duplicates are collapsed — the
+   * reasoning label is re-set on every streamed chunk and would otherwise
+   * flood the log with one identical line per token.
+   */
+  function _pushActivity (text) {
+    if (!thinkingEl || !text) return
+    lastActivityTime = Date.now()
+    if (activityLog.length && activityLog[activityLog.length - 1].text === text) return
+    activityLog.push({ at: formatElapsed(lastActivityTime - thinkingStartTime), text: text })
+    if (activityLog.length > ACTIVITY_CAP) {
+      activityLog.splice(0, activityLog.length - ACTIVITY_CAP)
+    }
+    _renderActivity()
+  }
+
+  function _renderActivity () {
+    if (!thinkingEl) return
+    var box = thinkingEl.querySelector('.activity-box')
+    if (!box) {
+      box = document.createElement('div')
+      box.className = 'reasoning-box activity-box'
+      var toggle = document.createElement('div')
+      toggle.className = 'reasoning-toggle'
+      var body = document.createElement('div')
+      body.className = 'reasoning-body'
+      toggle.addEventListener('click', function () {
+        var expanded = box.classList.toggle('expanded')
+        _setActivityToggleText(toggle, expanded)
+        if (expanded) body.scrollTop = body.scrollHeight
+      })
+      box.appendChild(toggle)
+      box.appendChild(body)
+      thinkingEl.appendChild(box)
+    }
+    var toggleEl = box.querySelector('.reasoning-toggle')
+    if (toggleEl) _setActivityToggleText(toggleEl, box.classList.contains('expanded'))
+    var bodyEl = box.querySelector('.reasoning-body')
+    if (bodyEl) {
+      var lines = []
+      for (var i = 0; i < activityLog.length; i++) {
+        lines.push(activityLog[i].at + '  ' + activityLog[i].text)
+      }
+      // textContent only — tool names come from untrusted model output.
+      bodyEl.textContent = lines.join('\n')
+      if (box.classList.contains('expanded')) bodyEl.scrollTop = bodyEl.scrollHeight
+    }
+  }
+
+  function _setActivityToggleText (toggleEl, expanded) {
+    toggleEl.textContent = (expanded ? '\u25BE' : '\u25B8') + ' activity (' + activityLog.length + ')'
   }
 
   function updateThinkingWithStreamText (chunk) {
@@ -892,10 +982,12 @@
     }
     if (!streamingTextBuffer) _setThinkingLabel('Agent reasoning')
 
-    var box = thinkingEl.querySelector('.reasoning-box')
+    // `.cot-box`, not `.reasoning-box` — the activity log shares that class for
+    // styling, so an unqualified lookup would find whichever comes first.
+    var box = thinkingEl.querySelector('.cot-box')
     if (!box) {
       box = document.createElement('div')
-      box.className = 'reasoning-box'
+      box.className = 'reasoning-box cot-box'
       var toggle = document.createElement('div')
       toggle.className = 'reasoning-toggle'
       toggle.textContent = '\u25B8 reasoning'
@@ -2272,6 +2364,64 @@
     renderTranscript()
   }
 
+  /**
+   * In-panel replacement for window.confirm().
+   *
+   * Verified live via CDP (2026-08-05): the native confirm DOES open — but as a
+   * separate OS window ("JavaScript Confirm - file:///...") floating over the
+   * AE comp viewer, not inside the panel. It blocks the panel's JS thread until
+   * answered, so whenever that window lands behind the AE frame or on another
+   * monitor the panel is simply frozen with no visible cause. Resolves
+   * true/false and never blocks the thread.
+   */
+  function panelConfirm (message, confirmLabel) {
+    return new Promise(function (resolve) {
+      var backdrop = document.createElement('div')
+      backdrop.className = 'confirm-backdrop'
+      var box = document.createElement('div')
+      box.className = 'studio-panel confirm-panel'
+      box.setAttribute('role', 'dialog')
+
+      var body = document.createElement('div')
+      body.className = 'studio-body confirm-text'
+      // textContent — the message embeds user-supplied chat titles.
+      body.textContent = message
+      box.appendChild(body)
+
+      var actions = document.createElement('div')
+      actions.className = 'confirm-actions'
+      var cancelBtn = document.createElement('button')
+      cancelBtn.className = 'btn btn-secondary session-btn'
+      cancelBtn.textContent = 'Cancel'
+      var okBtn = document.createElement('button')
+      okBtn.className = 'btn btn-danger session-btn'
+      okBtn.textContent = confirmLabel || 'Delete'
+      actions.appendChild(cancelBtn)
+      actions.appendChild(okBtn)
+      box.appendChild(actions)
+      backdrop.appendChild(box)
+      document.body.appendChild(backdrop)
+
+      var done = false
+      function finish (answer) {
+        if (done) return
+        done = true
+        document.removeEventListener('keydown', onKey, true)
+        if (backdrop.parentNode) backdrop.parentNode.removeChild(backdrop)
+        resolve(answer)
+      }
+      function onKey (e) {
+        if (e.key === 'Escape') { e.stopPropagation(); finish(false) } else if (e.key === 'Enter') { e.stopPropagation(); finish(true) }
+      }
+      cancelBtn.addEventListener('click', function () { finish(false) })
+      okBtn.addEventListener('click', function () { finish(true) })
+      // Clicking the dimmed area cancels, matching the studio overlay.
+      backdrop.addEventListener('click', function (e) { if (e.target === backdrop) finish(false) })
+      document.addEventListener('keydown', onKey, true)
+      cancelBtn.focus()
+    })
+  }
+
   // Guard shared by both clear variants: a running agent loop writes into the
   // session it started with, so clearing mid-request would resurrect messages.
   function clearBlockedByRequest () {
@@ -2285,11 +2435,14 @@
     var session = getActiveSession()
     if (!session) return
     if (clearBlockedByRequest()) return
-    if (!confirm('Clear all messages in "' + session.title + '"? Other chats are not affected. This cannot be undone.')) return
-    session.messages = []
-    session.updatedAt = Date.now()
-    finishClear()
-    setStatus('Chat "' + session.title + '" cleared')
+    panelConfirm('Clear all messages in "' + session.title + '"? Other chats are not affected. This cannot be undone.', 'Clear')
+      .then(function (yes) {
+        if (!yes) return
+        session.messages = []
+        session.updatedAt = Date.now()
+        finishClear()
+        setStatus('Chat "' + session.title + '" cleared')
+      })
   }
 
   // Full clear: delete ALL chats and start over with one fresh chat
@@ -2297,14 +2450,17 @@
   function handleClearAllSessions () {
     if (clearBlockedByRequest()) return
     var n = state.sessions.length
-    if (!confirm('Delete ALL ' + n + ' chat(s) and all their messages? This cannot be undone.')) return
-    state.sessions = []
-    state.activeSessionId = null
-    ensureSession()
-    finishClear()
-    renderModelSelector()
-    renderSessionBar()
-    setStatus('All chats deleted')
+    panelConfirm('Delete ALL ' + n + ' chat(s) and all their messages? This cannot be undone.', 'Delete all')
+      .then(function (yes) {
+        if (!yes) return
+        state.sessions = []
+        state.activeSessionId = null
+        ensureSession()
+        finishClear()
+        renderModelSelector()
+        renderSessionBar()
+        setStatus('All chats deleted')
+      })
   }
 
   // Manually shrink the model's INPUT context without deleting any message the

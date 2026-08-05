@@ -633,6 +633,20 @@ body {
   font-variant-numeric: tabular-nums;
 }
 
+/* Shown only once a turn has been silent for a while (see STALL_HINT_MS) —
+   distinguishes "the model is slow" from "the run died". */
+.thinking-stall {
+  color: var(--warn);
+  font-size: 10px;
+  font-variant-numeric: tabular-nums;
+}
+
+/* Below the threshold the text is emptied — collapse the span so it doesn't
+   still eat the header's flex gap. */
+.thinking-stall:empty {
+  display: none;
+}
+
 /* Live reasoning (collapsible chain-of-thought tail) */
 .reasoning-box {
   margin-top: 4px;
@@ -773,6 +787,37 @@ body {
   box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45);
   max-height: 78vh;
   overflow-y: auto;
+}
+
+/* In-panel confirmation (replaces window.confirm, which CEP renders as a
+   detached OS window over the AE viewport while blocking the panel's JS). */
+.confirm-backdrop {
+  position: absolute;
+  inset: 0;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background-color: rgba(0, 0, 0, 0.5);
+}
+
+.confirm-panel {
+  position: static;
+  width: min(280px, calc(100% - 24px));
+  max-height: none;
+}
+
+.confirm-text {
+  font-size: 11px;
+  color: var(--text);
+  line-height: 1.45;
+}
+
+.confirm-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 6px;
+  padding: 0 8px 8px;
 }
 
 .studio-head {
