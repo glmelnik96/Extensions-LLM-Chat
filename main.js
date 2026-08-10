@@ -1629,16 +1629,9 @@
     }).then(function (result) {
       removeThinking()
 
-      var READ_ONLY_TOOLS = (window.AGENT_TOOL_LOOP && window.AGENT_TOOL_LOOP.READ_ONLY_TOOLS) || {}
-      var corrMutating = 0
       var allCalls = result.toolCallLog || []
-      for (var ci = 0; ci < allCalls.length; ci++) {
-        if (!READ_ONLY_TOOLS[allCalls[ci].name] && allCalls[ci].status === 'ok') {
-          corrMutating++
-        }
-      }
       // ADD correction mutations to existing count (single Undo scope).
-      state.lastMutatingToolCount += corrMutating
+      state.lastMutatingToolCount += countUndoUnits(allCalls)
       updateUndoButton()
 
       var assistantMsg = {
@@ -1827,18 +1820,8 @@
     }).then(function (result) {
       removeThinking()
 
-      // Shared read-only list from the tool loop (single source of truth).
-      // A stale local copy here once omitted search_expression_library /
-      // list_available_effects, inflating the Undo count — Undo then reverted
-      // the user's OWN edits beyond the agent's actions.
-      var READ_ONLY_TOOLS = (window.AGENT_TOOL_LOOP && window.AGENT_TOOL_LOOP.READ_ONLY_TOOLS) || {}
-      var mutatingCount = 0
       var allCalls = result.toolCallLog || []
-      for (var ci = 0; ci < allCalls.length; ci++) {
-        if (!READ_ONLY_TOOLS[allCalls[ci].name] && allCalls[ci].status === 'ok') {
-          mutatingCount++
-        }
-      }
+      var mutatingCount = countUndoUnits(allCalls)
       state.lastMutatingToolCount = mutatingCount
       updateUndoButton()
 
@@ -1902,12 +1885,7 @@
       // A failed run may still have mutated the project — count the partial
       // log the same way as the success path so Undo reflects reality instead
       // of keeping the count from the PREVIOUS run.
-      var roTools = (window.AGENT_TOOL_LOOP && window.AGENT_TOOL_LOOP.READ_ONLY_TOOLS) || {}
-      var partialMutating = 0
-      for (var pi = 0; pi < partialLog.length; pi++) {
-        if (!roTools[partialLog[pi].name] && partialLog[pi].status === 'ok') partialMutating++
-      }
-      state.lastMutatingToolCount = partialMutating
+      state.lastMutatingToolCount = countUndoUnits(partialLog)
       updateUndoButton()
       var errMsg = err.message || String(err)
       session.messages.push({ role: 'system', text: 'Error: ' + errMsg })
@@ -2322,6 +2300,30 @@
     } catch (e) {
       setSubtitlesStatus('Load failed: ' + ((e && e.message) || String(e)), true)
     }
+  }
+
+  /**
+   * How many Undo steps a tool-call log produced. Usually one per successful
+   * mutating call, but `batch_call` fans out into N host calls and therefore N
+   * AE undo groups — it reports its own `undoUnits`. Those count even when the
+   * batch is marked failed, because a partially failed batch still mutated the
+   * project. The read-only list comes from the tool loop (single source of
+   * truth): a stale local copy once inflated the count and Undo then reverted
+   * the user's OWN edits.
+   */
+  function countUndoUnits (log) {
+    var readOnly = (window.AGENT_TOOL_LOOP && window.AGENT_TOOL_LOOP.READ_ONLY_TOOLS) || {}
+    var calls = log || []
+    var n = 0
+    for (var i = 0; i < calls.length; i++) {
+      var entry = calls[i]
+      if (entry.result && typeof entry.result.undoUnits === 'number') {
+        n += entry.result.undoUnits
+      } else if (!readOnly[entry.name] && entry.status === 'ok') {
+        n++
+      }
+    }
+    return n
   }
 
   // ── Handle Undo ────────────────────────────────────────────────────────

@@ -727,11 +727,17 @@ function extensionsLlmChat_applyExpressionToTarget (layerIndex, layerId, propert
   };
 
   try {
-    if (typeof expressionText !== 'string' || !expressionText.length) {
+    // An empty string is the ONLY way AE removes an expression, so it is a
+    // valid request, not a malformed one. Rejecting it meant "убери экспрешен"
+    // had no implementation at all — the model kept guessing and the user kept
+    // asking. `null`/`undefined` are still errors: those come from a broken
+    // tool call, not from an intent to clear.
+    if (typeof expressionText !== 'string') {
       result.ok = false;
-      result.message = 'No expression text was provided to the host.';
+      result.message = 'No expression text was provided to the host. Pass "" to REMOVE the expression.';
       return resultToJson(result);
     }
+    var isRemoval = expressionText.length === 0;
 
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) {
@@ -809,9 +815,18 @@ function extensionsLlmChat_applyExpressionToTarget (layerIndex, layerId, propert
     var layerName = layer.name;
 
     try {
-      _beginToolUndo('Apply Expression to Target');
+      _beginToolUndo(isRemoval ? 'Remove Expression from Target' : 'Apply Expression to Target');
       targetProp.expression = expressionText;
-      targetProp.expressionEnabled = true;
+      targetProp.expressionEnabled = !isRemoval;
+
+      if (isRemoval) {
+        _endToolUndo();
+        result.ok = true;
+        result.message =
+          'Expression removed from "' + propName + '" on layer "' + layerName + '" in comp "' + comp.name + '".';
+        result.compStatusCode = ctx.statusCode || 'COMP_AVAILABLE';
+        return resultToJson(result);
+      }
 
       // Check if AE flagged an expression error (AE does not throw on bad expressions).
       var exprErr = '';
@@ -910,8 +925,10 @@ function extensionsLlmChat_applyExpressionBatch (targets) {
           typeof t.layerIndex === 'number' ? t.layerIndex : parseInt(t.layerIndex, 10);
         if (!(layerIndex >= 1)) layerIndex = null;
 
-        if (!expressionText.length || !propertyPath.length || (layerId === null && layerIndex === null)) {
-          itemResult.message = 'Target item is missing layer_id/layer_index, property_path, or expression.';
+        // Empty expression = remove it (see extensionsLlmChat_applyExpressionToTarget),
+        // so it must not be treated as a missing field here either.
+        if (!propertyPath.length || (layerId === null && layerIndex === null)) {
+          itemResult.message = 'Target item is missing layer_id/layer_index or property_path.';
           result.failedCount++;
           result.results.push(itemResult);
           continue;
@@ -934,7 +951,15 @@ function extensionsLlmChat_applyExpressionBatch (targets) {
         }
 
         targetProp.expression = expressionText;
-        targetProp.expressionEnabled = true;
+        targetProp.expressionEnabled = expressionText.length > 0;
+
+        if (!expressionText.length) {
+          itemResult.ok = true;
+          itemResult.message = 'Removed from layer "' + layer.name + '" → "' + targetProp.name + '".';
+          result.appliedCount++;
+          result.results.push(itemResult);
+          continue;
+        }
 
         // Check for expression error (AE does not throw on bad expressions).
         var batchExprErr = '';

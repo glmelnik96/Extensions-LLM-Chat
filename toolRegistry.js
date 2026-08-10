@@ -6,6 +6,32 @@
   'use strict'
 
   var tools = [
+    // ── Bulk execution ─────────────────────────────────────────────────
+    {
+      type: 'function',
+      function: {
+        name: 'batch_call',
+        description: 'Run up to 60 tool calls in ONE turn, sequentially. Use this whenever the same operation applies to 3+ layers/properties ("for every selected layer", "for each shape layer", "remove X from all…") and no dedicated *_batch tool fits. Every sub-call is validated exactly as if issued on its own; the reply lists per-call ok/message plus how many succeeded. Retry only the failed indices — never re-send a whole batch.',
+        parameters: {
+          type: 'object',
+          properties: {
+            calls: {
+              type: 'array',
+              description: 'Calls to run, in order. Cannot contain batch_call itself.',
+              items: {
+                type: 'object',
+                properties: {
+                  tool: { type: 'string', description: 'Tool name, e.g. "set_layer_timing"' },
+                  args: { type: 'object', description: 'Arguments object for that tool' }
+                },
+                required: ['tool', 'args']
+              }
+            }
+          },
+          required: ['calls']
+        }
+      }
+    },
     // ── Read tools ─────────────────────────────────────────────────────
     {
       type: 'function',
@@ -500,14 +526,14 @@
       type: 'function',
       function: {
         name: 'apply_expression',
-        description: 'Apply an After Effects expression to a property. The expression is JavaScript code that AE evaluates each frame. If the expression has errors, the tool returns ok:false with the error message — read it and fix the expression.',
+        description: 'Apply an After Effects expression to a property. The expression is JavaScript code that AE evaluates each frame. If the expression has errors, the tool returns ok:false with the error message — read it and fix the expression. To REMOVE an expression ("убери/удали экспрешен"), call this with expression:"" — that is the only way; do NOT use set_property_value, which leaves the expression in place and only changes the static value underneath it.',
         parameters: {
           type: 'object',
           properties: {
             layer_index: { type: 'number', description: '1-based layer index' },
             layer_id: { type: 'number', description: 'Persistent layer ID' },
             property_path: { type: 'string', description: 'Property path' },
-            expression: { type: 'string', description: 'The expression code to apply' }
+            expression: { type: 'string', description: 'The expression code to apply; "" removes the expression' }
           },
           required: ['layer_index', 'property_path', 'expression']
         }
@@ -517,7 +543,7 @@
       type: 'function',
       function: {
         name: 'apply_expression_batch',
-        description: 'Apply expressions to multiple properties in one host call. Use for multi-layer expression setup to reduce round trips. Returns per-target success/error details.',
+        description: 'Apply expressions to multiple properties in one host call. Use for multi-layer expression setup to reduce round trips, and for clearing expressions off many layers at once (expression:"" per target). Returns per-target success/error details.',
         parameters: {
           type: 'object',
           properties: {
@@ -530,7 +556,7 @@
                   layer_index: { type: 'number', description: '1-based layer index' },
                   layer_id: { type: 'number', description: 'Persistent layer ID (preferred when available)' },
                   property_path: { type: 'string', description: 'Property path like "Transform>Position"' },
-                  expression: { type: 'string', description: 'Expression code to apply' }
+                  expression: { type: 'string', description: 'Expression code to apply; "" removes the expression' }
                 },
                 required: ['property_path', 'expression']
               }

@@ -23,9 +23,27 @@ function loadBrowserGlobal (file) {
 const registryWindow = loadBrowserGlobal('toolRegistry.js')
 const tools = registryWindow.AGENT_TOOL_REGISTRY && registryWindow.AGENT_TOOL_REGISTRY.tools
 
-test('registry: exposes 65 tools', () => {
+test('registry: exposes 66 tools', () => {
   assert.ok(Array.isArray(tools), 'tools array exported')
-  assert.strictEqual(tools.length, 65)
+  assert.strictEqual(tools.length, 66)
+})
+
+test('registry: batch_call takes {tool, args} items', () => {
+  const bc = tools.find(t => t.function.name === 'batch_call')
+  assert.ok(bc, 'batch_call registered')
+  const items = bc.function.parameters.properties.calls.items
+  assert.strictEqual(JSON.stringify(items.required), JSON.stringify(['tool', 'args']))
+  assert.strictEqual(JSON.stringify(bc.function.parameters.required), JSON.stringify(['calls']))
+})
+
+test('registry: expression tools document removal via empty string', () => {
+  // The host silently rejected "" until 2026-08-10, so "убери экспрешен" had no
+  // implementation — the model has to be told this is the way.
+  const one = tools.find(t => t.function.name === 'apply_expression')
+  const batch = tools.find(t => t.function.name === 'apply_expression_batch')
+  assert.match(one.function.description, /expression:""/, 'apply_expression documents removal')
+  assert.match(one.function.description, /set_property_value/, 'warns off the wrong tool')
+  assert.match(batch.function.description, /expression:""/, 'batch documents removal')
 })
 
 test('registry: every tool has a valid OpenAI function schema', () => {
@@ -153,7 +171,7 @@ test('prompt: new behavior rules present', () => {
   assert.match(full, /Verify before claiming done/, 'self-verification rule')
   assert.match(full, /brief numbered plan/, 'plan rule')
   assert.ok(!full.includes('No chain-of-thought in the visible response'), 'old no-CoT rule replaced')
-  assert.match(full, /65 tools/, 'tool count updated')
+  assert.match(full, /66 tools/, 'tool count updated')
 })
 
 test('registry: compositing tools (2026-07-27) registered with correct schemas', () => {

@@ -553,6 +553,78 @@
     _failStreak[key] = entry
   }
 
+  // ── Generic batch runner (see the 'batch_call' case below) ───────────
+  // Sequential on purpose: sub-calls are mostly mutating and AE scripting is
+  // single-threaded, so the existing "serialize mutations" rule from the tool
+  // loop has to hold inside a batch too.
+  var BATCH_MAX_CALLS = 60
+
+  function _runBatchCall (args) {
+    var calls = (args && args.calls) || null
+    if (!calls || typeof calls.length !== 'number' || calls.length === 0) {
+      return Promise.resolve({
+        ok: false,
+        message: 'batch_call needs a non-empty "calls" array of {tool, args} items.'
+      })
+    }
+    if (calls.length > BATCH_MAX_CALLS) {
+      return Promise.resolve({
+        ok: false,
+        message: 'batch_call accepts at most ' + BATCH_MAX_CALLS + ' calls, got ' +
+          calls.length + '. Split the work into several batches.'
+      })
+    }
+
+    var results = []
+    var chain = Promise.resolve()
+    for (var i = 0; i < calls.length; i++) {
+      ;(function (idx) {
+        chain = chain.then(function () {
+          var item = calls[idx] || {}
+          var name = item.tool || item.name
+          if (name === 'batch_call') {
+            results.push({ index: idx, tool: name, ok: false, message: 'Nested batch_call is not allowed.' })
+            return null
+          }
+          return executeToolCall(name, item.args || {}).then(function (res) {
+            results.push({
+              index: idx,
+              tool: name,
+              ok: !!(res && res.ok),
+              message: (res && res.message) || ''
+            })
+          }, function (err) {
+            results.push({ index: idx, tool: name, ok: false, message: (err && err.message) || String(err) })
+          })
+        })
+      })(i)
+    }
+
+    return chain.then(function () {
+      var readOnly = (window.AGENT_TOOL_LOOP && window.AGENT_TOOL_LOOP.READ_ONLY_TOOLS) || {}
+      var okCount = 0
+      var undoUnits = 0
+      for (var r = 0; r < results.length; r++) {
+        if (!results[r].ok) continue
+        okCount++
+        if (!readOnly[results[r].tool]) undoUnits++
+      }
+      var failed = results.length - okCount
+      return {
+        ok: failed === 0,
+        message: okCount + '/' + results.length + ' calls succeeded' +
+          (failed ? '. Re-send ONLY the failed ones — do not repeat the whole batch.' : '.'),
+        succeeded: okCount,
+        failed: failed,
+        // Each sub-call opened its own AE undo group, so the Undo button has
+        // to count them individually: a batch that retimed 22 layers is 22
+        // undo steps, not one.
+        undoUnits: undoUnits,
+        results: results
+      }
+    })
+  }
+
   function executeToolCall (toolName, args) {
     if (!args) args = {}
     var call = null
@@ -1244,6 +1316,18 @@
           toESLiteral(typeof args.comp_id === 'number' ? args.comp_id : null) + ',' +
           toESLiteral(args.comp_name || null) + ')'
         break
+
+      // ── Generic batch ────────────────────────────────────────────────
+      // Runs N arbitrary tool calls inside ONE model turn. Only keyframes and
+      // expressions had a dedicated batch form, so "apply this to all 22
+      // selected layers" cost 22 model round-trips — in practice the model
+      // did three, declared the job finished, and the user got a partial
+      // result under a confident summary. Dispatch recurses through this same
+      // function so every guard (spam, idempotency, validation) still runs
+      // per sub-call; what this saves is LLM round-trips, which is the part
+      // that was actually costing us the work.
+      case 'batch_call':
+        return _runBatchCall(args)
 
       default:
         return Promise.reject(new Error('Unknown tool: ' + toolName))

@@ -83,6 +83,11 @@
     // reports finish_reason=tool_calls but delivers zero tool calls.
     var emptyToolCallRetries = 0
     var EMPTY_TOOL_CALL_MAX_RETRIES = 2
+    // Tool calls recovered from `content` (see the salvage block in step()).
+    // Capped so a model stuck emitting JSON prose can't drive the loop by
+    // itself for all 60 steps.
+    var salvagedCalls = 0
+    var MAX_SALVAGED_CALLS = 10
 
     function step (stepIndex) {
       // P1-3: the full message array is re-sent every turn, so old verbose
@@ -149,6 +154,24 @@
           var choice = response.choices[0]
           var assistantMsg = choice.message
           var toolCalls = assistantMsg.tool_calls || []
+
+          // The model sometimes writes the tool call into `content` instead of
+          // emitting it as a tool_calls entry — the run then "finished" with a
+          // blob of JSON as its answer and the operation never happened. If the
+          // text is nothing but a payload that unambiguously identifies one
+          // tool, turn it back into a real call and continue as normal.
+          if (toolCalls.length === 0 && salvagedCalls < MAX_SALVAGED_CALLS && window.PURE_TOOL_CALL_SALVAGE) {
+            var salvaged = window.PURE_TOOL_CALL_SALVAGE.parseLeakedCall(assistantMsg.content, tools)
+            if (salvaged) {
+              salvagedCalls++
+              toolCalls = [{
+                id: 'salvaged_' + stepIndex + '_' + salvagedCalls,
+                type: 'function',
+                function: { name: salvaged.tool, arguments: JSON.stringify(salvaged.args) }
+              }]
+              assistantMsg = { role: 'assistant', content: null, tool_calls: toolCalls }
+            }
+          }
 
           // Case 1: Model wants to call tools (and they actually arrived).
           if (toolCalls.length > 0) {
