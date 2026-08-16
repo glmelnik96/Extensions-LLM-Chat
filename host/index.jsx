@@ -2206,6 +2206,76 @@ function extensionsLlmChat_reverseKeyframes (layerIndex, layerId, propertyPath) 
 }
 
 /**
+ * Shift all keyframes of one property in time, preserving per-key ease and
+ * interpolation. alignTo:'layer_in_point' ignores timeOffset and moves the
+ * first key to the layer's inPoint (common ask: "start at the layer start" —
+ * which means inPoint, NOT comp t=0; keys before inPoint play while the layer
+ * is invisible).
+ */
+function extensionsLlmChat_shiftKeyframes (layerIndex, layerId, propertyPath, timeOffset, alignTo) {
+  var result = { ok: false, message: '', count: 0 };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
+    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var prop = _resolveProperty(layer, propertyPath);
+    if (!prop || !(prop instanceof Property)) { result.message = 'Property not found or is a group.'; return resultToJson(result); }
+    if (prop.numKeys < 1) { result.message = 'No keyframes on "' + propertyPath + '".'; return resultToJson(result); }
+
+    var offset = timeOffset;
+    if (alignTo === 'layer_in_point') {
+      offset = layer.inPoint - prop.keyTime(1);
+    } else if (typeof offset !== 'number') {
+      result.message = 'shift_keyframes: `time_offset` must be a number (seconds), or use align_to:"layer_in_point".';
+      return resultToJson(result);
+    }
+    if (offset === 0) {
+      result.ok = true;
+      result.count = prop.numKeys;
+      result.message = 'Keyframes on "' + propertyPath + '" already at the target time; nothing shifted.';
+      return resultToJson(result);
+    }
+
+    var keys = [];
+    for (var k = 1; k <= prop.numKeys; k++) {
+      var kd = { time: prop.keyTime(k), value: prop.keyValue(k) };
+      try { kd.easeIn = prop.keyInTemporalEase(k); kd.easeOut = prop.keyOutTemporalEase(k); } catch (eE) {}
+      try { kd.interpIn = prop.keyInInterpolationType(k); kd.interpOut = prop.keyOutInterpolationType(k); } catch (eT) {}
+      keys.push(kd);
+    }
+
+    _beginToolUndo('Agent: Shift keyframes');
+    for (var r = prop.numKeys; r >= 1; r--) prop.removeKey(r);
+    for (var n = 0; n < keys.length; n++) prop.setValueAtTime(keys[n].time + offset, keys[n].value);
+
+    for (var e = 0; e < keys.length; e++) {
+      var keyIdx = e + 1;
+      try {
+        if (keys[e].interpIn !== undefined) {
+          prop.setInterpolationTypeAtKey(keyIdx, keys[e].interpIn, keys[e].interpOut);
+        }
+      } catch (e2) {}
+      try {
+        if (keys[e].easeIn && keys[e].easeOut) {
+          prop.setTemporalEaseAtKey(keyIdx, keys[e].easeIn, keys[e].easeOut);
+        }
+      } catch (e3) {}
+      result.count++;
+    }
+    _endToolUndo();
+    result.ok = true;
+    result.firstKeyTime = keys[0].time + offset;
+    result.message = 'Shifted ' + result.count + ' keyframe(s) on "' + propertyPath + '" by ' + offset.toFixed(3) + 's (first key now at ' + result.firstKeyTime.toFixed(3) + 's).';
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'shiftKeyframes error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
  * Shift every keyframe on a property group (recursively) by timeShift seconds.
  */
 function _shiftPropertyKeyframes (group, timeShift) {
@@ -2573,6 +2643,15 @@ function extensionsLlmChat_setPropertyValue (layerIndex, layerId, propertyPath, 
     result.ok = true;
     var msg = 'Set "' + propertyPath + '" on "' + layer.name + '".';
     if (result.keyframesRemoved) msg += ' (existing keyframes were removed to set static value)';
+    // An enabled expression OVERRIDES the static value — the set "succeeds"
+    // but nothing changes on screen. Without this warning the agent reports
+    // success while the user sees no effect (found live 2026-08-16).
+    var hasExpr = false;
+    try { hasExpr = !!(prop.expressionEnabled && prop.expression && prop.expression.length > 0); } catch (eX) {}
+    if (hasExpr) {
+      result.expressionOverride = true;
+      msg += ' WARNING: this property has an ENABLED EXPRESSION that overrides the static value — the change is NOT visible. Remove the expression (apply_expression with expression:"") or edit it instead.';
+    }
     result.message = msg;
     return resultToJson(result);
   } catch (e) {
@@ -5134,6 +5213,7 @@ function extensionsLlmChat_getCapabilities () {
     'extensionsLlmChat_setKeyframeEasing',
     'extensionsLlmChat_copyEase',
     'extensionsLlmChat_reverseKeyframes',
+    'extensionsLlmChat_shiftKeyframes',
     'extensionsLlmChat_staggerLayers',
     'extensionsLlmChat_randomizeProperty',
     'extensionsLlmChat_moveAnchorPoint',

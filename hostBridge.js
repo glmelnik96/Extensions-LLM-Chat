@@ -424,6 +424,10 @@
       case 'reverse_keyframes':
         if (!isStr(args.property_path)) return 'reverse_keyframes: missing required `property_path`.'
         return null
+      case 'shift_keyframes':
+        if (!isStr(args.property_path)) return 'shift_keyframes: missing required `property_path`.'
+        if (args.align_to !== 'layer_in_point' && typeof args.time_offset !== 'number') return 'shift_keyframes: provide `time_offset` (seconds) or align_to:"layer_in_point".'
+        return null
       case 'stagger_layers':
         if (!isArr(args.layer_indices)) return 'stagger_layers: missing required `layer_indices` array (at least 2 layer indices).'
         if (typeof args.offset !== 'number') return 'stagger_layers: missing required `offset` number.'
@@ -587,12 +591,17 @@
             return null
           }
           return executeToolCall(name, item.args || {}).then(function (res) {
-            results.push({
+            var entry = {
               index: idx,
               tool: name,
               ok: !!(res && res.ok),
               message: (res && res.message) || ''
-            })
+            }
+            // Pass error_code through (e.g. RETRY_BLOCKED from the anti-spam
+            // guard) so the model can tell "fix and re-send" failures apart
+            // from "stop retrying" ones.
+            if (res && res.error_code) entry.error_code = res.error_code
+            results.push(entry)
           }, function (err) {
             results.push({ index: idx, tool: name, ok: false, message: (err && err.message) || String(err) })
           })
@@ -604,16 +613,30 @@
       var readOnly = (window.AGENT_TOOL_LOOP && window.AGENT_TOOL_LOOP.READ_ONLY_TOOLS) || {}
       var okCount = 0
       var undoUnits = 0
+      var blockedCount = 0
       for (var r = 0; r < results.length; r++) {
+        if (results[r].error_code === 'RETRY_BLOCKED') blockedCount++
         if (!results[r].ok) continue
         okCount++
         if (!readOnly[results[r].tool]) undoUnits++
       }
       var failed = results.length - okCount
+      // "Re-send the failed ones" must not contradict the anti-spam guard:
+      // RETRY_BLOCKED items will stay blocked until the arguments change, so
+      // telling the model to re-send them as-is just burns turns.
+      var advice = ''
+      if (failed && blockedCount === failed) {
+        advice = '. All failures are RETRY_BLOCKED (anti-spam guard) — do NOT re-send them as-is; investigate first (get_detailed_comp_summary, change arguments, or ask the user).'
+      } else if (failed && blockedCount > 0) {
+        advice = '. Fix and re-send ONLY the failed ones, EXCEPT the ' + blockedCount + ' marked RETRY_BLOCKED — those stay blocked until the arguments change; investigate them instead.'
+      } else if (failed) {
+        advice = '. Fix and re-send ONLY the failed ones — do not repeat the whole batch.'
+      } else {
+        advice = '.'
+      }
       return {
         ok: failed === 0,
-        message: okCount + '/' + results.length + ' calls succeeded' +
-          (failed ? '. Re-send ONLY the failed ones — do not repeat the whole batch.' : '.'),
+        message: okCount + '/' + results.length + ' calls succeeded' + advice,
         succeeded: okCount,
         failed: failed,
         // Each sub-call opened its own AE undo group, so the Undo button has
@@ -854,6 +877,14 @@
           toESLiteral(args.layer_index) + ',' +
           toESLiteral(args.layer_id || null) + ',' +
           toESLiteral(args.property_path) + ')'
+        break
+      case 'shift_keyframes':
+        call = 'extensionsLlmChat_shiftKeyframes(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral(args.property_path) + ',' +
+          toESLiteral(typeof args.time_offset === 'number' ? args.time_offset : null) + ',' +
+          toESLiteral(args.align_to || null) + ')'
         break
       case 'stagger_layers':
         call = 'extensionsLlmChat_staggerLayers(' +

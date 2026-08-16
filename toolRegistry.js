@@ -381,6 +381,24 @@
     {
       type: 'function',
       function: {
+        name: 'shift_keyframes',
+        description: 'Move ALL keyframes of one property in time by a fixed offset, preserving per-key easing and interpolation. Use align_to:"layer_in_point" to snap the first keyframe to the layer\'s in-point ("start of the layer" means the in-point, NOT comp time 0 — keyframes before the in-point play while the layer is invisible). Prefer this over deleting and re-creating keyframes.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID' },
+            property_path: { type: 'string', description: 'Property whose keyframes to shift, e.g. "Transform>Position" or "Effects>Fill>Color"' },
+            time_offset: { type: 'number', description: 'Offset in seconds (negative = earlier). Ignored when align_to is set.' },
+            align_to: { type: 'string', enum: ['layer_in_point'], description: 'Instead of a fixed offset, shift so the FIRST keyframe lands exactly on the layer\'s in-point.' }
+          },
+          required: ['property_path']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
         name: 'stagger_layers',
         description: 'Offset multiple layers in time to create a cascade/stagger. Layer-level timing shift (distinct from set_keyframes_batch, which staggers keyframes within one property). Layers are ordered by their comp index; each successive layer is pushed by offset*i.',
         parameters: {

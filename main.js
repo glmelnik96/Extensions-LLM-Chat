@@ -1501,8 +1501,12 @@
             }
             var verdict = VC.parseVerdict(content)
             if (verdict.ok) {
-              setStatus('Visual check: OK')
-              session.messages.push({ role: 'system', text: 'Visual check: OK' })
+              // WEAK SIGNAL: the check sees ONE still frame — it can catch
+              // gross layout/color errors but cannot verify motion, timing or
+              // easing. "OK" here must not read as "animation verified"
+              // (bug-hunt 2026-08-16: 6/6 false OKs incl. broken runs).
+              setStatus('Visual check: no static-frame issues')
+              session.messages.push({ role: 'system', text: 'Visual check (single frame, weak signal): no issues in the static frame. Motion and timing are NOT verified by this check.' })
               renderTranscript()
               persistState()
               return { ok: true, issues: [], correctionRan: false }
@@ -1707,12 +1711,17 @@
       }
     }
 
-    // Warn if no composition is open.
-    if (els.activeCompNote && els.activeCompNote.textContent.indexOf('unavailable') !== -1) {
-      session.messages.push({ role: 'system', text: '\u26A0 No active composition detected. Open a composition in After Effects before sending requests \u2014 most tools require an active comp.' })
-      renderTranscript()
-      persistState()
-    }
+    // Warn if no composition is open. Uses a live probe instead of reading the
+    // stale note text (the note refreshes async and can lag behind reality,
+    // producing false warnings). Only an explicit `false` means "no comp" —
+    // `null` means the probe itself failed and we stay quiet.
+    refreshActiveCompNote(true).then(function (hasComp) {
+      if (hasComp === false) {
+        session.messages.push({ role: 'system', text: '\u26A0 No active composition detected. Open a composition in After Effects before sending requests \u2014 most tools require an active comp.' })
+        renderTranscript()
+        persistState()
+      }
+    })
 
     // Start agent flow.
     state.isRequestInFlight = true
@@ -2891,8 +2900,11 @@
     processChunk(0)
   }
 
+  // Resolves to true when a comp is active, false when not, null when the
+  // probe itself failed (bridge missing / evalScript error) — callers that
+  // warn the user should treat null as "unknown", not as "no comp".
   function refreshActiveCompNote (silent) {
-    if (!els.activeCompNote) return
+    if (!els.activeCompNote) return Promise.resolve(null)
     // .warn turns the note amber when no comp is active — the agent's
     // mutating tools will fail in that state, so make it visually obvious.
     function setNote (text, warn) {
@@ -2901,20 +2913,22 @@
     }
     if (!window.HOST_BRIDGE || typeof window.HOST_BRIDGE.evalHostFunction !== 'function') {
       setNote('Active comp: unavailable.', true)
-      return
+      return Promise.resolve(null)
     }
     return window.HOST_BRIDGE.evalHostFunction('extensionsLlmChat_getActiveCompNote()')
       .then(function (ctx) {
         if (ctx && ctx.ok && ctx.compName) {
           setNote('Active composition: "' + ctx.compName + '". Changes are applied to this composition.', false)
-          return
+          return true
         }
         var msg = (ctx && ctx.message) ? ctx.message : 'No active composition.'
         setNote('Active composition: unavailable. ' + msg, true)
+        return false
       })
       .catch(function (err) {
         setNote('Active composition: unavailable.', true)
         if (!silent) setStatus('Active comp note unavailable: ' + (err.message || String(err)))
+        return null
       })
   }
 

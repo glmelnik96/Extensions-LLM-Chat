@@ -29,7 +29,7 @@ Extensions LLM Chat/
 ├── agentToolLoop.js           ← LLM ↔ tool execution cycle (parallel reads, validation, abort)
 ├── chatProvider.js            ← Cloud.ru API, retry on 429/5xx, SSE streaming
 ├── hostBridge.js              ← Tool name → ExtendScript mapping, anti-spam guard, idempotency, validation
-├── toolRegistry.js            ← 60 OpenAI-format tool definitions
+├── toolRegistry.js            ← 67 OpenAI-format tool definitions
 ├── host/
 │   └── index.jsx              ← ExtendScript: ALL AE operations (~4600 lines)
 ├── CSXS/manifest.xml          ← CEP manifest
@@ -43,7 +43,7 @@ Extensions LLM Chat/
 ├── knowledge-base/            ← AE expression reference corpus (human-readable; KB_SNIPPETS in main.js does keyword injection)
 ├── scripts/
 │   └── cdp-eval.js            ← CDP helper: eval JS inside the live panel (port 8092) for real-AE testing
-├── test/                      ← node:test unit tests (51 tests) — `node --test test/*.test.js`
+├── test/                      ← node:test unit tests (213 tests) — `node --test test/*.test.js`
 └── docs/                      ← detailed per-topic docs
 ```
 
@@ -94,6 +94,12 @@ These are documented thoroughly in `~/.claude/projects/.../memory/feedback_llm_f
 | Streaming drops ALL tool_calls (vLLM 0.22.0 + GLM-5.1) | non-streaming for tool turns in agent loop | 2026-06 reliability fixes |
 | Fabricated `![preview](file:///...)` without `capture_comp_frame` | prompt rule + opt-in capture | iter 4 (Fix J) |
 | `add_shape_*({})` silently inserts into wrong layer | `_validateRequiredArgs` requires layer_id | iter 4 (Fix K) |
+| Tool-call JSON emitted into `content` (turn does nothing) | `lib/pure/toolCallSalvage.js` + retry in `agentToolLoop.js` | 2026-08-10 |
+| Does 3 of N layers, reports all N as done | `batch_call` + prompt rules 5/10 | 2026-08-10 |
+| "Начало слоя" treated as comp t=0 — keys land before in-point, animation invisible | `shift_keyframes` (+`align_to:"layer_in_point"`) + prompt rule | 2026-08-16 |
+| `set_property_value` on expression-driven property = silent visual no-op reported as success | host WARNING + `expressionOverride: true` + prompt rule | 2026-08-16 |
+| False "⚠ No active composition" on send | live probe via `refreshActiveCompNote()` instead of stale DOM text | 2026-08-16 |
+| batch_call tells "re-send failed items" while guard blocks them | `error_code` passthrough + blocked-aware summary in `_runBatchCall` | 2026-08-16 |
 | CoT leakage into final response | prompt rule in CORE_RULES | iter 4 (Fix L) |
 | `create_layer(text)` with font fails | post-attach `sourceText.setValue(doc)` | iter 2 (Fix A) |
 | Wrong `property_index` on effects | `property_name` preferred | MVP |
@@ -222,6 +228,30 @@ Two `main.js`-only fixes for "the panel looks frozen", both live-verified via CD
 
 *`panelConfirm()` replaces native `confirm()`.* User report: "почему-то зависает кнопка Clear". Root cause measured via CDP: in CEP, `window.confirm()` opens a **detached OS window** — it does not render inside the panel, so it can end up behind AE, and it blocks the panel's JS thread for exactly as long as it goes unanswered (`jsBlockedMs: 1508` for a 1500ms hold). `panelConfirm(message, confirmLabel)` returns a Promise and draws an in-panel `.confirm-backdrop` + `.studio-panel` overlay (Esc / backdrop click = cancel, Enter = confirm, focus starts on Cancel, message goes in via `textContent` since chat titles are user-supplied). Converted: `handleClearSession`, `handleClearAllSessions`, `handleDeleteSession`, `handleQuickActionReset`. **Still native and still blocking** (same bug class, not yet converted): every `prompt()` flow (chat rename, quick-action add/edit, transcript path) and every `alert()`.
 
+### Bug-hunt fixes (2026-08-16) — shift_keyframes, expression-override warning, no-comp probe (66 → 67)
+A dedicated bug-hunt session with real LLM runs (6 agent scenarios + direct stresses on a scratch comp) confirmed five bugs; all fixed and live-verified end-to-end via CDP.
+
+*"Начало слоя" ≠ t=0.* Asked to move Fill-effect keys "to the start of the layers", the model moved them to comp 0–1s while the layers' in-points were 0.7–1.3s — the whole animation played before the layers became visible, and the run was reported as success. Two causes, two fixes: a prompt rule (in-point IS the layer start; keys before it are silently lost) and a new `shift_keyframes` tool (host `extensionsLlmChat_shiftKeyframes`, modeled on `reverseKeyframes`' capture/restore so per-key ease and interpolation survive — unlike `_shiftPropertyKeyframes`, which drops them). `align_to:"layer_in_point"` computes the offset from the first key to the layer's in-point. Live rerun: one `batch_call` aligned all 4 layers' keys exactly to 0.7/0.82/0.94/1.06.
+
+*Expression override.* `set_property_value` on a property with an enabled expression "succeeds" while the expression keeps winning — 4/4 "ok" with zero visual change and no warning anywhere. The host now appends a WARNING and sets `expressionOverride: true`; a prompt rule tells the model to check/remove the expression first. Live rerun: the agent set the value, saw the warning, honestly reported the override, and the correction round removed the expressions.
+
+*False "⚠ No active composition".* `handleSend` read the **stale note text** (`indexOf('unavailable')`) which refreshes async and loses the race with the Send click. `refreshActiveCompNote()` now returns a promise (`true` = comp, `false` = no comp, `null` = probe failed = stay quiet) and handleSend warns only on an explicit `false`.
+
+*batch_call × anti-spam guard.* Identical failing items within one batch trip the guard (items 4+ get RETRY_BLOCKED), but per-item results dropped `error_code` and the summary said "re-send ONLY the failed ones" — telling the model to do exactly what the guard blocks. `_runBatchCall` now passes `error_code` through and the summary distinguishes blocked items ("do NOT re-send as-is; investigate").
+
+*Visual check is a weak signal — by design.* One captured frame cannot verify motion/timing: 6/6 runs got "OK" including both broken ones. Per user decision it is labeled, not strengthened: the transcript message and the toggle tooltip now state it checks a single still frame and does NOT verify motion or timing. Expect true-but-useless verdicts like "frame is black" when the playhead sits before all in-points.
+
+### Partial-run fixes (2026-08-10) — batch_call, expression removal, tool-call salvage (65 → 66)
+The user's live complaint was "the agent keeps erring and does not perform the requested operations", and every round it turned out to be a code cause, not model weakness. Three measured ones, all fixed and live-verified via CDP.
+
+*`batch_call`.* Batch forms existed only for keyframes and expressions, so "apply this to all N layers" cost N LLM round-trips while the prompt demanded aggressive batching. The model compromised: measured **3 of 22** `BG Box` layers actually retimed (later 13/22), with a final answer enumerating all 22 as done. `batch_call` (first entry in `toolRegistry.js`, `_runBatchCall` in `hostBridge.js`) runs up to `BATCH_MAX_CALLS = 60` `{tool, args}` items in one turn, sequentially, preserving order, and returns per-item `{index, tool, ok, message}` plus `succeeded/failed`. Nesting is rejected. Its message tells the model to **re-send only the failed items** — a naive retry of the whole batch double-mutates. It reports its own **`undoUnits`**, because each host call opens its own AE undo group; `main.js` `countUndoUnits()` prefers `result.undoUnits` when present, and counts it even on a failed batch (a partial batch still mutated the project). Prompt rule 5 now routes any operation over 3+ layers into one `batch_call`, and new rule 10 forbids overstating coverage. Live: retiming 6 layers went from 22 calls to **5** (`search_layers` ×2, summary, `batch_call` 6/6, summary) with an honest report.
+
+*Expression removal had no implementation.* "убери экспрешен" failed three times in a row live. Cause: `apply_expression(expression:"")` was rejected by the host as a missing field, so the model fell back to `set_property_value(Opacity, 100)` — which leaves the expression in place and silently overrides the user. `extensionsLlmChat_applyExpressionToTarget` now type-checks instead of truth-checks (`typeof expressionText !== 'string'`), and an empty string sets `expression = ''` + `expressionEnabled = false` under a "Remove Expression from Target" undo group; `applyExpressionBatch` does the same per target. Both tool descriptions state that empty string is **the only** way to remove and that `set_property_value` is not a substitute. Live: 6/6 removed on the first try.
+
+*Tool-call salvage.* Models sometimes emit tool-call JSON into `content` instead of `tool_calls` (a turn that then does nothing). `lib/pure/toolCallSalvage.js` (`PURE_TOOL_CALL_SALVAGE.parseLeakedCall(content, tools)`) recovers it, and `agentToolLoop.js` retries it as a real call (max 10 per run). Two forms: **named** (`{name|tool|tool_name|recipient, arguments|args|parameters}`, string arguments re-parsed) — accepted only when the name is a **known tool**, otherwise `{"layer_index":3,"name":"BG Box 0.9"}` would become a call to a tool named "BG Box 0.9"; and **by argument shape**, which requires all schema-required keys (with `layer_index`/`layer_id` treated as equivalent) and no unknown keys. Array-of-object args are compared against `items.properties`/`items.required` — without that, `set_keyframes_batch` and `apply_expression_batch` are indistinguishable (both take only `targets`). **A match is returned only when exactly one tool qualifies**: executing the wrong mutating tool is worse than showing the user raw JSON. 12 tests built from the real leaked payloads.
+
+Also fixed here: the `countUndoUnits` refactor dropped `var allCalls` while two `main.js` call sites still used it, so **every** agent run died at the final step with `Error: allCalls is not defined` — tools had already run, only the answer was lost. Found by running a real agent turn through CDP rather than by reading the diff.
+
 ### Compositing tools (2026-07-27) — 5 tools + markdown fix
 Bug fixes: markdown renderer mangled code spans (`*` inside `` ` `` became `<em>`, `#`/`-` lines inside code blocks became headers/lists) — fixed via stash/restore placeholders in `lib/pure/markdown.js` with 6 regression tests; `setCompSettings` `bgColor` dead branch (`typeof x instanceof Array` — always false).
 
@@ -247,7 +277,7 @@ ExtendScript (ES3) quirks verified live: `string + Array` throws; `addProperty()
 | Question | File |
 |---|---|
 | User-facing setup, features, install | `README.md` |
-| 65 tools, capabilities, limitations | `docs/capabilities-and-roadmap.md` |
+| 67 tools, capabilities, limitations | `docs/capabilities-and-roadmap.md` |
 | Live AE validation methodology + bug tables | `docs/superpowers/specs/2026-06-10-deep-audit-report.md` |
 | Agent loop architecture, tool categories | `docs/final-architecture.md` |
 | Config fields, loading order, secrets | `docs/configuration.md`, `docs/secret-handling.md` |
@@ -318,7 +348,7 @@ For external (Obsidian) context, see also:
 ## Boundaries and red flags
 
 **You should escalate (ask user) before:**
-- Adding new tools that mutate AE state outside the current 60
+- Adding new tools that mutate AE state outside the current 67
 - Changing the API provider or the `AVAILABLE_MODELS` selector list (adding/removing/replacing a model)
 - Modifying `_resolveLayer` selection-fallback behavior
 - Changing the localStorage `ae-motion-agent-state` schema (breaks existing sessions)
@@ -343,4 +373,4 @@ The vault folder note is the single source of truth for project status. The mast
 
 ---
 
-*Last updated 2026-06-12 — after live AE validation (60f2b79). If you read this and it feels out of date, refresh it before touching code.*
+*Last updated 2026-08-16 — after the bug-hunt fixes (shift_keyframes, expression-override warning). If you read this and it feels out of date, refresh it before touching code.*

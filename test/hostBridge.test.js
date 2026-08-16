@@ -89,6 +89,20 @@ test('hostBridge: reverse_keyframes maps to extensionsLlmChat_reverseKeyframes',
   assert.match(call, /extensionsLlmChat_reverseKeyframes\(1,null,"Transform>Scale"\)/)
 })
 
+test('hostBridge: shift_keyframes maps offset and align_to', async () => {
+  const call = await captureCall('shift_keyframes', { layer_index: 2, property_path: 'Effects>Fill>Color', time_offset: -0.5 })
+  assert.match(call, /extensionsLlmChat_shiftKeyframes\(2,null,"Effects>Fill>Color",-0\.5,null\)/)
+  const call2 = await captureCall('shift_keyframes', { layer_id: 42, property_path: 'Transform>Position', align_to: 'layer_in_point' })
+  assert.match(call2, /extensionsLlmChat_shiftKeyframes\(null,42,"Transform>Position",null,"layer_in_point"\)/)
+})
+
+test('hostBridge: shift_keyframes rejects missing offset and align_to', async () => {
+  const win = loadHostBridge(() => '{"ok":true}')
+  const res = await win.HOST_BRIDGE.executeToolCall('shift_keyframes', { property_path: 'Transform>Scale' })
+  assert.strictEqual(res.ok, false)
+  assert.match(res.message, /time_offset.*layer_in_point/)
+})
+
 test('hostBridge: stagger_layers passes indices, offset and mode', async () => {
   const call = await captureCall('stagger_layers', { layer_indices: [3, 1, 2], offset: 5, unit: 'frames', mode: 'keyframes' })
   assert.match(call, /extensionsLlmChat_staggerLayers\(\[3,1,2\],null,5,"frames",null,"keyframes"\)/)

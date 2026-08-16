@@ -5,7 +5,12 @@
 ### Agent Tool System
 The extension works as an AI agent that can inspect, create, and modify After Effects compositions through tool calls. The LLM plans a sequence of actions, executes them one by one via ExtendScript, and reports results.
 
-**Supported tools (65):**
+**Supported tools (67):**
+
+#### Meta
+| Tool | Description |
+|------|-------------|
+| `batch_call` | Run up to 60 other tool calls (`{tool, args}` items) in one turn, in order. Returns per-item ok/message plus `succeeded`/`failed`/`undoUnits`. The way to apply anything across many layers without paying one LLM round-trip per layer. Cannot nest. |
 
 #### Read (inspection)
 | Tool | Description |
@@ -57,10 +62,11 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 | `set_keyframe_easing` | Change interpolation and easing on existing keyframes |
 | `copy_ease` | Copy temporal ease (in/out/both) from one property's keyframes onto another's |
 | `reverse_keyframes` | Reverse keyframe order in place — values and easing mirror around the time span |
+| `shift_keyframes` | Shift all keyframes of a property in time (preserving ease/interpolation); `align_to:"layer_in_point"` snaps the first key to the layer's in-point |
 | `randomize_property` | Randomize a property across layers within a range (absolute or offset), optional per-axis |
 | `set_property_value` | Set a static value on any property |
-| `apply_expression` | Apply an AE expression to any expressable property. Returns expression errors for agent self-correction + evaluated value readback. |
-| `apply_expression_batch` | Apply expressions to multiple layer properties in one tool call with per-target success/error details. |
+| `apply_expression` | Apply an AE expression to any expressable property. Returns expression errors for agent self-correction + evaluated value readback. Passing `expression: ""` **removes** the expression (the only way — `set_property_value` leaves it in place). |
+| `apply_expression_batch` | Apply expressions to multiple layer properties in one tool call with per-target success/error details. Empty strings remove, same as the single-target tool. |
 | `search_expression_library` | Search 54 curated expression snippets (`lib/pure/expressionLibrary.js`) + the user's saved snippets (marked `source:"user"`) — panel-local, no LLM round-trip |
 | `save_user_expression` | Save an expression to the user's personal library (localStorage) — agent-driven, "сохрани это выражение" |
 | `list_user_expressions` | List the user's saved snippets (ids for deletion) |
@@ -158,6 +164,8 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 - **Capability handshake** — at panel startup, `extensionsLlmChat_getCapabilities()` probes for 20 helpers/functions in host. Missing ones surface as a visible "Host script outdated" warning.
 - **Type hints for known property paths** — `Transform>Position` expects `[x,y]` or `[x,y,z]`; `Transform>Opacity` expects a number. Clear error before AE rejects.
 - **Harmony format normalize** — gpt-oss-120b decoder leaks like `apply_expression<|channel|>commentary` in `function.name` are stripped client-side.
+- **Tool-call salvage** — when a model writes tool-call JSON into `content` instead of `tool_calls` (a turn that otherwise does nothing), `lib/pure/toolCallSalvage.js` recovers it by name or by argument shape and the loop retries it as a real call (max 10 per run). Ambiguous payloads are left alone: calling the wrong mutating tool is worse than showing raw JSON.
+- **Batching over N layers** — `batch_call` collapses "do this to every layer" into one turn. Without it the model had to spend one round-trip per layer and would quietly stop early while reporting full coverage (measured: 3 of 22 layers done, 22 reported).
 - **Modular system prompt** — CORE always-loaded (~2.8k tokens) + lazy modules (expressions, effects, 3d, masks, shapes) triggered by keyword. ~40% token savings on simple requests.
 - **Parallel read-only tools** — contiguous reads in one round execute via `Promise.all` (saves multiple round-trips).
 - **API retry with backoff** — 429/5xx → 3 attempts with exponential backoff.
@@ -250,6 +258,10 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 
 **Multi-chat (2026-07-27)** — multiple named sessions: `state.sessions[]` + `activeSessionId`, header switcher with new/rename/delete, first-message auto-titles, transparent migration of the legacy single-session storage (`lib/pure/sessionStore.js`, 10 tests). Live-verified via CDP: migration, lifecycle, message+model isolation across reload, real agent run in the correct chat.
 
+**Partial-run fixes (2026-08-10, commit `5407e51`)** — 65 → 66 tools. Three measured causes of the agent doing part of a job and reporting all of it. (1) `batch_call`: batch forms existed only for keyframes and expressions, so "apply to all N layers" cost N round-trips and the model compromised — live measurement showed 3 of 22 `BG Box` layers actually retimed against an answer listing all 22. The new tool runs up to 60 `{tool, args}` items per turn, reports per-item results, rejects nesting, tells the model to re-send **only** the failed items, and returns its own `undoUnits` (each host call is its own AE undo group) which `countUndoUnits()` in main.js now honours, including on a partly-failed batch. Prompt rule 5 routes 3+ layers into one batch; new rule 10 forbids overstating coverage. (2) Expression removal was **unimplemented** — `apply_expression(expression:"")` was rejected by the host as a missing field, so "убери экспрешен" failed three times live and the model fell back to `set_property_value`, which leaves the expression in place; empty string now clears and disables in both the single and batch host paths, and both tool descriptions say so explicitly. (3) Tool-call salvage (see Reliability). Also fixed: a `countUndoUnits` refactor had dropped `var allCalls` while two call sites still used it, killing **every** run at the final step with `Error: allCalls is not defined` — found only by putting a real agent turn through CDP. Live-verified: 6-layer retime in 5 calls with an honest report, 6/6 expressions removed on the first try, `batch_call` correctly reporting `Layer not found.` and refusing nesting. 211 tests pass.
+
+**Bug-hunt fixes (2026-08-16)** — 66 → 67 tools. A dedicated bug-hunt session (6 real agent runs + direct stresses on a scratch comp) confirmed five bugs. (1) "Начало слоя" was treated as comp t=0: keys landed at 0–1s while in-points were 0.7–1.3s, so the animation played entirely before the layers appeared — and the run reported success. Fixed with a prompt rule (layer start = in-point) and a new `shift_keyframes` tool that shifts all keys of a property preserving per-key ease/interpolation, with `align_to:"layer_in_point"`. (2) `set_property_value` on an expression-driven property was a silent visual no-op: the host now warns and sets `expressionOverride: true`, plus a prompt rule to check/remove the expression first. (3) False "⚠ No active composition" on send: the check read stale note text that loses the race with the Send click; now a live host probe warns only on an explicit "no comp". (4) `batch_call` × anti-spam guard: per-item `error_code` (e.g. `RETRY_BLOCKED`) is passed through and the summary no longer tells the model to re-send items the guard will block. (5) Visual check labeled as a **weak signal** (single still frame — cannot verify motion/timing; 6/6 false "OK"s measured) in the transcript message and the toggle tooltip, per user decision not to strengthen it. Live-verified end-to-end: agent aligned Fill keys of 4 layers to their in-points in one batch_call, and honestly reported the expression override before removing it in the correction round. 213 tests pass.
+
 **Live AE validation (2026-06-10, commit `60f2b79`)** — 7 host bugs found & fixed by driving the real panel via CDP (`scripts/cdp-eval.js`): string+Array concat in readback, control-char escaping in `resultToJson`, `add_effect` rename, `_resolveProperty` alias shadowing, `addProperty()` ref invalidation in shape tools, `reorder_layer` rewrite (no `moveTo` on Layer), `precompose_layers` layer_ids support. Details: `docs/superpowers/specs/2026-06-10-deep-audit-report.md`.
 
 ### Future Improvements (only on user request)
@@ -259,8 +271,6 @@ The extension works as an AI agent that can inspect, create, and modify After Ef
 **Persistent animation library** — Save and recall animation patterns: "Save this as 'bounce reveal'" / "Apply 'bounce reveal'".
 
 **Before/after comparison** — Capture before + after, show side-by-side. Currently disallowed by Fix J (anti-fabrication).
-
-**Batch mode** — "Apply this animation to all text layers" — detect matching layers and batch-apply.
 
 **Conversation summarization** — Summarize old messages instead of dropping them in `pruneConversation`.
 
@@ -288,7 +298,7 @@ agentSystemPrompt.js  — Agent persona, workflow rules, expression guidance, to
 agentToolLoop.js      — LLM <> tool execution cycle with abort, streaming, expression validation
 chatProvider.js       — Cloud.ru API with retry, SSE streaming
 hostBridge.js         — Tool name -> ExtendScript mapping (single-load host script) + pre-call required-args validation
-toolRegistry.js       — 65 OpenAI-compatible tool definitions
+toolRegistry.js       — 67 OpenAI-compatible tool definitions
 host/index.jsx        — ExtendScript functions (AE operations, shapes, 3D, masks, markers, import)
 main.js               — UI, sessions, markdown, pruning, cancel, batch-undo, KB injection, quick actions
 ```
