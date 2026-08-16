@@ -895,6 +895,15 @@ function extensionsLlmChat_applyExpressionToTarget (layerIndex, layerId, propert
     var propName = targetProp.name;
     var layerName = layer.name;
 
+    // Removal is always allowed (it can only ever fix state); guards apply to
+    // actually writing an expression.
+    if (!isRemoval) {
+      var lockMsg = _lockedRefusal(layer);
+      if (lockMsg) { result.ok = false; result.message = lockMsg; return resultToJson(result); }
+      var cloneMsg = _parentCloneExprError(layer, targetProp, expressionText);
+      if (cloneMsg) { result.ok = false; result.message = cloneMsg; return resultToJson(result); }
+    }
+
     try {
       _beginToolUndo(isRemoval ? 'Remove Expression from Target' : 'Apply Expression to Target');
       targetProp.expression = expressionText;
@@ -1031,6 +1040,24 @@ function extensionsLlmChat_applyExpressionBatch (targets) {
           continue;
         }
 
+        // Same guards as the single-target tool (removal is always allowed).
+        if (expressionText.length) {
+          var batchLockMsg = _lockedRefusal(layer);
+          if (batchLockMsg) {
+            itemResult.message = batchLockMsg;
+            result.failedCount++;
+            result.results.push(itemResult);
+            continue;
+          }
+          var batchCloneMsg = _parentCloneExprError(layer, targetProp, expressionText);
+          if (batchCloneMsg) {
+            itemResult.message = batchCloneMsg;
+            result.failedCount++;
+            result.results.push(itemResult);
+            continue;
+          }
+        }
+
         targetProp.expression = expressionText;
         targetProp.expressionEnabled = expressionText.length > 0;
 
@@ -1139,6 +1166,59 @@ function _resolveLayer (comp, layerIndex, layerId) {
     }
   }
   return layer;
+}
+
+/**
+ * Locked-layer refusal for targeted mutating tools. AE scripting silently
+ * bypasses `layer.locked` (verified live: apply_expression succeeded on a
+ * locked layer with zero indication), so without this check the agent
+ * overrides a lock the user set — and never even mentions it. Returns '' when
+ * the layer may be modified, otherwise the refusal message for the model.
+ * Bulk convenience tools (stagger_layers, randomize_property) keep their
+ * historical unlock-and-restore behavior.
+ */
+function _lockedRefusal (layer) {
+  try {
+    if (layer && layer.locked === true) {
+      return 'Layer "' + layer.name + '" is LOCKED — refusing to modify it. ' +
+        'Tell the user the layer is locked. If they want it changed, unlock it first via ' +
+        'set_layer_switches({locked:false}) and mention the unlock in your reply.';
+    }
+  } catch (e) {}
+  return '';
+}
+
+/**
+ * Reject expressions that clone the PARENT layer's position into the Position
+ * property of a parented layer. A parented layer's Position is in PARENT
+ * space; `thisComp.layer("Parent").transform.position + ...` mixes comp-space
+ * coordinates into parent space — the layer flies ~[parent position] pixels
+ * away and parent motion applies twice (verified live: all 4 parented cards
+ * landed ~2000px off after a wiggle rig used the parent position as base).
+ * Returns '' when the expression is fine, otherwise the refusal message.
+ */
+function _parentCloneExprError (layer, targetProp, expressionText) {
+  try {
+    if (!layer || !layer.parent) return '';
+    if (!targetProp || targetProp.matchName !== 'ADBE Position') return '';
+    if (typeof expressionText !== 'string' || !expressionText.length) return '';
+    var pn = layer.parent.name;
+    var refs = [
+      'layer("' + pn + '").transform.position',
+      'layer("' + pn + '").position',
+      "layer('" + pn + "').transform.position",
+      "layer('" + pn + "').position"
+    ];
+    for (var i = 0; i < refs.length; i++) {
+      if (expressionText.indexOf(refs[i]) !== -1) {
+        return 'Rejected: this expression uses the position of "' + pn + '", which is the PARENT of layer "' +
+          layer.name + '". A parented layer\'s Position is in PARENT space — adding the parent\'s comp-space ' +
+          'position throws the layer far away and doubles the parent\'s motion. Use `value` as the base instead ' +
+          '(e.g. `value + wiggle(freq, amp)`); parenting already applies the parent\'s movement.';
+      }
+    }
+  } catch (e) {}
+  return '';
 }
 
 /**
@@ -1497,6 +1577,8 @@ function extensionsLlmChat_deleteLayer (layerIndex, layerId) {
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
     if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var lockMsg = _lockedRefusal(layer);
+    if (lockMsg) { result.message = lockMsg; return resultToJson(result); }
     var n = layer.name;
     _beginToolUndo('Agent: Delete layer');
     layer.remove();
@@ -1824,6 +1906,8 @@ function extensionsLlmChat_addKeyframes (layerIndex, layerId, propertyPath, keyf
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
     if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var lockMsg = _lockedRefusal(layer);
+    if (lockMsg) { result.message = lockMsg; return resultToJson(result); }
     var prop = _resolveProperty(layer, propertyPath);
     if (!prop) { result.message = 'Property "' + propertyPath + '" not found.'; return resultToJson(result); }
     if (!(prop instanceof Property)) {
@@ -1898,6 +1982,14 @@ function extensionsLlmChat_setKeyframesBatch (targets) {
         var layer = _resolveLayer(comp, layerIndex, layerId);
         if (!layer) {
           itemResult.message = 'Layer not found by layer_id/layer_index.';
+          result.failedCount++;
+          result.results.push(itemResult);
+          continue;
+        }
+
+        var kfLockMsg = _lockedRefusal(layer);
+        if (kfLockMsg) {
+          itemResult.message = kfLockMsg;
           result.failedCount++;
           result.results.push(itemResult);
           continue;
@@ -2694,6 +2786,8 @@ function extensionsLlmChat_setPropertyValue (layerIndex, layerId, propertyPath, 
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
     if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var lockMsg = _lockedRefusal(layer);
+    if (lockMsg) { result.message = lockMsg; return resultToJson(result); }
     // Pre-flight type check for known paths so the agent gets a clear
     // diagnostic instead of a cryptic AE error.
     var typeErr = _validateValueForPath(propertyPath, value);
@@ -2806,6 +2900,8 @@ function extensionsLlmChat_addEffect (layerIndex, layerId, effectMatchName, effe
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
     if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var lockMsg = _lockedRefusal(layer);
+    if (lockMsg) { result.message = lockMsg; return resultToJson(result); }
     // Guard: a missing/empty effect_match_name otherwise reaches
     // addProperty(null) and AE throws a cryptic "Can not add a property with
     // name null" — unhelpful to the agent. Return a clean, actionable error.
@@ -2864,6 +2960,8 @@ function extensionsLlmChat_removeEffect (layerIndex, layerId, effectIndex) {
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
     if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var lockMsg = _lockedRefusal(layer);
+    if (lockMsg) { result.message = lockMsg; return resultToJson(result); }
     var effects = layer.property('ADBE Effect Parade');
     if (!effects) { result.message = 'Layer has no effects.'; return resultToJson(result); }
     if (typeof effectIndex !== 'number' || effectIndex < 1 || effectIndex > effects.numProperties) {
@@ -2934,6 +3032,8 @@ function extensionsLlmChat_setEffectPropertyValue (layerIndex, layerId, effectIn
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
     if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var lockMsg = _lockedRefusal(layer);
+    if (lockMsg) { result.message = lockMsg; return resultToJson(result); }
     var effects = layer.property('ADBE Effect Parade');
     if (!effects) { result.message = 'Layer has no effects.'; return resultToJson(result); }
     var fx = effects.property(effectIndex);
@@ -3119,6 +3219,8 @@ function extensionsLlmChat_setTextDocument (layerIndex, layerId, textProps) {
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
     if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    var lockMsg = _lockedRefusal(layer);
+    if (lockMsg) { result.message = lockMsg; return resultToJson(result); }
     if (!textProps || typeof textProps !== 'object') {
       result.message = 'No text properties provided.'; return resultToJson(result);
     }

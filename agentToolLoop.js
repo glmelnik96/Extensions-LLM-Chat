@@ -105,10 +105,45 @@
         })
       }
       if (stepIndex >= maxSteps) {
-        return Promise.resolve({
-          content: '[Agent reached maximum step limit (' + maxSteps + '). Partial results above.]',
-          toolCallLog: toolCallLog,
-          usage: totalUsage
+        // Step cap hit mid-work. Previously the run ended with a bare
+        // "[maximum step limit]" system stub — the model never reported what
+        // it did or did NOT finish, so partial/broken state looked like
+        // success (observed live: 6x6 grid correction died at step 60 with 14
+        // stray half-created layers and zero explanation). Give the model ONE
+        // tool-less turn to summarize honestly, falling back to the stub if
+        // even that fails.
+        var capNote = '[Agent reached maximum step limit (' + maxSteps + ').]'
+        messages.push({
+          role: 'user',
+          content: '[SYSTEM] The tool-step limit (' + maxSteps + ') is reached — no more tool calls are possible in this run. ' +
+            'Reply NOW, in the language of the conversation, with a short honest status report: ' +
+            '(1) what was completed, (2) what was NOT completed or is left half-done (including any temporary/leftover layers), ' +
+            '(3) what the user should do or ask next. Never claim unfinished work as done.'
+        })
+        return window.CHAT_PROVIDER.invoke(modelId, messages, {
+          max_tokens: 4096,
+          temperature: temperature,
+          abortHandle: abortHandle,
+          chat_template_kwargs: { enable_thinking: false }
+        }).then(function (response) {
+          if (response.usage) {
+            totalUsage.prompt_tokens += response.usage.prompt_tokens || 0
+            totalUsage.completion_tokens += response.usage.completion_tokens || 0
+            totalUsage.total_tokens += response.usage.total_tokens || 0
+          }
+          var finalMsg = response.choices && response.choices[0] && response.choices[0].message
+          var finalText = (finalMsg && finalMsg.content) || ''
+          return {
+            content: capNote + (finalText ? '\n\n' + finalText : ' Partial results above.'),
+            toolCallLog: toolCallLog,
+            usage: totalUsage
+          }
+        }).catch(function () {
+          return {
+            content: capNote + ' Partial results above.',
+            toolCallLog: toolCallLog,
+            usage: totalUsage
+          }
         })
       }
 
@@ -378,10 +413,20 @@
       // report a phantom result — tell the model its JSON was invalid so it can
       // re-issue the call correctly on the next turn.
       if (argParseError) {
+        // Large payloads (esp. batch_call) get corrupted by the model itself —
+        // retrying the same giant call fails identically (observed live: 3x the
+        // exact same parse error at the same offset). Tell the model to SPLIT
+        // instead of re-issuing verbatim.
+        var parseErrMsg = 'Tool arguments were not valid JSON (' + argParseError +
+          '). Re-issue this call with a single well-formed JSON object as the arguments.'
+        if (toolName === 'batch_call' || (typeof rawArgs === 'string' && rawArgs.length > 4000)) {
+          parseErrMsg += ' Your payload was large (' +
+            (typeof rawArgs === 'string' ? rawArgs.length : 0) +
+            ' chars) — do NOT retry the same big call: split the work into several smaller batches (max 8 inner calls each) or individual tool calls.'
+        }
         var parseErrResult = {
           ok: false,
-          message: 'Tool arguments were not valid JSON (' + argParseError +
-            '). Re-issue this call with a single well-formed JSON object as the arguments.'
+          message: parseErrMsg
         }
         logEntry.result = parseErrResult
         logEntry.status = 'error'

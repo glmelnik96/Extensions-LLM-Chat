@@ -1364,7 +1364,12 @@
         return _runBatchCall(args)
 
       default:
-        return Promise.reject(new Error('Unknown tool: ' + toolName))
+        // Models sometimes hallucinate plausible-sounding tool names
+        // (observed live: `get_layer_switches`). Point the model back to the
+        // real tool list instead of letting it guess variations.
+        return Promise.reject(new Error('Unknown tool: ' + toolName +
+          '. This tool does not exist — use ONLY tools from your tool definitions ' +
+          '(e.g. layer switches are read via get_layer_properties and set via set_layer_switches).'))
     }
 
     var hostPromise = evalHostFunction(call).then(function (res) {

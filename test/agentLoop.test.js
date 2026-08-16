@@ -252,6 +252,122 @@ test('loop: empty-string arguments are treated as no args, not an error', async 
   assert.strictEqual(result.toolCallLog[0].status, 'ok')
 })
 
+test('loop: malformed batch_call JSON advises splitting instead of verbatim retry', async () => {
+  const win = loadLoop()
+  fakeHost(win)
+  const calls = scriptProvider(win, [
+    resp({
+      role: 'assistant',
+      content: null,
+      // Broken giant batch payload — the live failure mode: the model retried
+      // the exact same call 3x and burned steps.
+      tool_calls: [{ id: 'c1', type: 'function', function: { name: 'batch_call', arguments: '{"calls":[{' } }]
+    }, 'tool_calls'),
+    resp({ role: 'assistant', content: 'recovered' }, 'stop')
+  ])
+
+  await win.AGENT_TOOL_LOOP.runAgentLoop({
+    modelId: 'm', systemPrompt: 'sp', messages: [{ role: 'user', content: 'hi' }]
+  })
+  const toolMsg = calls[1].messages.find(m => m.role === 'tool')
+  assert.match(toolMsg.content, /not valid JSON/i)
+  assert.match(toolMsg.content, /split the work/i)
+  assert.match(toolMsg.content, /do NOT retry the same big call/i)
+})
+
+test('loop: malformed large non-batch payload also gets split advice', async () => {
+  const win = loadLoop()
+  fakeHost(win)
+  const bigBroken = '{"targets":[' + '{"x":1},'.repeat(600) // > 4000 chars, unterminated
+  const calls = scriptProvider(win, [
+    resp({
+      role: 'assistant',
+      content: null,
+      tool_calls: [{ id: 'c1', type: 'function', function: { name: 'apply_expression_batch', arguments: bigBroken } }]
+    }, 'tool_calls'),
+    resp({ role: 'assistant', content: 'recovered' }, 'stop')
+  ])
+
+  await win.AGENT_TOOL_LOOP.runAgentLoop({
+    modelId: 'm', systemPrompt: 'sp', messages: [{ role: 'user', content: 'hi' }]
+  })
+  const toolMsg = calls[1].messages.find(m => m.role === 'tool')
+  assert.match(toolMsg.content, /split the work/i)
+})
+
+test('loop: small malformed payload keeps the plain re-issue message', async () => {
+  const win = loadLoop()
+  fakeHost(win)
+  const calls = scriptProvider(win, [
+    resp({
+      role: 'assistant',
+      content: null,
+      tool_calls: [{ id: 'c1', type: 'function', function: { name: 'create_layer', arguments: '{"name":"x"' } }]
+    }, 'tool_calls'),
+    resp({ role: 'assistant', content: 'recovered' }, 'stop')
+  ])
+
+  await win.AGENT_TOOL_LOOP.runAgentLoop({
+    modelId: 'm', systemPrompt: 'sp', messages: [{ role: 'user', content: 'hi' }]
+  })
+  const toolMsg = calls[1].messages.find(m => m.role === 'tool')
+  assert.match(toolMsg.content, /not valid JSON/i)
+  assert.doesNotMatch(toolMsg.content, /split the work/i, 'small payloads keep the simple message')
+})
+
+test('loop: step cap triggers one tool-less finalization turn with honest summary', async () => {
+  const win = loadLoop()
+  fakeHost(win)
+  const toolTurn = () => resp({
+    role: 'assistant',
+    content: null,
+    tool_calls: [{ id: 'c1', type: 'function', function: { name: 'create_layer', arguments: '{}' } }]
+  }, 'tool_calls')
+  const calls = scriptProvider(win, [
+    toolTurn(),
+    resp({ role: 'assistant', content: 'Сделано частично: слой создан, сетка не закончена.' }, 'stop')
+  ])
+
+  const result = await win.AGENT_TOOL_LOOP.runAgentLoop({
+    modelId: 'm', systemPrompt: 'sp', messages: [{ role: 'user', content: 'hi' }],
+    maxSteps: 1
+  })
+  assert.strictEqual(calls.length, 2, 'one work turn + one finalization turn')
+  // Finalization turn must not offer tools.
+  assert.strictEqual(calls[1].options.tools, undefined, 'no tools on the finalization turn')
+  // It must carry the system nudge asking for an honest report.
+  const lastMsg = calls[1].messages[calls[1].messages.length - 1]
+  assert.strictEqual(lastMsg.role, 'user')
+  assert.match(lastMsg.content, /step limit/i)
+  assert.match(lastMsg.content, /NOT completed/i)
+  // Final content = cap note + the model's own summary.
+  assert.match(result.content, /maximum step limit \(1\)/)
+  assert.match(result.content, /Сделано частично/)
+  assert.strictEqual(result.toolCallLog.length, 1)
+})
+
+test('loop: step cap falls back to the stub when the finalization turn fails', async () => {
+  const win = loadLoop()
+  fakeHost(win)
+  const calls = scriptProvider(win, [
+    resp({
+      role: 'assistant',
+      content: null,
+      tool_calls: [{ id: 'c1', type: 'function', function: { name: 'create_layer', arguments: '{}' } }]
+    }, 'tool_calls'),
+    new Error('provider down')
+  ])
+
+  const result = await win.AGENT_TOOL_LOOP.runAgentLoop({
+    modelId: 'm', systemPrompt: 'sp', messages: [{ role: 'user', content: 'hi' }],
+    maxSteps: 1
+  })
+  assert.strictEqual(calls.length, 2)
+  assert.match(result.content, /maximum step limit \(1\)/)
+  assert.match(result.content, /Partial results above/)
+  assert.strictEqual(result.toolCallLog.length, 1, 'partial log preserved')
+})
+
 test('loop: tool results are paired to tool_call ids in the conversation', async () => {
   const win = loadLoop()
   fakeHost(win, { create_layer: { ok: true, message: 'Created.' } })
