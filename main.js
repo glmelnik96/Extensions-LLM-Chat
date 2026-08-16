@@ -1336,6 +1336,16 @@
       warnings.push('WARN: Manual progress like `(time - t0) / dur` is not clamped — before/after the window it drops below 0 / rises above 1 and the property over/undershoots. Wrap the ratio in `clamp(..., 0, 1)` or use `linear(time, t0, t1, from, to)`, which clamps automatically.')
     }
 
+    // 14. Base value added to wiggle(): `base + wiggle(f, a)` double-counts,
+    //     because wiggle() ALREADY includes the pre-expression property value.
+    //     Live round-5 evidence (GLM-4.7): `var base = [192,135]; base + wiggle(1,amp)`
+    //     evaluated to ~base + original position and broke the whole grid layout.
+    //     Skip when the expression compensates with `- value` (the correct
+    //     re-basing idiom `base + wiggle(f,a) - value`).
+    if (/[+]\s*wiggle\s*\(|wiggle\s*\([^)]*\)\s*[+]/.test(exprText) && !/-\s*value\b/.test(exprText)) {
+      warnings.push('WARN: Adding a base to wiggle() double-counts — wiggle(freq, amp) ALREADY includes the pre-expression property value. Use plain `wiggle(freq, amp)` (set the base via the property value itself), or re-base explicitly with `base + wiggle(freq, amp) - value`.')
+    }
+
     return warnings
   }
 

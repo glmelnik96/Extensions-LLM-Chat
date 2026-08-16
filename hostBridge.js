@@ -362,6 +362,40 @@
   }
 
   /**
+   * Salvage array arguments that the model emitted as a JSON STRING instead
+   * of a real array. Observed live (round-5, GLM-4.7): set_keyframes_batch
+   * got `targets: "[{\"layer_id\": 1, ...}]"` and hard-failed on validation,
+   * after which the model abandoned keyframes entirely. These arg names are
+   * never legitimately strings, so parsing them is safe; anything that does
+   * not parse to an array is left as-is for _validateRequiredArgs to reject.
+   */
+  var _ARRAY_ARG_NAMES = { targets: 1, keyframes: 1, layer_indices: 1, calls: 1 }
+  function _unstringifyArrayArgs (args) {
+    // Duck-typed array check (like isArr in _validateRequiredArgs): args may
+    // cross JS-context boundaries where `instanceof Array` lies.
+    function looksArray (v) { return !!v && typeof v === 'object' && typeof v.length === 'number' }
+    if (!args || typeof args !== 'object') return args
+    for (var key in args) {
+      if (!args.hasOwnProperty(key) || !_ARRAY_ARG_NAMES[key]) continue
+      var v = args[key]
+      if (typeof v === 'string' && v.replace(/^\s+/, '').charAt(0) === '[') {
+        try {
+          var parsed = JSON.parse(v)
+          if (looksArray(parsed)) args[key] = parsed
+        } catch (e) { /* leave for validation to report */ }
+      }
+      // Nested case: targets items each carry their own keyframes array.
+      if (looksArray(args[key])) {
+        for (var i = 0; i < args[key].length; i++) {
+          var item = args[key][i]
+          if (item && typeof item === 'object' && !looksArray(item)) _unstringifyArrayArgs(item)
+        }
+      }
+    }
+    return args
+  }
+
+  /**
    * Validate that critical tool calls include their required arguments.
    * Returns null when args look ok, or an error string for the agent.
    * Catches the common LLM failure of emitting `{}` for tools that require
@@ -695,6 +729,7 @@
     // and return a clear error the agent can self-correct from. The schema
     // already declares these as required, but Cloud.ru tool-call generation
     // sometimes emits {} anyway.
+    _unstringifyArrayArgs(args)
     var validationError = _validateRequiredArgs(toolName, args)
     if (validationError) {
       var preValErr = { ok: false, message: validationError }

@@ -1028,7 +1028,7 @@ function extensionsLlmChat_applyExpressionBatch (targets) {
 
         var layer = _resolveLayer(comp, layerIndex, layerId);
         if (!layer) {
-          itemResult.message = 'Layer not found by layer_id/layer_index.';
+          itemResult.message = _layerNotFoundMsg(layerId, layerIndex);
           result.failedCount++;
           result.results.push(itemResult);
           continue;
@@ -1139,6 +1139,28 @@ function extensionsLlmChat_applyExpressionBatch (targets) {
  *
  * Returns the Layer or null.
  */
+/**
+ * Actionable not-found message for batch targets. Live GLM-4.7 run sent
+ * layer_id 1..20 meaning stack positions — all 20 targets failed with a bare
+ * "Layer not found by layer_id/layer_index." and the model could not tell
+ * WHY (ids vs indexes) nor recover. Echo the failing identifiers and explain
+ * the id/index distinction so the model can self-correct in one step.
+ */
+function _layerNotFoundMsg (layerId, layerIndex) {
+  function given (v) {
+    if (v === null || v === undefined || v === '') return false;
+    if (typeof v === 'number' && v !== v) return false; // NaN
+    return true;
+  }
+  var what = [];
+  if (given(layerId)) what.push('layer_id ' + layerId);
+  if (given(layerIndex)) what.push('layer_index ' + layerIndex);
+  return 'Layer not found (' + (what.length ? what.join(', ') : 'no identifier given') + '). ' +
+    'Note: layer_id is the PERSISTENT id returned by create_layer/get_detailed_comp_summary, ' +
+    'NOT the 1-based stack position — for positions use layer_index instead, ' +
+    'or re-read real ids via get_detailed_comp_summary.';
+}
+
 function _resolveLayer (comp, layerIndex, layerId) {
   var layer = null;
   // Prefer persistent id.
@@ -1620,7 +1642,7 @@ function extensionsLlmChat_deleteLayer (layerIndex, layerId) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     var lockMsg = _lockedRefusal(layer);
     if (lockMsg) { result.message = lockMsg; return resultToJson(result); }
     var n = layer.name;
@@ -1646,7 +1668,7 @@ function extensionsLlmChat_duplicateLayer (layerIndex, layerId) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     _beginToolUndo('Agent: Duplicate layer');
     var dup = layer.duplicate();
     _endToolUndo();
@@ -1672,7 +1694,7 @@ function extensionsLlmChat_reorderLayer (layerIndex, layerId, newIndex) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     if (typeof newIndex !== 'number' || newIndex < 1 || newIndex > ctx.comp.numLayers) {
       result.message = 'Invalid new index: ' + newIndex + '. Comp has ' + ctx.comp.numLayers + ' layers (valid range 1..' + ctx.comp.numLayers + ').';
       return resultToJson(result);
@@ -1762,7 +1784,7 @@ function extensionsLlmChat_setLayerTiming (layerIndex, layerId, inPoint, outPoin
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     // Guard: when BOTH in_point and out_point are provided in one call, reject
     // an inverted/zero range (in >= out). AE otherwise silently accepts it and
     // leaves the layer with a negative duration — a degenerate, hard-to-notice
@@ -1795,7 +1817,7 @@ function extensionsLlmChat_renameLayer (layerIndex, layerId, newName) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     // Guard: a missing/empty new_name must NOT silently rename the layer to the
     // literal "null"/"undefined". Return a clean error like the other tools.
     if (newName === null || newName === undefined) {
@@ -1829,7 +1851,7 @@ function extensionsLlmChat_setBlendMode (layerIndex, layerId, blendMode) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
 
     var modeMap = {
       'normal': BlendingMode.NORMAL, 'add': BlendingMode.ADD, 'multiply': BlendingMode.MULTIPLY,
@@ -1943,13 +1965,24 @@ function _applyKeyframesToProp (prop, keyframes) {
   return out;
 }
 
+/**
+ * Warning appended to keyframe-add results when the property ALREADY had
+ * keyframes: new keys are MERGED into the existing animation, not replacing
+ * it. Live round-5 evidence (GLM-4.7): adding "70→100%" Scale keys on top of
+ * an existing intro animation produced mangled values like [70, 100, 0, 100].
+ */
+function _mergedKeysNote (prevKeys, prop) {
+  if (!(prevKeys > 0)) return '';
+  return ' WARNING: this property ALREADY had ' + prevKeys + ' keyframe(s) — your new keys were MERGED into the existing animation (now ' + prop.numKeys + ' total), they did NOT replace it. If you meant to REPLACE the animation, first delete the old keyframes (delete_keyframes / remove them), or set new values at the EXISTING key times.';
+}
+
 function extensionsLlmChat_addKeyframes (layerIndex, layerId, propertyPath, keyframes) {
   var result = { ok: false, message: '', addedCount: 0, addedTimes: [] };
   try {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     var lockMsg = _lockedRefusal(layer);
     if (lockMsg) { result.message = lockMsg; return resultToJson(result); }
     var prop = _resolveProperty(layer, propertyPath);
@@ -1962,6 +1995,7 @@ function extensionsLlmChat_addKeyframes (layerIndex, layerId, propertyPath, keyf
     }
 
     _beginToolUndo('Agent: Add keyframes');
+    var kfPrevKeys = prop.numKeys;
     var applied = _applyKeyframesToProp(prop, keyframes);
     _endToolUndo();
 
@@ -1969,6 +2003,8 @@ function extensionsLlmChat_addKeyframes (layerIndex, layerId, propertyPath, keyf
     result.addedTimes = applied.times;
     result.ok = true;
     var kfMsg = 'Added ' + result.addedCount + ' keyframe(s) to "' + propertyPath + '" on "' + layer.name + '" at t=[' + applied.times.join(', ') + ']s.';
+    var kfMergeNote = _mergedKeysNote(kfPrevKeys, prop);
+    if (kfMergeNote) { result.mergedIntoExisting = true; kfMsg += kfMergeNote; }
     var kfPsNote = _parentSpaceNote(layer, propertyPath);
     if (kfPsNote) { result.parentSpace = true; kfMsg += kfPsNote; }
     var kfHiddenMsg = _hiddenLayerWarning(layer);
@@ -2030,7 +2066,7 @@ function extensionsLlmChat_setKeyframesBatch (targets) {
 
         var layer = _resolveLayer(comp, layerIndex, layerId);
         if (!layer) {
-          itemResult.message = 'Layer not found by layer_id/layer_index.';
+          itemResult.message = _layerNotFoundMsg(layerId, layerIndex);
           result.failedCount++;
           result.results.push(itemResult);
           continue;
@@ -2052,11 +2088,14 @@ function extensionsLlmChat_setKeyframesBatch (targets) {
           continue;
         }
 
+        var kbPrevKeys = prop.numKeys;
         var applied = _applyKeyframesToProp(prop, kfs);
         itemResult.ok = true;
         itemResult.addedCount = applied.added;
         itemResult.addedTimes = applied.times;
         itemResult.message = 'Added ' + applied.added + ' keyframe(s) to "' + propertyPath + '" on "' + layer.name + '".';
+        var kbMergeNote = _mergedKeysNote(kbPrevKeys, prop);
+        if (kbMergeNote) { itemResult.mergedIntoExisting = true; itemResult.message += kbMergeNote; }
         var kbPsNote = _parentSpaceNote(layer, propertyPath);
         if (kbPsNote) { itemResult.parentSpace = true; itemResult.message += kbPsNote; }
         var kbHiddenMsg = _hiddenLayerWarning(layer);
@@ -2092,7 +2131,7 @@ function extensionsLlmChat_getKeyframes (layerIndex, layerId, propertyPath) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     var prop = _resolveProperty(layer, propertyPath);
     if (!prop || !(prop instanceof Property)) {
       result.message = 'Property not found or is a group.'; return resultToJson(result);
@@ -2136,7 +2175,7 @@ function extensionsLlmChat_deleteKeyframes (layerIndex, layerId, propertyPath, t
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     var prop = _resolveProperty(layer, propertyPath);
     if (!prop || !(prop instanceof Property)) {
       result.message = 'Property not found or is a group.'; return resultToJson(result);
@@ -2197,7 +2236,7 @@ function extensionsLlmChat_setKeyframeEasing (layerIndex, layerId, propertyPath,
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     var prop = _resolveProperty(layer, propertyPath);
     if (!prop || !(prop instanceof Property)) {
       result.message = 'Property not found.'; return resultToJson(result);
@@ -2381,7 +2420,7 @@ function extensionsLlmChat_reverseKeyframes (layerIndex, layerId, propertyPath) 
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     var prop = _resolveProperty(layer, propertyPath);
     if (!prop || !(prop instanceof Property)) { result.message = 'Property not found or is a group.'; return resultToJson(result); }
     if (prop.numKeys < 2) { result.message = 'Need at least 2 keyframes to reverse "' + propertyPath + '".'; return resultToJson(result); }
@@ -2444,7 +2483,7 @@ function extensionsLlmChat_shiftKeyframes (layerIndex, layerId, propertyPath, ti
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     var prop = _resolveProperty(layer, propertyPath);
     if (!prop || !(prop instanceof Property)) { result.message = 'Property not found or is a group.'; return resultToJson(result); }
     if (prop.numKeys < 1) { result.message = 'No keyframes on "' + propertyPath + '".'; return resultToJson(result); }
@@ -2659,7 +2698,7 @@ function extensionsLlmChat_moveAnchorPoint (layerIndex, layerId, position) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
 
     var rect;
     try { rect = layer.sourceRectAtTime(ctx.comp.time, false); }
@@ -2738,7 +2777,7 @@ function extensionsLlmChat_getPropertyValue (layerIndex, layerId, propertyPath, 
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     var prop = _resolveProperty(layer, propertyPath);
     if (!prop || !(prop instanceof Property)) {
       result.message = 'Property not found or is a group.'; return resultToJson(result);
@@ -2803,7 +2842,7 @@ function extensionsLlmChat_getExpression (layerIndex, layerId, propertyPath) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     var prop = _resolveProperty(layer, propertyPath);
     if (!prop || !(prop instanceof Property)) {
       result.message = 'Property not found or is a group.'; return resultToJson(result);
@@ -2851,7 +2890,7 @@ function extensionsLlmChat_setPropertyValue (layerIndex, layerId, propertyPath, 
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     var lockMsg = _lockedRefusal(layer);
     if (lockMsg) { result.message = lockMsg; return resultToJson(result); }
     // Pre-flight type check for known paths so the agent gets a clear
@@ -2915,7 +2954,7 @@ function extensionsLlmChat_getLayerProperties (layerIndex, layerId) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     result.layerName = layer.name;
     result.layerType = _layerTypeString(layer);
 
@@ -2969,7 +3008,7 @@ function extensionsLlmChat_addEffect (layerIndex, layerId, effectMatchName, effe
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     var lockMsg = _lockedRefusal(layer);
     if (lockMsg) { result.message = lockMsg; return resultToJson(result); }
     // Guard: a missing/empty effect_match_name otherwise reaches
@@ -3029,7 +3068,7 @@ function extensionsLlmChat_removeEffect (layerIndex, layerId, effectIndex) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     var lockMsg = _lockedRefusal(layer);
     if (lockMsg) { result.message = lockMsg; return resultToJson(result); }
     var effects = layer.property('ADBE Effect Parade');
@@ -3061,7 +3100,7 @@ function extensionsLlmChat_getEffectProperties (layerIndex, layerId, effectIndex
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     var effects = layer.property('ADBE Effect Parade');
     if (!effects) { result.message = 'Layer has no effects.'; return resultToJson(result); }
     var fx = effects.property(effectIndex);
@@ -3101,7 +3140,7 @@ function extensionsLlmChat_setEffectPropertyValue (layerIndex, layerId, effectIn
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     var lockMsg = _lockedRefusal(layer);
     if (lockMsg) { result.message = lockMsg; return resultToJson(result); }
     var effects = layer.property('ADBE Effect Parade');
@@ -3288,7 +3327,7 @@ function extensionsLlmChat_setTextDocument (layerIndex, layerId, textProps) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     var lockMsg = _lockedRefusal(layer);
     if (lockMsg) { result.message = lockMsg; return resultToJson(result); }
     if (!textProps || typeof textProps !== 'object') {
@@ -3689,7 +3728,7 @@ function extensionsLlmChat_setLayer3D (layerIndex, layerId, enabled) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     if (layer instanceof CameraLayer || layer instanceof LightLayer) {
       result.message = 'Camera and light layers are always 3D.'; return resultToJson(result);
     }
@@ -3715,7 +3754,7 @@ function extensionsLlmChat_setCameraProperties (layerIndex, layerId, props) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     if (!(layer instanceof CameraLayer)) { result.message = 'Layer is not a camera.'; return resultToJson(result); }
     if (!props) props = {};
 
@@ -3762,7 +3801,7 @@ function extensionsLlmChat_setLightProperties (layerIndex, layerId, props) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     if (!(layer instanceof LightLayer)) { result.message = 'Layer is not a light.'; return resultToJson(result); }
     if (!props) props = {};
 
@@ -3809,7 +3848,7 @@ function extensionsLlmChat_addMask (layerIndex, layerId, opts) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     if (!opts) opts = {};
 
     _beginToolUndo('Agent: Add mask');
@@ -3962,7 +4001,7 @@ function extensionsLlmChat_setMaskProperties (layerIndex, layerId, maskIndex, pr
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     if (!props) props = {};
 
     var maskGroup = layer.property('ADBE Mask Parade');
@@ -4034,7 +4073,7 @@ function extensionsLlmChat_getMaskInfo (layerIndex, layerId) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
 
     var maskGroup = layer.property('ADBE Mask Parade');
     if (!maskGroup) { result.ok = true; result.message = 'Layer has no mask support.'; return resultToJson(result); }
@@ -4076,7 +4115,7 @@ function extensionsLlmChat_createShapesFromText (layerIndex, layerId) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
 
     // Verify it's a text layer
     if (!(layer instanceof TextLayer)) {
@@ -4168,7 +4207,7 @@ function extensionsLlmChat_addMarker (layerIndex, layerId, opts) {
       result.message = 'Added comp marker at t=' + time + 's: "' + comment + '".';
     } else {
       var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-      if (!layer) { _endToolUndo(); result.message = 'Layer not found.'; return resultToJson(result); }
+      if (!layer) { _endToolUndo(); result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
       layer.marker.setValueAtTime(time, markerVal);
       _endToolUndo();
       result.ok = true;
@@ -4198,7 +4237,7 @@ function extensionsLlmChat_getMarkers (layerIndex, layerId, target) {
       targetName = 'comp "' + ctx.comp.name + '"';
     } else {
       var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-      if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+      if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
       markerProp = layer.marker;
       targetName = 'layer "' + layer.name + '"';
     }
@@ -4235,7 +4274,7 @@ function extensionsLlmChat_deleteMarker (layerIndex, layerId, markerIndex, targe
       markerProp = ctx.comp.markerProperty;
     } else {
       var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-      if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+      if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
       markerProp = layer.marker;
     }
 
@@ -4612,7 +4651,7 @@ function extensionsLlmChat_setTrackMatte (layerIndex, layerId, matteType, matteL
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
 
     var typeMap = {
       'alpha': TrackMatteType.ALPHA,
@@ -4695,7 +4734,7 @@ function extensionsLlmChat_setLayerSwitches (layerIndex, layerId, switches) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     if (!switches || typeof switches !== 'object') {
       result.message = 'No switches provided. Supported: enabled, motion_blur, adjustment, shy, solo, locked, guide, collapse_transformation, effects_active, audio_enabled.';
       return resultToJson(result);
@@ -4761,7 +4800,7 @@ function extensionsLlmChat_setTimeRemap (layerIndex, layerId, enabled) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
 
     var can = false;
     try { can = layer.canSetTimeRemapEnabled; } catch (eCan) { can = false; }
@@ -4802,7 +4841,7 @@ function extensionsLlmChat_splitLayer (layerIndex, layerId, time) {
     var ctx = extensionsLlmChat_resolveActiveComp();
     if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
     var layer = _resolveLayer(ctx.comp, layerIndex, layerId);
-    if (!layer) { result.message = 'Layer not found.'; return resultToJson(result); }
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
     if (typeof time !== 'number') { result.message = 'split_layer: missing required `time` (seconds).'; return resultToJson(result); }
     if (time <= layer.inPoint || time >= layer.outPoint) {
       result.message = 'Split time ' + time + 's is outside the layer\'s visible span (' + layer.inPoint + 's – ' + layer.outPoint + 's). Pick a time strictly inside.';

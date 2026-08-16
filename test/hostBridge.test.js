@@ -139,3 +139,35 @@ test('hostBridge: new tools reject when required args missing (pre-validation)',
   assert.strictEqual(b.ok, false)
   assert.match(b.message, /position/)
 })
+
+// ── Stringified-array arg salvage (round-5 live evidence: GLM-4.7 sent
+// `targets` as a JSON string and set_keyframes_batch hard-failed) ────────────
+
+test('hostBridge: set_keyframes_batch salvages stringified `targets`', async () => {
+  const targets = [{ layer_index: 1, property_path: 'Transform>Scale', keyframes: [{ time: 0, value: [70, 70] }] }]
+  const call = await captureCall('set_keyframes_batch', { targets: JSON.stringify(targets) })
+  assert.match(call, /extensionsLlmChat_setKeyframesBatch\(\[/)
+  assert.match(call, /"Transform>Scale"/)
+})
+
+test('hostBridge: stringified `keyframes` nested inside a real targets array is salvaged', async () => {
+  const targets = [{ layer_index: 2, property_path: 'Transform>Opacity', keyframes: JSON.stringify([{ time: 0, value: 0 }, { time: 1, value: 100 }]) }]
+  const call = await captureCall('set_keyframes_batch', { targets })
+  assert.match(call, /extensionsLlmChat_setKeyframesBatch\(\[/)
+  assert.match(call, /"Transform>Opacity"/)
+})
+
+test('hostBridge: malformed targets string still rejects with the validation message', async () => {
+  const win = loadHostBridge('{"ok":true}')
+  const res = await win.HOST_BRIDGE.executeToolCall('set_keyframes_batch', { targets: '[{broken json' })
+  assert.strictEqual(res.ok, false)
+  assert.match(res.message, /targets/)
+})
+
+test('hostBridge: ordinary string args are never JSON-parsed', async () => {
+  // `expression` may legally look like JSON (e.g. "[0, 100]") — must stay a string.
+  const call = await captureCall('apply_expression', {
+    layer_index: 1, property_path: 'Transform>Scale', expression: '[0, 100]'
+  })
+  assert.match(call, /"\[0, 100\]"|'\[0, 100\]'|\[0, 100\]/)
+})

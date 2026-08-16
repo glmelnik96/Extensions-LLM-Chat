@@ -88,6 +88,12 @@
     // itself for all 60 steps.
     var salvagedCalls = 0
     var MAX_SALVAGED_CALLS = 10
+    // Phantom-"done" guard (lib/pure/doneGuard.js): one corrective nudge per
+    // run when the final text claims work that never happened (zero tool
+    // calls) or ends on unrecovered tool failures. Observed live (round-5
+    // hunt, GLM-4.7): "Готово! Добавил слайдер…" with 0 tool calls, and a
+    // success report right after set_keyframes_batch failed 20/20 targets.
+    var doneNudgeUsed = false
 
     function step (stepIndex) {
       // P1-3: the full message array is re-sent every turn, so old verbose
@@ -265,6 +271,20 @@
             content = toolCallLog.length > 0
               ? 'Done — ' + summarizeToolCallLog(toolCallLog) + '.'
               : '[Model returned an empty response.]'
+          }
+          // Phantom-"done" guard: don't accept a success-claiming answer when
+          // the run did no work (or ended on unrecovered failures). Inject ONE
+          // corrective [SYSTEM] turn so the model actually does the work or
+          // reports honestly.
+          if (!doneNudgeUsed && assistantMsg.content && window.PURE_DONE_GUARD) {
+            var phantom = window.PURE_DONE_GUARD.checkPhantomDone(
+              content, toolCallLog, READ_ONLY_TOOLS)
+            if (phantom) {
+              doneNudgeUsed = true
+              messages.push({ role: 'assistant', content: content })
+              messages.push({ role: 'user', content: window.PURE_DONE_GUARD.buildNudge(phantom) })
+              return step(stepIndex + 1)
+            }
           }
           return {
             content: content,
