@@ -43,7 +43,7 @@ Extensions LLM Chat/
 ├── knowledge-base/            ← AE expression reference corpus (human-readable; KB_SNIPPETS in main.js does keyword injection)
 ├── scripts/
 │   └── cdp-eval.js            ← CDP helper: eval JS inside the live panel (port 8092) for real-AE testing
-├── test/                      ← node:test unit tests (213 tests) — `node --test test/*.test.js`
+├── test/                      ← node:test unit tests (219 tests) — `node --test test/*.test.js`
 └── docs/                      ← detailed per-topic docs
 ```
 
@@ -100,6 +100,13 @@ These are documented thoroughly in `~/.claude/projects/.../memory/feedback_llm_f
 | `set_property_value` on expression-driven property = silent visual no-op reported as success | host WARNING + `expressionOverride: true` + prompt rule | 2026-08-16 |
 | False "⚠ No active composition" on send | live probe via `refreshActiveCompNote()` instead of stale DOM text | 2026-08-16 |
 | batch_call tells "re-send failed items" while guard blocks them | `error_code` passthrough + blocked-aware summary in `_runBatchCall` | 2026-08-16 |
+| False "black frame" vision verdict → destructive phantom corrections | `at_time:"auto"` capture + `classifyIssues` weak-signal skip + verify-first correction prompt | 2026-08-16 broad hunt |
+| Agent guesses targets from chat history / picks its own on empty selection | CORE_SELECTED rules: `get_host_context` first in CURRENT run; empty selection → ask | 2026-08-16 broad hunt |
+| Camera rig in all-2D comp reported as working | prompt rule (KNOWN_LIMITATIONS + 3D module) | 2026-08-16 broad hunt |
+| Animation placed where layer invisible (scale 0 / outside in-out) | visibility-window prompt rule | 2026-08-16 broad hunt |
+| "Directional reveal" faked via uniform Mask Expansion | Linear Wipe rule + fixed example + MASKS module | 2026-08-16 broad hunt |
+| "Link to null" via clone position expression (layout destroyed) | parenting rule: `set_layer_parent`, offset expressions only on explicit ask | 2026-08-16 broad hunt |
+| English QA preset → English answer to Russian user | RU quick-action prompts + conversation-language rule | 2026-08-16 broad hunt |
 | CoT leakage into final response | prompt rule in CORE_RULES | iter 4 (Fix L) |
 | `create_layer(text)` with font fails | post-attach `sourceText.setValue(doc)` | iter 2 (Fix A) |
 | Wrong `property_index` on effects | `property_name` preferred | MVP |
@@ -227,6 +234,19 @@ Two `main.js`-only fixes for "the panel looks frozen", both live-verified via CD
 *Activity log.* A long agent run showed only one label at a time, so a slow model turn was indistinguishable from a hang. Every `_setThinkingLabel` call now also pushes into an `activityLog` (cap 200) rendered as a collapsible `activity (N)` block inside the thinking indicator — reusing the existing `.reasoning-box` styling, deliberately **without** enabling chain-of-thought: `enable_thinking:false` is what makes a run 94s instead of 18.8min, and the user chose anti-hang only. Consecutive duplicates are dropped because `updateThinkingReasoning` re-sets the label on every streamed chunk (one identical line per token otherwise). Because the activity box shares `.reasoning-box`, the CoT box lookup was narrowed to a dedicated **`.cot-box`** class — an unqualified `querySelector('.reasoning-box')` would grab whichever element came first. Separately, `lastActivityTime` drives a `.thinking-stall` hint that appears after `STALL_HINT_MS` (12s) of no new activity: "· no reply from model for 19s" in `--warn`. Measured live: first hint at 12009ms, log during a real tool run captured `run started → waiting for model (step 1/60) → calling get_detailed_comp_summary → ok → step 2/60`.
 
 *`panelConfirm()` replaces native `confirm()`.* User report: "почему-то зависает кнопка Clear". Root cause measured via CDP: in CEP, `window.confirm()` opens a **detached OS window** — it does not render inside the panel, so it can end up behind AE, and it blocks the panel's JS thread for exactly as long as it goes unanswered (`jsBlockedMs: 1508` for a 1500ms hold). `panelConfirm(message, confirmLabel)` returns a Promise and draws an in-panel `.confirm-backdrop` + `.studio-panel` overlay (Esc / backdrop click = cancel, Enter = confirm, focus starts on Cancel, message goes in via `textContent` since chat titles are user-supplied). Converted: `handleClearSession`, `handleClearAllSessions`, `handleDeleteSession`, `handleQuickActionReset`. **Still native and still blocking** (same bug class, not yet converted): every `prompt()` flow (chat rename, quick-action add/edit, transcript path) and every `alert()`.
+
+### Broad bug-hunt fixes (2026-08-16, round 2) — vision false positives, target discipline, AE-semantics rules
+A second hunt (5 quick-action runs + 3 free scenarios, real LLM calls on the scratch comp) produced 8 findings; all 8 fixed the same day, live-verified via CDP where the fix is behavioral.
+
+*Vision check false positives made destructive "corrections" (worst finding).* The frame was captured at the playhead (t=0) where every layer predates its in-point → M3 saw "completely black frame" → the correction loop **really mutated the comp** (reordered layers in one run, moved the camera in another). Three-part fix: (1) `capture_comp_frame` gained `at_time:"auto"` — host `_pickContentVisibleTime` scores candidate times (comp.time + each layer's visibility midpoint) by how many enabled content layers are actually visible (in/out window, opacity > 1%, |x/y scale| > 1%), never moves the playhead; the vision flow always captures with `auto` (live: playhead 0 → picked 5.35s). (2) `PURE_VISION_CHECK.classifyIssues` splits verdict issues into actionable vs weak (empty/black/blank-frame wording); when ALL issues are weak, `runVisionCheck` skips the correction round entirely and posts a weak-signal note. (3) `buildCorrectionPrompt` now demands verify-first (`get_detailed_comp_summary` etc.), allows "change NOTHING" for false positives, and forbids reordering layers / moving the camera unless a confirmed issue requires it.
+
+*Target discipline.* Typewriter QA ran on a layer remembered from chat history while another was selected (skipped `get_host_context`); Loop QA with empty selection silently picked its own targets. CORE_SELECTED now requires `get_host_context` FIRST in the CURRENT run, forbids reusing remembered targets, and mandates ASKING when selection is empty and no layer is named. Live rerun: Typewriter hit the actually-selected «Текст ДВА»; empty-selection Loop asked instead of mutating.
+
+*AE-semantics prompt rules (KNOWN_LIMITATIONS + modules + fixed example).* Camera rigs are inert in all-2D comps (Cam Shake built a correct rig that changed nothing — now: check `threeDLayer`, offer `set_layer_3d` or a null rig, never report an inert camera as working). Animation must fall inside the layer's visibility window (Slide In keyed position 0–0.3s while scale stayed 0 until 0.4s). Mask Expansion grows uniformly — directional reveals go through `ADBE Linear Wipe` (the old CORE example and MASKS module actively taught the wrong technique; both rewritten). "Attach/link layers" means `set_layer_parent`, not cloning position via expression (which stacked all 4 cards on one point). Live rerun of the link scenario: agent removed the clone expressions and parented all 4 cards to Master Control.
+
+*RU-first quick actions.* All 16 `DEFAULT_ACTIONS` prompts/titles translated to Russian (labels stay English — industry terms); CORE_LANGUAGE now says to judge language by the conversation, not by one (possibly English) preset message. Live: Russian preset → Russian answer.
+
+Tests 213 → 219 (classifyIssues, verify-first correction prompt, capture `at_time` mapping).
 
 ### Bug-hunt fixes (2026-08-16) — shift_keyframes, expression-override warning, no-comp probe (66 → 67)
 A dedicated bug-hunt session with real LLM runs (6 agent scenarios + direct stresses on a scratch comp) confirmed five bugs; all fixed and live-verified end-to-end via CDP.
@@ -373,4 +393,4 @@ The vault folder note is the single source of truth for project status. The mast
 
 ---
 
-*Last updated 2026-08-16 — after the bug-hunt fixes (shift_keyframes, expression-override warning). If you read this and it feels out of date, refresh it before touching code.*
+*Last updated 2026-08-16 — after the broad bug-hunt round 2 fixes (vision false positives, target discipline, AE-semantics rules, RU quick actions). If you read this and it feels out of date, refresh it before touching code.*

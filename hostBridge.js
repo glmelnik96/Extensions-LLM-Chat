@@ -1112,7 +1112,10 @@
       // old captures (keeps newest 50).
       case 'capture_comp_frame':
         var captureName = 'frame-' + Date.now() + '.png'
-        call = 'extensionsLlmChat_saveCompFramePng(' + toESLiteral(captureName) + ', true)'
+        // at_time:'auto' → host picks a content-visible capture time (playhead
+        // at t=0 often predates every in-point → black frame, false vision
+        // verdicts; bug-hunt 2026-08-16 #2). Playhead never moves.
+        call = 'extensionsLlmChat_saveCompFramePng(' + toESLiteral(captureName) + ', true, ' + (args.at_time === 'auto' ? 'true' : 'false') + ')'
         break
 
       // Expression library — panel-local, no AE round trip.

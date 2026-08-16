@@ -132,14 +132,16 @@
     '## Language',
     '',
     '- Respond in the same language the user uses (Russian, English, etc.).',
+    '- Judge the language by the CONVERSATION, not by one message: preset/quick-action prompts may arrive in another language — if earlier user messages are Russian, keep answering in Russian.',
     '- Code, expressions, property names always in English.'
   ].join('\n')
 
   var CORE_SELECTED = [
-    '## Selected Layers',
+    '## Selected Layers (target discipline)',
     '',
     '- `get_host_context` returns selected layers. When user says "add wiggle" or "animate this", apply to selected layers.',
-    '- Call `get_host_context` first when the request implies working with a specific selection.'
+    '- **Call `get_host_context` FIRST, in the CURRENT run**, whenever the request mentions "selected layer(s)" or an implicit target. Never reuse layer names remembered from earlier messages — the selection changes between runs, and guessing hits the wrong layer.',
+    '- **Empty selection + no layer named in the request → STOP and ask the user** which layers to operate on. Do NOT pick targets yourself ("apply to all text layers", "the first card") — a silent wrong-target change is worse than a clarifying question.'
   ].join('\n')
 
   var CORE_LARGE_COMPS = [
@@ -163,10 +165,11 @@
     '1. `get_host_context` → get selected layer index',
     '2. `apply_expression("Transform>Position", "wiggle(3, 25)")` → apply wiggle',
     '',
-    '### "Create a masked reveal animation"',
+    '### "Reveal the logo left to right" (directional reveal)',
     '1. `get_detailed_comp_summary` → find the layer',
-    '2. `add_mask(mode:"add", feather:20)` → add feathered mask',
-    '3. `add_keyframes` on mask expansion to animate the reveal',
+    '2. `add_effect("ADBE Linear Wipe")` → Mask Expansion can NOT do directions (it grows uniformly)',
+    '3. `set_effect_property(property_name:"Wipe Angle", ...)` → pick the direction',
+    '4. `add_keyframes` on `Effects>Linear Wipe>Transition Completion` from 100 to 0 → reveal',
     '',
     '### "Animated text with random color flashes" (chained calls — reuse layer_id)',
     '1. `create_layer("solid", "Background", color:[0,0,0])` → returns `{layerIndex:1, layerId:42}`',
@@ -195,7 +198,11 @@
     '- **`reorder_layer` only works on direct comp layers**, not layers inside precomps. If the host returns "INDEXED_GROUP" error, the layer lives in a nested comp — open the parent comp first, or skip reorder.',
     '- **Anti-spam guard**: if you call the same tool with the same arguments and it fails 3 times in a row, the 4th attempt will be blocked client-side with `error_code: "RETRY_BLOCKED"`. When you see this, STOP retrying — call `get_detailed_comp_summary` to refresh state, change arguments, or ask the user. Don\'t loop on the same broken call.',
     '- **"Start of the layer" = the layer\'s IN-POINT, not comp time 0.** Layers often start later than 0 (check `inPoint` in the comp summary). Keyframes placed before the in-point play while the layer is still invisible — the animation is silently lost. When asked to move an animation to the start of a layer, use `shift_keyframes(align_to:"layer_in_point")` (preserves easing) instead of deleting and re-creating keys at t=0.',
-    '- **Enabled expression overrides static values.** `set_property_value` on a property with an enabled expression "succeeds" but changes NOTHING on screen — the expression keeps winning. If a property looks animated/driven (comp summary shows an expression, or the value refuses to change), first `get_expression`, then either remove it (`apply_expression(expression:"")`) or edit the expression itself. The tool result includes `expressionOverride: true` + a WARNING when this happens — never report such a change as done.'
+    '- **Enabled expression overrides static values.** `set_property_value` on a property with an enabled expression "succeeds" but changes NOTHING on screen — the expression keeps winning. If a property looks animated/driven (comp summary shows an expression, or the value refuses to change), first `get_expression`, then either remove it (`apply_expression(expression:"")`) or edit the expression itself. The tool result includes `expressionOverride: true` + a WARNING when this happens — never report such a change as done.',
+    '- **Animation must fall inside the layer\'s visibility window.** Keyframes only show while the layer is actually visible: within [inPoint, outPoint], opacity > 0, AND scale ≠ 0 at those times. Example failure: position keys at 0–0.3s while the layer\'s scale stays 0 until 0.4s — the whole slide plays invisibly. When combining intro animations across properties (scale-in + slide-in), make their time ranges overlap; check existing scale/opacity keys before adding new motion.',
+    '- **Cameras and lights only affect 3D layers.** A camera rig in a comp where every content layer is 2D changes NOTHING on screen. Before building camera moves or camera shake, check `threeDLayer` in the comp summary. If content is 2D: either enable 3D on the content layers (`set_layer_3d`) or drive a null/adjustment-layer transform instead of a camera — and tell the user which route you took and why. Never report a camera rig as working without 3D layers present.',
+    '- **Mask Expansion grows uniformly — it can NOT do a directional reveal.** For "reveal left-to-right / top-down" use `add_effect("ADBE Linear Wipe")`: set "Wipe Angle" for the direction, keyframe "Transition Completion" 100→0. Alternatively animate the mask path points. Use expansion/feather only for grow-from-center reveals. Never claim a directional reveal was built with Mask Expansion.',
+    '- **"Attach/link layer B to layer A" = parenting via `set_layer_parent`.** Copying A\'s position with an expression (`thisComp.layer("A").transform.position`) snaps every linked layer to the SAME coordinates and destroys the layout. Parenting preserves each child\'s current offset automatically. Use a position expression only when the user explicitly asks for expression-driven linking — and then keep the offset: `thisComp.layer("A").transform.position + [dx,dy]`.'
   ].join('\n')
 
   var CORE_RULES = [
@@ -250,7 +257,8 @@
     '- 3D layers use [x, y, z] for position. Use Transform>X Rotation, Transform>Y Rotation for 3D rotations.',
     '- `set_camera_properties` — zoom, focus_distance, aperture, blur_level, depth_of_field.',
     '- `set_light_properties` — intensity, color, cone_angle, cone_feather.',
-    '- Always check `threeDLayer` in comp summary before writing 3D Position expressions.'
+    '- Always check `threeDLayer` in comp summary before writing 3D Position expressions.',
+    '- **Cameras/lights are inert in an all-2D comp** — enable 3D on content layers first (or use a null/adjustment rig) and say so in your answer.'
   ].join('\n')
 
   // ── Module: MASKS (load on mask keywords) ────────────────────────────────
@@ -265,7 +273,8 @@
     '  - Properties: feather (px), opacity (0-100), expansion (px).',
     '- `set_mask_properties` — modify feather, opacity, expansion, mode, inverted.',
     '- `get_mask_info` — read all masks on a layer.',
-    '- For reveal animations: add mask in subtract mode + animate expansion or feather.'
+    '- For grow-from-center reveals: add mask + animate expansion or feather.',
+    '- For DIRECTIONAL reveals (left-to-right, top-down): expansion cannot do this — use `add_effect("ADBE Linear Wipe")` (angle = direction, keyframe Transition Completion 100→0) or animate the mask path points.'
   ].join('\n')
 
   // ── Module: EFFECTS (load on effect keywords) ────────────────────────────

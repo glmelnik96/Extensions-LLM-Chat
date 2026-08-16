@@ -880,10 +880,16 @@
       type: 'function',
       function: {
         name: 'capture_comp_frame',
-        description: 'Save the current composition frame as PNG. Returns the file path that can be shown as a preview image.',
+        description: 'Save a composition frame as PNG. Returns the file path that can be shown as a preview image. By default captures at the current playhead time; at_time:"auto" picks a time where content layers are actually visible (useful when the playhead sits before every layer\'s in-point and the frame would be black). Never moves the playhead.',
         parameters: {
           type: 'object',
-          properties: {},
+          properties: {
+            at_time: {
+              type: 'string',
+              enum: ['current', 'auto'],
+              description: '"current" (default) = capture at the playhead; "auto" = capture at an automatically chosen content-visible time.'
+            }
+          },
           required: []
         }
       }

@@ -1469,7 +1469,10 @@
     setStatus('Visual check...')
     var failOpen = { ok: true, issues: [], correctionRan: false }
 
-    return window.HOST_BRIDGE.executeToolCall('capture_comp_frame', {})
+    // at_time:'auto' — capture at a content-visible time, not the playhead:
+    // playhead at t=0 often predates every in-point → black frame → false
+    // "empty frame" issues → destructive phantom corrections (bug-hunt #2).
+    return window.HOST_BRIDGE.executeToolCall('capture_comp_frame', { at_time: 'auto' })
       .then(function (captureResult) {
         if (!captureResult || !captureResult.ok || !captureResult.path) {
           console.warn('[vision] capture failed:', captureResult)
@@ -1512,7 +1515,22 @@
               return { ok: true, issues: [], correctionRan: false }
             }
 
-            // Verdict has issues
+            // Verdict has issues. Split off "empty/black frame" reports —
+            // with a single-frame capture those are usually the capture time
+            // predating the layers, not a real defect. Correcting on them
+            // made destructive phantom fixes (bug-hunt 2026-08-16 #2).
+            var cls = (typeof VC.classifyIssues === 'function')
+              ? VC.classifyIssues(verdict.issues)
+              : { actionable: verdict.issues, weak: [] }
+
+            if (cls.actionable.length === 0) {
+              session.messages.push({ role: 'system', text: 'Visual check flagged only an empty/black frame (weak signal): with a single-frame capture this usually means the frame predates the layers, not a real defect. Auto-correction skipped. If the comp really looks broken, describe the problem in chat.' })
+              renderTranscript()
+              persistState()
+              setStatus('Visual check: empty-frame report ignored (weak signal)')
+              return { ok: true, issues: verdict.issues, correctionRan: false }
+            }
+
             var issueNote = 'Visual check found issues:\n' + verdict.issues.map(function (s) { return '- ' + s }).join('\n')
             session.messages.push({ role: 'system', text: issueNote })
             renderTranscript()
@@ -1524,9 +1542,9 @@
               return { ok: false, issues: verdict.issues, correctionRan: false }
             }
 
-            // Run ONE correction round.
+            // Run ONE correction round on the actionable issues only.
             setStatus('Fixing visual issues...')
-            var correctionText = VC.buildCorrectionPrompt(verdict.issues)
+            var correctionText = VC.buildCorrectionPrompt(cls.actionable)
             return runCorrectionLoop(correctionText, session, userRequest)
               .then(function (corrResult) {
                 return { ok: false, issues: verdict.issues, correctionRan: true, correctionResult: corrResult }

@@ -25,6 +25,7 @@ test('visionCheck: module loads with expected exports', () => {
   assert.strictEqual(typeof vc.buildMessages, 'function')
   assert.strictEqual(typeof vc.parseVerdict, 'function')
   assert.strictEqual(typeof vc.buildCorrectionPrompt, 'function')
+  assert.strictEqual(typeof vc.classifyIssues, 'function')
   assert.strictEqual(vc.VISION_MODEL_ID, 'MiniMaxAI/MiniMax-M3')
 })
 
@@ -154,4 +155,57 @@ test('visionCheck: buildCorrectionPrompt contains issues', () => {
 test('visionCheck: buildCorrectionPrompt with single issue', () => {
   const prompt = vc.buildCorrectionPrompt(['element off-screen'])
   assert.ok(prompt.includes('- element off-screen'))
+})
+
+test('visionCheck: buildCorrectionPrompt demands verify-first, forbids restructuring', () => {
+  const prompt = vc.buildCorrectionPrompt(['text is cut off'])
+  assert.ok(prompt.includes('ONE still frame'), 'warns the check can be wrong')
+  assert.ok(prompt.includes('FIRST verify'), 'requires verification before fixing')
+  assert.ok(prompt.includes('false positive'), 'allows changing nothing')
+  assert.ok(prompt.includes('reorder layers'), 'forbids restructuring')
+})
+
+// ── classifyIssues ────────────────────────────────────────────────────────
+
+test('visionCheck: classifyIssues — empty/black frame reports are weak', () => {
+  const weakOnes = [
+    'The frame is completely black',
+    'Empty frame — no content was rendered',
+    'The composition appears blank with nothing visible',
+    'No visible content in the image',
+    'The screen is entirely dark'
+  ]
+  for (const issue of weakOnes) {
+    const c = vc.classifyIssues([issue])
+    assert.strictEqual(c.actionable.length, 0, 'weak: ' + issue)
+    assert.strictEqual(c.weak.length, 1)
+  }
+})
+
+test('visionCheck: classifyIssues — real defects stay actionable', () => {
+  const real = [
+    'Text overflows the background box',
+    'White text on white background is unreadable',
+    'The title layer is positioned off-screen to the right',
+    'Wrong color: the circle is blue but red was requested'
+  ]
+  const c = vc.classifyIssues(real)
+  assert.strictEqual(c.actionable.length, 4)
+  assert.strictEqual(c.weak.length, 0)
+})
+
+test('visionCheck: classifyIssues — mixed list splits correctly', () => {
+  const c = vc.classifyIssues([
+    'The frame is completely black',
+    'Text is cut off at the bottom'
+  ])
+  assert.strictEqual(c.actionable.length, 1)
+  assert.strictEqual(c.actionable[0], 'Text is cut off at the bottom')
+  assert.strictEqual(c.weak.length, 1)
+})
+
+test('visionCheck: classifyIssues — tolerates non-array input', () => {
+  const c = vc.classifyIssues(null)
+  assert.strictEqual(c.actionable.length, 0)
+  assert.strictEqual(c.weak.length, 0)
 })

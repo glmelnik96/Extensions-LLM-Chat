@@ -103,6 +103,13 @@ test('hostBridge: shift_keyframes rejects missing offset and align_to', async ()
   assert.match(res.message, /time_offset.*layer_in_point/)
 })
 
+test('hostBridge: capture_comp_frame maps at_time auto/current to third arg', async () => {
+  const call = await captureCall('capture_comp_frame', {})
+  assert.match(call, /extensionsLlmChat_saveCompFramePng\("frame-\d+\.png", true, false\)/)
+  const call2 = await captureCall('capture_comp_frame', { at_time: 'auto' })
+  assert.match(call2, /extensionsLlmChat_saveCompFramePng\("frame-\d+\.png", true, true\)/)
+})
+
 test('hostBridge: stagger_layers passes indices, offset and mode', async () => {
   const call = await captureCall('stagger_layers', { layer_indices: [3, 1, 2], offset: 5, unit: 'frames', mode: 'keyframes' })
   assert.match(call, /extensionsLlmChat_staggerLayers\(\[3,1,2\],null,5,"frames",null,"keyframes"\)/)

@@ -596,6 +596,76 @@ function extensionsLlmChat_getHostContext () {
 }
 
 /**
+ * Pick a capture time where comp content is actually visible.
+ * The playhead often sits at t=0 where every layer is still before its
+ * in-point (or scaled to 0) — a frame captured there is black, and the
+ * vision check then reports false "empty frame" issues (bug-hunt
+ * 2026-08-16 finding #2). Candidates: the current comp time plus the
+ * visibility midpoint of every enabled content layer; each candidate is
+ * scored by how many layers are visible (within in/out, opacity > 1%,
+ * x/y scale above ~1%). Ties keep comp.time (least surprise). Read-only:
+ * never moves the playhead.
+ *
+ * @param {CompItem} comp
+ * @returns {number} capture time in seconds
+ */
+function _pickContentVisibleTime (comp) {
+  try {
+    var frameDur = comp.frameDuration > 0 ? comp.frameDuration : (1 / 30);
+    var maxT = comp.duration - frameDur;
+    if (maxT < 0) maxT = 0;
+    var layers = [];
+    var i;
+    for (i = 1; i <= comp.numLayers; i++) {
+      try {
+        var l = comp.layer(i);
+        if (!l.enabled) continue;
+        if (l instanceof CameraLayer || l instanceof LightLayer) continue;
+        if (l.nullLayer) continue;
+        layers.push(l);
+      } catch (eL) {}
+    }
+    if (!layers.length) return comp.time;
+
+    function scoreAt (t) {
+      var score = 0;
+      for (var k = 0; k < layers.length; k++) {
+        try {
+          var lay = layers[k];
+          if (t < lay.inPoint || t >= lay.outPoint) continue;
+          var tr = lay.property('ADBE Transform Group');
+          if (tr) {
+            var op = tr.property('ADBE Opacity');
+            if (op && op.valueAtTime(t, false) <= 1) continue;
+            var sc = tr.property('ADBE Scale');
+            if (sc) {
+              var sv = sc.valueAtTime(t, false);
+              if (sv && sv.length >= 2 &&
+                  (Math.abs(sv[0]) <= 1 || Math.abs(sv[1]) <= 1)) continue;
+            }
+          }
+          score++;
+        } catch (eS) {}
+      }
+      return score;
+    }
+
+    var bestT = comp.time;
+    var bestScore = scoreAt(bestT);
+    for (i = 0; i < layers.length; i++) {
+      var mid = (layers[i].inPoint + layers[i].outPoint) / 2;
+      if (mid < 0) mid = 0;
+      if (mid > maxT) mid = maxT;
+      var s = scoreAt(mid);
+      if (s > bestScore) { bestScore = s; bestT = mid; }
+    }
+    return bestT;
+  } catch (ePick) {
+    return comp.time;
+  }
+}
+
+/**
  * Save the active composition's current frame as PNG (requires CompItem.saveFrameToPng).
  *
  * Two modes:
@@ -606,8 +676,11 @@ function extensionsLlmChat_getHostContext () {
  *
  * @param {string}  pathOrName Full path or filename (when `persistent` true)
  * @param {boolean} persistent If true, store under ~/AE-agent-captures/<date>/
+ * @param {boolean} autoTime   If true, capture at a content-visible time
+ *                             (see _pickContentVisibleTime) instead of the
+ *                             playhead. The playhead itself never moves.
  */
-function extensionsLlmChat_saveCompFramePng (pathOrName, persistent) {
+function extensionsLlmChat_saveCompFramePng (pathOrName, persistent, autoTime) {
   var result = {
     ok: false,
     message: '',
@@ -661,8 +734,13 @@ function extensionsLlmChat_saveCompFramePng (pathOrName, persistent) {
       } catch (eMk) {}
     }
 
-    comp.saveFrameToPng(comp.time, outFile);
+    var captureTime = comp.time;
+    if (autoTime === true) {
+      captureTime = _pickContentVisibleTime(comp);
+    }
+    comp.saveFrameToPng(captureTime, outFile);
     result.ok = true;
+    result.captureTime = captureTime;
     try {
       result.path = outFile.fsName ? String(outFile.fsName) : String(pathOrName);
     } catch (ePath) {
@@ -678,7 +756,10 @@ function extensionsLlmChat_saveCompFramePng (pathOrName, persistent) {
       var savedLen = outFile.length;
       if (typeof savedLen === 'number' && savedLen > 0) result.fileSize = savedLen;
     } catch (eLen) {}
-    result.message = 'Saved frame at t=' + comp.time + 's.';
+    result.message = 'Saved frame at t=' + captureTime + 's' +
+      (autoTime === true && Math.abs(captureTime - comp.time) > 0.001
+        ? ' (auto-picked content-visible time; playhead stays at ' + comp.time + 's)'
+        : '') + '.';
     return resultToJson(result);
   } catch (eSave) {
     result.ok = false;
