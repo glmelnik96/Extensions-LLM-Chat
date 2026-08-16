@@ -171,3 +171,37 @@ test('hostBridge: ordinary string args are never JSON-parsed', async () => {
   })
   assert.match(call, /"\[0, 100\]"|'\[0, 100\]'|\[0, 100\]/)
 })
+
+// ── Stringified `value` salvage (round-6 live evidence: GLM-4.7 sent
+// `value: "[960, 540]"` to set_property_value and retried until the
+// anti-spam guard fired) ─────────────────────────────────────────────────────
+
+test('hostBridge: set_property_value salvages stringified numeric-array value', async () => {
+  const call = await captureCall('set_property_value', {
+    layer_index: 1, property_path: 'Transform>Position', value: '[960, 540]'
+  })
+  assert.match(call, /extensionsLlmChat_setPropertyValue\(/)
+  assert.match(call, /\[960,540\]/)
+})
+
+test('hostBridge: Source Text keeps an array-looking string value verbatim', async () => {
+  const call = await captureCall('set_property_value', {
+    layer_index: 1, property_path: 'Text>Source Text', value: '[960, 540]'
+  })
+  assert.doesNotMatch(call, /\[960,540\]/)
+  assert.match(call, /\[960, 540\]/)
+})
+
+test('hostBridge: non-numeric array-looking value string is left alone', async () => {
+  const call = await captureCall('set_property_value', {
+    layer_index: 1, property_path: 'Transform>Position', value: '["a", "b"]'
+  })
+  assert.doesNotMatch(call, /\["a","b"\]/)
+})
+
+test('hostBridge: batch_call inner args get stringified-value salvage too', async () => {
+  const call = await captureCall('batch_call', {
+    calls: [{ tool: 'set_property_value', args: { layer_index: 1, property_path: 'Transform>Position', value: '[90, 0]' } }]
+  })
+  assert.match(call, /\[90,0\]/)
+})

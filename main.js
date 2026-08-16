@@ -1346,6 +1346,26 @@
       warnings.push('WARN: Adding a base to wiggle() double-counts — wiggle(freq, amp) ALREADY includes the pre-expression property value. Use plain `wiggle(freq, amp)` (set the base via the property value itself), or re-base explicitly with `base + wiggle(freq, amp) - value`.')
     }
 
+    // 15. Controller reference used as a boolean condition. `effect("Day")
+    //     ("Checkbox")` returns a Property OBJECT — in a boolean context it is
+    //     ALWAYS truthy, even when the checkbox is off. Live round-6 evidence
+    //     (gpt-oss-120b): `var day = ctrl.effect("Day")("Checkbox"); day ? 100 : 0`
+    //     kept the sun at 100% with the box unchecked. Detect a bare ternary/if
+    //     on (a) a direct effect access or (b) a variable assigned from one,
+    //     with no comparison/arithmetic that would coerce it to a number.
+    var _ctrlBool = false
+    if (/effect\s*\([^)]*\)\s*\([^)]*\)\s*\?/.test(exprText)) _ctrlBool = true
+    if (!_ctrlBool) {
+      var _assign = exprText.match(/var\s+(\w+)\s*=\s*[^;\n]*effect\s*\([^;\n]*[;\n]/)
+      if (_assign) {
+        var _condRe = new RegExp('(?:^|[^\\w.<>=!+\\-*\\/])' + _assign[1] + '\\s*\\?|if\\s*\\(\\s*' + _assign[1] + '\\s*\\)')
+        if (_condRe.test(exprText)) _ctrlBool = true
+      }
+    }
+    if (_ctrlBool) {
+      warnings.push('WARN: A controller reference like `effect("Name")("Checkbox")` is a Property OBJECT — as a bare condition it is ALWAYS truthy, even when the checkbox is off/0. Compare the value explicitly: `day > 0 ? 100 : 0` (or use `day == 1`).')
+    }
+
     return warnings
   }
 

@@ -384,13 +384,33 @@
           if (looksArray(parsed)) args[key] = parsed
         } catch (e) { /* leave for validation to report */ }
       }
-      // Nested case: targets items each carry their own keyframes array.
+      // Nested case: targets items each carry their own keyframes array;
+      // batch_call items carry the inner tool's args object.
       if (looksArray(args[key])) {
         for (var i = 0; i < args[key].length; i++) {
           var item = args[key][i]
-          if (item && typeof item === 'object' && !looksArray(item)) _unstringifyArrayArgs(item)
+          if (item && typeof item === 'object' && !looksArray(item)) {
+            _unstringifyArrayArgs(item)
+            if (item.args && typeof item.args === 'object') _unstringifyArrayArgs(item.args)
+          }
         }
       }
+    }
+    // Stringified NUMERIC array in `value` (set_property_value): observed live
+    // (round-6, GLM-4.7) as `value: "[960, 540]"` — retried identically until
+    // the anti-spam guard fired. Only salvage when every element is a finite
+    // number and the target is not a text property (Source Text may legally
+    // receive a literal string that merely looks like an array).
+    if (typeof args.value === 'string' && args.value.replace(/^\s+/, '').charAt(0) === '[' &&
+        !/source\s*text/i.test(String(args.property_path || ''))) {
+      try {
+        var parsedVal = JSON.parse(args.value)
+        var allNumbers = looksArray(parsedVal) && parsedVal.length > 0
+        for (var n = 0; allNumbers && n < parsedVal.length; n++) {
+          if (typeof parsedVal[n] !== 'number' || !isFinite(parsedVal[n])) allNumbers = false
+        }
+        if (allNumbers) args.value = parsedVal
+      } catch (e2) { /* leave for validation to report */ }
     }
     return args
   }

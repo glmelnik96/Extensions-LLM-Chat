@@ -1767,6 +1767,26 @@ function extensionsLlmChat_setLayerParent (layerIndex, layerId, parentLayerIndex
     _endToolUndo();
     result.ok = true;
     result.message = 'Parented "' + child.name + '" → "' + parent.name + '".';
+    // Scripted parenting preserves the child's WORLD position: AE silently
+    // rewrites the child's Position into the parent's coordinate space. Report
+    // the new value — models building orbit/rig chains often assume the child
+    // moved to the parent (it did NOT) and end up with cancelling offsets
+    // (live round-6: moon null stayed at comp center, moon orbited the sun).
+    try {
+      var _newPos = child.property('ADBE Transform Group').property('ADBE Position').value;
+      var _parentAnchor = parent.property('ADBE Transform Group').property('ADBE Anchor Point').value;
+      result.childPositionInParentSpace = _newPos;
+      result.parentAnchorPoint = _parentAnchor;
+      // NB: the child's Position lives in the parent's LAYER space, whose
+      // origin is the layer's top-left — NOT its visual center. For solids the
+      // anchor sits at the center (e.g. [960, 540] for a comp-sized solid), so
+      // advising "[0, 0]" would drop the child at the solid's corner (live
+      // round-6: moon-orbit null ended up 1100px away from its planet).
+      result.message += ' World position preserved: "' + child.name + '" did NOT move — its Position is now [' +
+        _newPos.join(', ') + '] in "' + parent.name + '"\'s coordinate space. ' +
+        'To place the child exactly AT the parent (orbit-null / rig pattern), set the child\'s Position to the parent\'s Anchor Point value, which is [' +
+        _parentAnchor.join(', ') + '].';
+    } catch (ePos) {}
     return resultToJson(result);
   } catch (e) {
     try { _endToolUndo(); } catch (x) {}
@@ -1907,6 +1927,41 @@ function extensionsLlmChat_setBlendMode (layerIndex, layerId, blendMode) {
  * extensionsLlmChat_setKeyframesBatch. Caller manages the undo group.
  * Returns { added:number, times:Array<number> }.
  */
+/**
+ * Auto-enable time remapping when a tool targets the Time Remap property on a
+ * layer where it is OFF — otherwise AE throws "Can not addKey/set value ...
+ * because the property or a parent property is hidden" (live round-6,
+ * GLM-4.7: three failed calls, time remap never applied). Enabling also makes
+ * AE create default remap keys at layer start/end. Returns a note for the
+ * result message, or '' when nothing was changed.
+ */
+function _ensureTimeRemapEnabled (layer, prop) {
+  try {
+    if (prop && prop.matchName === 'ADBE Time Remapping' &&
+        layer.canSetTimeRemapEnabled && !layer.timeRemapEnabled) {
+      layer.timeRemapEnabled = true;
+      return ' NOTE: time remapping was OFF on "' + layer.name + '" — it was enabled automatically. AE also created default remap keys at the layer start/end; they merge with yours, so delete or adjust them if they conflict (get_keyframes to inspect).';
+    }
+  } catch (eTR) {}
+  return '';
+}
+
+/**
+ * Returns a clear refusal when the target is Time Remap on a layer that AE
+ * cannot remap (shape/text/solid/null — no time-based source). Without this
+ * AE throws the cryptic "Can not addKey ... property is hidden" and the model
+ * burns calls retrying (live round-6, gpt-oss: 25 calls, remap never applied,
+ * precompose step skipped entirely).
+ */
+function _timeRemapBlocker (layer, prop) {
+  try {
+    if (prop && prop.matchName === 'ADBE Time Remapping' && !layer.canSetTimeRemapEnabled) {
+      return 'Time remap is not available on "' + layer.name + '": only layers with a time-based source (precomp or footage) can be remapped — shape/text/solid/null layers cannot. Precompose the layer first (precompose_layers), then apply time remap to the resulting precomp layer.';
+    }
+  } catch (eTB) {}
+  return '';
+}
+
 function _applyKeyframesToProp (prop, keyframes) {
   // Map string interpolation types to AE enums.
   function toKeyType (str) {
@@ -1949,8 +2004,8 @@ function _applyKeyframesToProp (prop, keyframes) {
         var infl_in = (inSpec && typeof inSpec.influence === 'number') ? inSpec.influence : 33.33;
         var speed_out = (outSpec && typeof outSpec.speed === 'number') ? outSpec.speed : 0;
         var infl_out = (outSpec && typeof outSpec.influence === 'number') ? outSpec.influence : 33.33;
-        eIn.push(new KeyframeEase(speed_in, infl_in));
-        eOut.push(new KeyframeEase(speed_out, infl_out));
+        eIn.push(new KeyframeEase(speed_in, _clampEaseInfluence(infl_in)));
+        eOut.push(new KeyframeEase(speed_out, _clampEaseInfluence(infl_out)));
       }
       try {
         prop.setTemporalEaseAtKey(kIdx, eIn, eOut);
@@ -1994,7 +2049,10 @@ function extensionsLlmChat_addKeyframes (layerIndex, layerId, propertyPath, keyf
       result.message = 'No keyframes provided.'; return resultToJson(result);
     }
 
+    var kfRemapErr = _timeRemapBlocker(layer, prop);
+    if (kfRemapErr) { result.message = kfRemapErr; return resultToJson(result); }
     _beginToolUndo('Agent: Add keyframes');
+    var kfRemapNote = _ensureTimeRemapEnabled(layer, prop);
     var kfPrevKeys = prop.numKeys;
     var applied = _applyKeyframesToProp(prop, keyframes);
     _endToolUndo();
@@ -2003,6 +2061,7 @@ function extensionsLlmChat_addKeyframes (layerIndex, layerId, propertyPath, keyf
     result.addedTimes = applied.times;
     result.ok = true;
     var kfMsg = 'Added ' + result.addedCount + ' keyframe(s) to "' + propertyPath + '" on "' + layer.name + '" at t=[' + applied.times.join(', ') + ']s.';
+    if (kfRemapNote) { result.timeRemapEnabled = true; kfMsg += kfRemapNote; }
     var kfMergeNote = _mergedKeysNote(kfPrevKeys, prop);
     if (kfMergeNote) { result.mergedIntoExisting = true; kfMsg += kfMergeNote; }
     var kfPsNote = _parentSpaceNote(layer, propertyPath);
@@ -2088,12 +2147,21 @@ function extensionsLlmChat_setKeyframesBatch (targets) {
           continue;
         }
 
+        var kbRemapErr = _timeRemapBlocker(layer, prop);
+        if (kbRemapErr) {
+          itemResult.message = kbRemapErr;
+          result.failedCount++;
+          result.results.push(itemResult);
+          continue;
+        }
+        var kbRemapNote = _ensureTimeRemapEnabled(layer, prop);
         var kbPrevKeys = prop.numKeys;
         var applied = _applyKeyframesToProp(prop, kfs);
         itemResult.ok = true;
         itemResult.addedCount = applied.added;
         itemResult.addedTimes = applied.times;
         itemResult.message = 'Added ' + applied.added + ' keyframe(s) to "' + propertyPath + '" on "' + layer.name + '".';
+        if (kbRemapNote) { itemResult.timeRemapEnabled = true; itemResult.message += kbRemapNote; }
         var kbMergeNote = _mergedKeysNote(kbPrevKeys, prop);
         if (kbMergeNote) { itemResult.mergedIntoExisting = true; itemResult.message += kbMergeNote; }
         var kbPsNote = _parentSpaceNote(layer, propertyPath);
@@ -2268,8 +2336,8 @@ function extensionsLlmChat_setKeyframeEasing (layerIndex, layerId, propertyPath,
         var inf_in = (inSpec && typeof inSpec.influence === 'number') ? inSpec.influence : 33.33;
         var sp_out = (outSpec && typeof outSpec.speed === 'number') ? outSpec.speed : 0;
         var inf_out = (outSpec && typeof outSpec.influence === 'number') ? outSpec.influence : 33.33;
-        eIn.push(new KeyframeEase(sp_in, inf_in));
-        eOut.push(new KeyframeEase(sp_out, inf_out));
+        eIn.push(new KeyframeEase(sp_in, _clampEaseInfluence(inf_in)));
+        eOut.push(new KeyframeEase(sp_out, _clampEaseInfluence(inf_out)));
       }
       try {
         prop.setTemporalEaseAtKey(keyIndex, eIn, eOut);
@@ -2305,9 +2373,21 @@ function _buildEaseArray (sourceEase, targetDims) {
   for (var d = 0; d < targetDims; d++) {
     var srcIdx = (d < sourceEase.length) ? d : 0;
     var src = sourceEase[srcIdx];
-    out.push(new KeyframeEase(src.speed, src.influence));
+    out.push(new KeyframeEase(src.speed, _clampEaseInfluence(src.influence)));
   }
   return out;
+}
+
+/**
+ * AE's KeyframeEase constructor requires influence in [0.1, 100] and throws
+ * "Value 0 out of range 0,1 to 100" otherwise. Models routinely send 0 for a
+ * linear-feeling ease (live round-6, GLM-4.7) — clamp instead of failing.
+ */
+function _clampEaseInfluence (v) {
+  if (typeof v !== 'number' || isNaN(v)) return 33.33;
+  if (v < 0.1) return 0.1;
+  if (v > 100) return 100;
+  return v;
 }
 
 /**
@@ -2907,7 +2987,10 @@ function extensionsLlmChat_setPropertyValue (layerIndex, layerId, propertyPath, 
       for (var i = 0; i < value.length; i++) arr.push(value[i]);
       value = arr;
     }
+    var spvRemapErr = _timeRemapBlocker(layer, prop);
+    if (spvRemapErr) { result.message = spvRemapErr; return resultToJson(result); }
     _beginToolUndo('Agent: Set property value');
+    var spvRemapNote = _ensureTimeRemapEnabled(layer, prop);
     // If property has keyframes, remove them first then set static value,
     // or use setValueAtTime at current comp time. This avoids the
     // "Can not call setValue() on a property with keyframes" error.
@@ -2922,6 +3005,7 @@ function extensionsLlmChat_setPropertyValue (layerIndex, layerId, propertyPath, 
     _endToolUndo();
     result.ok = true;
     var msg = 'Set "' + propertyPath + '" on "' + layer.name + '".';
+    if (spvRemapNote) { result.timeRemapEnabled = true; msg += spvRemapNote; }
     if (result.keyframesRemoved) msg += ' (existing keyframes were removed to set static value)';
     // An enabled expression OVERRIDES the static value — the set "succeeds"
     // but nothing changes on screen. Without this warning the agent reports
@@ -4889,7 +4973,16 @@ function extensionsLlmChat_openComp (compId, compName) {
         if ((item instanceof CompItem) && item.name === compName) matches.push(item);
       }
       if (matches.length === 0) { result.message = 'No composition named "' + compName + '". Use list_project_items to see available comps.'; return resultToJson(result); }
-      if (matches.length > 1) { result.message = matches.length + ' compositions are named "' + compName + '". Use comp_id instead (see list_project_items).'; return resultToJson(result); }
+      if (matches.length > 1) {
+        // List the candidate ids right here — sending the model off to
+        // list_project_items led to guessed (wrong) ids live in round-6.
+        var _cands = [];
+        for (var mi = 0; mi < matches.length; mi++) {
+          _cands.push('id ' + matches[mi].id + ' (' + matches[mi].width + 'x' + matches[mi].height + ', ' + matches[mi].numLayers + ' layers, ' + matches[mi].duration.toFixed(2) + 's)');
+        }
+        result.message = matches.length + ' compositions are named "' + compName + '". Call open_comp again with one of these comp_id values: ' + _cands.join('; ') + '.';
+        return resultToJson(result);
+      }
       comp = matches[0];
     } else {
       result.message = 'open_comp: provide `comp_id` (preferred) or `comp_name`.';
