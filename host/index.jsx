@@ -948,6 +948,8 @@ function extensionsLlmChat_applyExpressionToTarget (layerIndex, layerId, propert
     result.ok = true;
     result.message =
       'Expression applied to "' + propName + '" on layer "' + layerName + '" in comp "' + comp.name + '".';
+    var exprHiddenMsg = _hiddenLayerWarning(layer);
+    if (exprHiddenMsg) { result.hiddenLayer = true; result.message += exprHiddenMsg; }
     var rbVal = _exprReadbackValue(targetProp);
     if (rbVal !== null) {
       result.evaluatedValue = rbVal;
@@ -1087,6 +1089,8 @@ function extensionsLlmChat_applyExpressionBatch (targets) {
 
         itemResult.ok = true;
         itemResult.message = 'Applied to layer "' + layer.name + '" → "' + targetProp.name + '".';
+        var batchHiddenMsg = _hiddenLayerWarning(layer);
+        if (batchHiddenMsg) { itemResult.hiddenLayer = true; itemResult.message += batchHiddenMsg; }
         var batchRbVal = _exprReadbackValue(targetProp);
         if (batchRbVal !== null) {
           itemResult.evaluatedValue = batchRbVal;
@@ -1216,6 +1220,46 @@ function _parentCloneExprError (layer, targetProp, expressionText) {
           'position throws the layer far away and doubles the parent\'s motion. Use `value` as the base instead ' +
           '(e.g. `value + wiggle(freq, amp)`); parenting already applies the parent\'s movement.';
       }
+    }
+  } catch (e) {}
+  return '';
+}
+
+/**
+ * Informational note for VALUE-class mutations (set value / keyframes /
+ * randomize) of the Position of a PARENTED layer. Same disease as
+ * _parentCloneExprError but for plain values: models compute targets in COMP
+ * pixels (e.g. "scatter across the frame" → x in 0..compWidth) while a
+ * parented layer's Position is in PARENT space — verified live 2026-08-16:
+ * 30 copies parented to a center null got comp-space random positions and
+ * landed at x=2209..5980 in a 4096-wide comp (half off-screen).
+ * Returns '' when not applicable.
+ */
+function _parentSpaceNote (layer, propertyPath) {
+  try {
+    if (!layer || !layer.parent) return '';
+    if (String(propertyPath).indexOf('Position') === -1) return '';
+    var pp = layer.parent.transform.position.value;
+    return ' NOTE: "' + layer.name + '" is parented to "' + layer.parent.name +
+      '" — its Position is in PARENT space, not comp pixels. The parent sits at [' +
+      Math.round(pp[0]) + ',' + Math.round(pp[1]) + '] in the comp, so to land this layer at comp-space [x,y] use [x-' +
+      Math.round(pp[0]) + ', y-' + Math.round(pp[1]) + ']. Verify the values you just set are in the right space.';
+  } catch (e) {}
+  return '';
+}
+
+/**
+ * Warning for mutations of a layer whose video is switched OFF (eyeball).
+ * AE happily animates disabled layers and nothing shows on screen — the
+ * agent then reports invisible work as done (verified live 2026-08-16: a
+ * three-layer trail rig built entirely on enabled=false text layers).
+ * A warning, not a refusal: hidden rigs (e.g. measure layers) are legitimate.
+ * Returns '' when not applicable.
+ */
+function _hiddenLayerWarning (layer) {
+  try {
+    if (layer && layer.enabled === false) {
+      return ' WARNING: layer "' + layer.name + '" has its video switch DISABLED (eyeball off) — nothing on it renders, so this change is NOT visible. If it should be seen, enable it via set_layer_switches({enabled:true}); either way tell the user.';
     }
   } catch (e) {}
   return '';
@@ -1924,7 +1968,12 @@ function extensionsLlmChat_addKeyframes (layerIndex, layerId, propertyPath, keyf
     result.addedCount = applied.added;
     result.addedTimes = applied.times;
     result.ok = true;
-    result.message = 'Added ' + result.addedCount + ' keyframe(s) to "' + propertyPath + '" on "' + layer.name + '" at t=[' + applied.times.join(', ') + ']s.';
+    var kfMsg = 'Added ' + result.addedCount + ' keyframe(s) to "' + propertyPath + '" on "' + layer.name + '" at t=[' + applied.times.join(', ') + ']s.';
+    var kfPsNote = _parentSpaceNote(layer, propertyPath);
+    if (kfPsNote) { result.parentSpace = true; kfMsg += kfPsNote; }
+    var kfHiddenMsg = _hiddenLayerWarning(layer);
+    if (kfHiddenMsg) { result.hiddenLayer = true; kfMsg += kfHiddenMsg; }
+    result.message = kfMsg;
     return resultToJson(result);
   } catch (e) {
     try { _endToolUndo(); } catch (x) {}
@@ -2008,6 +2057,10 @@ function extensionsLlmChat_setKeyframesBatch (targets) {
         itemResult.addedCount = applied.added;
         itemResult.addedTimes = applied.times;
         itemResult.message = 'Added ' + applied.added + ' keyframe(s) to "' + propertyPath + '" on "' + layer.name + '".';
+        var kbPsNote = _parentSpaceNote(layer, propertyPath);
+        if (kbPsNote) { itemResult.parentSpace = true; itemResult.message += kbPsNote; }
+        var kbHiddenMsg = _hiddenLayerWarning(layer);
+        if (kbHiddenMsg) { itemResult.hiddenLayer = true; itemResult.message += kbHiddenMsg; }
         result.appliedCount++;
         result.totalKeyframes += applied.added;
         result.results.push(itemResult);
@@ -2567,10 +2620,23 @@ function extensionsLlmChat_randomizeProperty (layerIndices, layerIds, propertyPa
       }
       try { prop.setValue(next); result.count++; } catch (eSet) {}
       layer.locked = wasLocked;
+      // Track the first PARENTED layer whose Position we randomized in
+      // absolute mode: the model's min/max are almost always comp pixels,
+      // but the values land in PARENT space (live 2026-08-16: 30 copies
+      // parented to a center null scattered to x=2209..5980 in a 4K comp).
+      if (!result.parentSpaceNote && mode === 'absolute') {
+        var rzPsNote = _parentSpaceNote(layer, propertyPath);
+        if (rzPsNote) result.parentSpaceNote = rzPsNote;
+      }
     }
     _endToolUndo();
     result.ok = true;
     result.message = 'Randomized "' + propertyPath + '" on ' + result.count + ' layers (range ' + minVal + '..' + maxVal + ', ' + mode + ').';
+    if (result.parentSpaceNote) {
+      result.parentSpace = true;
+      result.message += result.parentSpaceNote + ' (This applies to every parented layer in this batch.)';
+      delete result.parentSpaceNote;
+    }
     return resultToJson(result);
   } catch (e) {
     try { _endToolUndo(); } catch (x) {}
@@ -2827,6 +2893,10 @@ function extensionsLlmChat_setPropertyValue (layerIndex, layerId, propertyPath, 
       result.expressionOverride = true;
       msg += ' WARNING: this property has an ENABLED EXPRESSION that overrides the static value — the change is NOT visible. Remove the expression (apply_expression with expression:"") or edit it instead.';
     }
+    var psNote = _parentSpaceNote(layer, propertyPath);
+    if (psNote) { result.parentSpace = true; msg += psNote; }
+    var hiddenMsg = _hiddenLayerWarning(layer);
+    if (hiddenMsg) { result.hiddenLayer = true; msg += hiddenMsg; }
     result.message = msg;
     return resultToJson(result);
   } catch (e) {

@@ -165,6 +165,14 @@ test('visionCheck: buildCorrectionPrompt demands verify-first, forbids restructu
   assert.ok(prompt.includes('reorder layers'), 'forbids restructuring')
 })
 
+test('visionCheck: buildCorrectionPrompt — data presence does not refute visibility', () => {
+  const prompt = vc.buildCorrectionPrompt(['circles are not visible'])
+  assert.ok(prompt.includes('does NOT refute a visibility report'), 'data vs visibility guidance')
+  assert.ok(prompt.includes('contrast against the background'), 'contrast check')
+  assert.ok(prompt.includes('parent-space offsets'), 'off-screen/parent-space check')
+  assert.ok(prompt.includes('video switch'), 'enabled-switch check')
+})
+
 // ── classifyIssues ────────────────────────────────────────────────────────
 
 test('visionCheck: classifyIssues — empty/black frame reports are weak', () => {

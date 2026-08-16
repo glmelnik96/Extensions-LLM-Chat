@@ -290,3 +290,16 @@ test('prompt: round-3 hardening bullets present (2026-08-16)', () => {
   assert.match(full, /If the requested state ALREADY exists, change nothing/, 'already-satisfied rule')
   assert.match(full, /DOUBLES the stagger/, 'stagger-doubling example')
 })
+
+test('prompt: round-4 hardening bullets present (2026-08-16)', () => {
+  const full = builder.buildFull()
+  assert.match(full, /Parent space applies to VALUES too/, 'parent-space values rule')
+  assert.match(full, /video switch OFF \(`enabled: false`\) renders NOTHING/, 'hidden-layer rule')
+  assert.match(full, /contrast and size/, 'contrast/size rule')
+  assert.match(full, /data being correct does NOT refute a visibility report/, 'data vs visibility rule')
+  assert.match(full, /Normalize slider rigs/, 'slider normalization rule')
+  assert.match(full, /linear\(slider, 0, 100, min, max\)/, 'linear mapping example')
+  assert.match(full, /Do not build rigs on `thisLayer\.index`/, 'no index rigs rule')
+  assert.match(full, /Rename duplicates/, 'rename duplicates rule')
+  assert.match(full, /Explicit constraints in the request are HARD limits/, 'hard constraints rule')
+})

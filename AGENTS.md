@@ -43,7 +43,7 @@ Extensions LLM Chat/
 ├── knowledge-base/            ← AE expression reference corpus (human-readable; KB_SNIPPETS in main.js does keyword injection)
 ├── scripts/
 │   └── cdp-eval.js            ← CDP helper: eval JS inside the live panel (port 8092) for real-AE testing
-├── test/                      ← node:test unit tests (225 tests) — `node --test test/*.test.js`
+├── test/                      ← node:test unit tests (227 tests) — `node --test test/*.test.js`
 └── docs/                      ← detailed per-topic docs
 ```
 
@@ -234,6 +234,23 @@ Two `main.js`-only fixes for "the panel looks frozen", both live-verified via CD
 *Activity log.* A long agent run showed only one label at a time, so a slow model turn was indistinguishable from a hang. Every `_setThinkingLabel` call now also pushes into an `activityLog` (cap 200) rendered as a collapsible `activity (N)` block inside the thinking indicator — reusing the existing `.reasoning-box` styling, deliberately **without** enabling chain-of-thought: `enable_thinking:false` is what makes a run 94s instead of 18.8min, and the user chose anti-hang only. Consecutive duplicates are dropped because `updateThinkingReasoning` re-sets the label on every streamed chunk (one identical line per token otherwise). Because the activity box shares `.reasoning-box`, the CoT box lookup was narrowed to a dedicated **`.cot-box`** class — an unqualified `querySelector('.reasoning-box')` would grab whichever element came first. Separately, `lastActivityTime` drives a `.thinking-stall` hint that appears after `STALL_HINT_MS` (12s) of no new activity: "· no reply from model for 19s" in `--warn`. Measured live: first hint at 12009ms, log during a real tool run captured `run started → waiting for model (step 1/60) → calling get_detailed_comp_summary → ok → step 2/60`.
 
 *`panelConfirm()` replaces native `confirm()`.* User report: "почему-то зависает кнопка Clear". Root cause measured via CDP: in CEP, `window.confirm()` opens a **detached OS window** — it does not render inside the panel, so it can end up behind AE, and it blocks the panel's JS thread for exactly as long as it goes unanswered (`jsBlockedMs: 1508` for a 1500ms hold). `panelConfirm(message, confirmLabel)` returns a Promise and draws an in-panel `.confirm-backdrop` + `.studio-panel` overlay (Esc / backdrop click = cancel, Enter = confirm, focus starts on Cancel, message goes in via `textContent` since chat titles are user-supplied). Converted: `handleClearSession`, `handleClearAllSessions`, `handleDeleteSession`, `handleQuickActionReset`. **Still native and still blocking** (same bug class, not yet converted): every `prompt()` flow (chat rename, quick-action add/edit, transcript path) and every `alert()`.
+
+### Broad bug-hunt fixes (2026-08-16, round 4) — parent-space VALUES, hidden layers, visibility vs data
+A fourth hunt (5 human-style Russian prompts: mass duplication with constraints, slider rigs, delay chains, scatter across frame) produced 7 findings (N1–N7); all fixed the same day.
+
+*N1: parent-space applies to VALUES, not just expressions (worst finding).* "Разбросай 30 копий по всему кадру" on layers parented to a center null → the model randomized Position with comp-space ranges (0..4096) in PARENT space → x landed at 2209..5980, half the copies off-screen. Round-3 only guarded parent-space *expressions*. Fix: host `_parentSpaceNote` — whenever `setPropertyValue` / `addKeyframes` / `setKeyframesBatch` / `randomizeProperty` (absolute mode) touches Position of a parented layer, the result message appends a NOTE naming the parent, its comp position, and the exact `[x-px, y-py]` conversion; plus a KNOWN_LIMITATIONS bullet (children of a center null scatter as ±width/2 around 0).
+
+*N2: explicit constraints ignored.* "Оригиналы не трогай" → original got the flicker expression anyway (31/31 layers); "маленьких копий" → copies stayed full-size 600×400. Prompt rule in CORE_RULES: explicit constraints are HARD limits — re-read the request and verify every named constraint against what was actually done before replying.
+
+*N3: rig built on hidden layers.* Three text layers had the video switch off (`enabled: false`); the agent animated them and reported visible results — nothing renders. Fix: host `_hiddenLayerWarning` appends a WARNING to every mutation result (`setPropertyValue`, `addKeyframes`, `setKeyframesBatch`, `applyExpressionToTarget`, `applyExpressionBatch`) on a disabled layer; prompt bullet: check `enabled` before building, never report animation on a hidden layer as visible.
+
+*N4: invisible-by-design + vision verdict dismissed.* 20px white circles on a white 4K background, and a "Spread" slider whose useful travel was 0–7 of 0–100 (at 100 → x=±26 000). The vision check CORRECTLY said "circles not visible", but the agent checked only data-state (expressions present) and dismissed the verdict. Fixes: prompt bullets (contrast + size proportional to comp; normalize sliders via `linear(slider, 0, 100, min, max)`) and `buildCorrectionPrompt` now states that intact data does NOT refute a visibility report — verify contrast/size/on-screen position/video switch before calling a "not visible" issue a false positive.
+
+*N5/N6: fragile rigs and ambiguous names.* Rig keyed to `thisLayer.index` (breaks on any reorder, and index order is REVERSE of creation) → prompt bullet: derive variation from the layer NAME, a slider, or baked constants. 30 duplicates all named "Card 4" → prompt bullet: rename right after `duplicate_layer`.
+
+*N7 (accepted, not fixed):* vision missed an empty left half on "разбросай по всему кадру" — a composition-quality judgment beyond the current verdict schema; noted only.
+
+Positives: no round-3 regressions (name→range mapping correct, parent-clone trap avoided, delay chain exact). Tests 225 → 227 (round-4 prompt bullets, vision data≠visibility line).
 
 ### Broad bug-hunt fixes (2026-08-16, round 3) — parent-space expressions, scale failure modes, locked layers
 A third hunt on heavier scenarios (6×6 grid via big batches, slider rig with cross-layer wiggle, staged reveal driven by one Progress slider, undo) produced 5 findings (F1–F5); all fixed the same day.
