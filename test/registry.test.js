@@ -23,9 +23,9 @@ function loadBrowserGlobal (file) {
 const registryWindow = loadBrowserGlobal('toolRegistry.js')
 const tools = registryWindow.AGENT_TOOL_REGISTRY && registryWindow.AGENT_TOOL_REGISTRY.tools
 
-test('registry: exposes 67 tools', () => {
+test('registry: exposes 68 tools', () => {
   assert.ok(Array.isArray(tools), 'tools array exported')
-  assert.strictEqual(tools.length, 67)
+  assert.strictEqual(tools.length, 68)
 })
 
 test('registry: batch_call takes {tool, args} items', () => {
@@ -267,11 +267,25 @@ test('registry: subtitle tools (2026-07-28) registered with correct schemas', ()
   }
 })
 
+test('registry: update_subtitles (2026-08-17) registered with correct schema', () => {
+  const us = findTool('update_subtitles')
+  assert.ok(us, 'update_subtitles registered')
+  assert.strictEqual(JSON.stringify(us.function.parameters.required), JSON.stringify([]), 'no required params (no-edits call lists cues)')
+  assert.ok(us.function.parameters.properties.layer_id, 'layer_id param (auto-detect when omitted)')
+  const edits = us.function.parameters.properties.edits
+  assert.ok(edits && edits.type === 'array', 'edits array param')
+  for (const key of ['find', 'replace', 'cue_index', 'text']) {
+    assert.ok(edits.items.properties[key], 'edits item property: ' + key)
+  }
+  assert.match(us.function.description, /do NOT delete and re-create/i, 'steers away from rebuild')
+})
+
 test('prompt: subtitles guidance present', () => {
   const full = builder.buildFull()
   assert.ok(full.includes('## Subtitles'), 'subtitles section present')
   assert.ok(full.includes('transcribe_comp_audio'), 'mentions transcribe tool')
   assert.ok(full.includes('create_subtitles'), 'mentions create tool')
+  assert.ok(full.includes('update_subtitles'), 'mentions in-place edit tool')
   assert.match(full, /ISO 639-1/, 'language requirement explained')
 })
 

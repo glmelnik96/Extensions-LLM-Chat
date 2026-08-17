@@ -1,6 +1,6 @@
 /**
  * Tests for lib/pure/subtitles.js — Whisper segment normalization,
- * char-weighted word alignment (with silence subtraction), smart line
+ * syllable-weighted word alignment (with silence subtraction), smart line
  * wrapping (glue words, balance), and segment→cue building (splitting by
  * length/duration). Ported logic from the Premiere sibling plugin.
  */
@@ -31,25 +31,33 @@ test('subtitles: normalizeWhisperSegments handles verbose_json and offset', () =
   assert.deepStrictEqual(SUB.normalizeWhisperSegments({}, 0), [])
 })
 
-test('subtitles: alignWordsChar distributes by char weight, back-to-back', () => {
-  const words = ['я', 'коротко', 'сверхдлинное']
-  const timed = SUB.alignWordsChar(words, 0, 10, null)
+test('subtitles: _wordWeight counts syllables (RU/EN vowels), digits, min 1', () => {
+  assert.strictEqual(SUB._wordWeight('я'), 1.4) // 1 vowel
+  assert.strictEqual(SUB._wordWeight('коротко'), 3.4) // о-о-о
+  assert.strictEqual(SUB._wordWeight('hello'), 2.4) // e-o
+  assert.strictEqual(SUB._wordWeight('в'), 1.4) // no vowels → min 1 syllable
+  assert.strictEqual(SUB._wordWeight('—'), 1.4) // punctuation-only → min 1
+  assert.strictEqual(SUB._wordWeight('25'), 4.4) // 2 digits × 2 syllables
+})
+
+test('subtitles: alignWords distributes by syllable weight, back-to-back', () => {
+  const words = ['я', 'коротко', 'сверхдлинное'] // weights 1.4 / 3.4 / 4.4 = 9.2
+  const timed = SUB.alignWords(words, 0, 10, null)
   assert.strictEqual(timed.length, 3)
   assert.strictEqual(timed[0].s, 0)
   assert.strictEqual(timed[2].e, 10)
-  // durations proportional to 1/7/12 of 20 chars over 10s
-  assert.ok(Math.abs((timed[0].e - timed[0].s) - 0.5) < 0.01)
-  assert.ok(Math.abs((timed[1].e - timed[1].s) - 3.5) < 0.01)
-  assert.ok(Math.abs((timed[2].e - timed[2].s) - 6.0) < 0.01)
+  assert.ok(Math.abs((timed[0].e - timed[0].s) - 10 * 1.4 / 9.2) < 0.01)
+  assert.ok(Math.abs((timed[1].e - timed[1].s) - 10 * 3.4 / 9.2) < 0.01)
+  assert.ok(Math.abs((timed[2].e - timed[2].s) - 10 * 4.4 / 9.2) < 0.01)
   // contiguous
   assert.strictEqual(timed[0].e, timed[1].s)
   assert.strictEqual(timed[1].e, timed[2].s)
 })
 
-test('subtitles: alignWordsChar skips silences >= 0.3s', () => {
+test('subtitles: alignWords skips silences >= 0.3s', () => {
   // segment 0-10, silence 4-8 => speech 0-4 and 8-10 (6s total)
-  const words = ['aa', 'bb', 'cc'] // equal weights: 2s each on speech axis
-  const timed = SUB.alignWordsChar(words, 0, 10, [{ startSec: 4, endSec: 8 }])
+  const words = ['ба', 'бо', 'бу'] // equal weights: 2s each on speech axis
+  const timed = SUB.alignWords(words, 0, 10, [{ startSec: 4, endSec: 8 }])
   assert.strictEqual(timed[0].s, 0)
   assert.strictEqual(timed[0].e, 2)
   assert.strictEqual(timed[1].e, 4)
@@ -59,7 +67,7 @@ test('subtitles: alignWordsChar skips silences >= 0.3s', () => {
   assert.strictEqual(timed[2].s, 4)
   assert.strictEqual(timed[2].e, 10)
   // short silence (<0.3s) ignored
-  const t2 = SUB.alignWordsChar(words, 0, 6, [{ startSec: 2, endSec: 2.2 }])
+  const t2 = SUB.alignWords(words, 0, 6, [{ startSec: 2, endSec: 2.2 }])
   assert.strictEqual(t2[2].e, 6)
   assert.strictEqual(t2[1].e, 4)
 })
@@ -299,4 +307,112 @@ test('subtitles: R8 pyramid — the top line is the shorter one on a tie', () =>
   const tie = SUB.wrapCueLines(['аб', 'вг', 'де', 'жз'], 6, 2).split('\n')
   assert.strictEqual(tie.length, 2)
   assert.ok(tie[0].length <= tie[1].length, 'top line longer than bottom: ' + tie.join(' | '))
+})
+
+/* ── Post-creation subtitle editing (2026-08-17) ────────────────────── */
+
+function sampleCues () {
+  return [
+    {
+      startSec: 0,
+      endSec: 2,
+      text: 'привет мир',
+      words: [{ w: 'привет', s: 0, e: 1.2 }, { w: 'мир', s: 1.2, e: 2 }]
+    },
+    {
+      startSec: 3,
+      endSec: 6,
+      text: 'это тестовая фраза',
+      words: [
+        { w: 'это', s: 3, e: 3.8 },
+        { w: 'тестовая', s: 3.8, e: 5.1 },
+        { w: 'фраза', s: 5.1, e: 6 }
+      ]
+    }
+  ]
+}
+
+test('subtitles: applySubtitleEdits find/replace with same word count keeps timings verbatim', () => {
+  const src = sampleCues()
+  const r = SUB.applySubtitleEdits(src, [{ find: 'мир', replace: 'миру' }], { maxCharsPerLine: 20, maxLines: 2 })
+  assert.deepStrictEqual(r.changedIndexes, [1])
+  assert.deepStrictEqual(r.notFound, [])
+  assert.strictEqual(r.cues[0].text.replace(/\n/g, ' '), 'привет миру')
+  // per-word times identical to the original rig
+  assert.deepStrictEqual(r.cues[0].words.map((w) => [w.s, w.e]), [[0, 1.2], [1.2, 2]])
+  assert.strictEqual(r.cues[0].words[1].w, 'миру')
+  // untouched cue is byte-identical, and the input was not mutated
+  assert.deepStrictEqual(r.cues[1], src[1])
+  assert.strictEqual(src[0].text, 'привет мир')
+})
+
+test('subtitles: applySubtitleEdits word-count change redistributes inside the cue span only', () => {
+  const r = SUB.applySubtitleEdits(sampleCues(), [{ find: 'тестовая', replace: 'очень тестовая' }], { maxCharsPerLine: 30, maxLines: 2 })
+  assert.deepStrictEqual(r.changedIndexes, [2])
+  const cue = r.cues[1]
+  assert.strictEqual(cue.words.length, 4)
+  assert.strictEqual(cue.words[0].s, 3)
+  assert.strictEqual(cue.words[3].e, 6)
+  for (let i = 1; i < cue.words.length; i++) {
+    assert.ok(cue.words[i].s >= cue.words[i - 1].e - 0.001)
+  }
+  // neighbour cue untouched
+  assert.strictEqual(r.cues[0].words[0].s, 0)
+  // text/words stay in lockstep (karaoke depends on it)
+  assert.strictEqual(cue.text.replace(/\n/g, ' '), cue.words.map((w) => w.w).join(' '))
+})
+
+test('subtitles: applySubtitleEdits cue_index whole-text replace and range check', () => {
+  const r = SUB.applySubtitleEdits(sampleCues(), [
+    { cue_index: 1, text: 'здравствуй мир' },
+    { cue_index: 9, text: 'мимо' }
+  ], { maxCharsPerLine: 20, maxLines: 2 })
+  assert.deepStrictEqual(r.changedIndexes, [1])
+  assert.strictEqual(r.cues[0].text.replace(/\n/g, ' '), 'здравствуй мир')
+  // same word count → old timings preserved
+  assert.deepStrictEqual(r.cues[0].words.map((w) => [w.s, w.e]), [[0, 1.2], [1.2, 2]])
+  assert.ok(r.warnings.some((w) => /out of range/.test(w)))
+})
+
+test('subtitles: applySubtitleEdits reports notFound and skips would-empty edits', () => {
+  const r = SUB.applySubtitleEdits(sampleCues(), [
+    { find: 'нет такого', replace: 'x' },
+    { find: 'привет мир', replace: '' }
+  ], { maxCharsPerLine: 20, maxLines: 2 })
+  assert.deepStrictEqual(r.notFound, ['нет такого'])
+  assert.deepStrictEqual(r.changedIndexes, [])
+  assert.ok(r.warnings.some((w) => /would empty cue 1/.test(w)))
+  assert.strictEqual(r.cues[0].text, 'привет мир')
+})
+
+test('subtitles: applySubtitleEdits is case-insensitive across line breaks and warns on overflow', () => {
+  const cues = [{
+    startSec: 0,
+    endSec: 3,
+    text: 'Привет\nмир',
+    words: [{ w: 'Привет', s: 0, e: 1.5 }, { w: 'мир', s: 1.5, e: 3 }]
+  }]
+  const r = SUB.applySubtitleEdits(cues, [{ find: 'привет мир', replace: 'непроизносимоесверхслово' }], { maxCharsPerLine: 10, maxLines: 1 })
+  assert.deepStrictEqual(r.changedIndexes, [1])
+  assert.strictEqual(r.cues[0].text, 'непроизносимоесверхслово')
+  assert.strictEqual(r.cues[0].words.length, 1)
+  assert.strictEqual(r.cues[0].words[0].s, 0)
+  assert.strictEqual(r.cues[0].words[0].e, 3)
+  assert.ok(r.warnings.some((w) => /may overflow/.test(w)))
+})
+
+test('subtitles: applySubtitleEdits never inserts a line break when maxLines is 1 (karaoke)', () => {
+  // wrapCueLines force-splits on no-fit; a karaoke rig is single-line by
+  // construction (plate/measure layers), so the text must stay on one line.
+  const cues = [{
+    startSec: 0,
+    endSec: 3,
+    text: 'тестовая фраза',
+    words: [{ w: 'тестовая', s: 0, e: 1.5 }, { w: 'фраза', s: 1.5, e: 3 }]
+  }]
+  const r = SUB.applySubtitleEdits(cues, [{ find: 'тестовая', replace: 'очень тестовая' }], { maxCharsPerLine: 14, maxLines: 1 })
+  assert.deepStrictEqual(r.changedIndexes, [1])
+  assert.strictEqual(r.cues[0].text, 'очень тестовая фраза')
+  assert.ok(!r.cues[0].text.includes('\n'))
+  assert.ok(r.warnings.some((w) => /may overflow/.test(w)))
 })

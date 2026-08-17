@@ -106,7 +106,8 @@
     '- `create_subtitles` builds a single text layer with Source Text hold keyframes (one per cue), smart line wrapping (≤2 lines, no hanging "в"/"и"/"the"), optional background box (separate shape layer, auto-sized via expression) and a per-word reveal animation (expression selector — fully editable, no baked keyframes on opacity).',
     '- Review flow: after transcription, show the user a compact preview of the recognized text in your answer. Fix mistakes by passing corrected `segments` explicitly to create_subtitles.',
     '- Styling: `position` (bottom/center/top), `font` (PostScript name), `fill_color`, `box_color`/`box_opacity`, `animation: "none"` for static cues.',
-    '- To re-style existing subtitles: delete the old Subtitles layer(s) and call create_subtitles again (cache persists until the next transcription).'
+    '- To fix WRONG WORDS in existing subtitles (Whisper misheard): use `update_subtitles` — it edits the text in place and keeps timing/animation intact. Call it with no `edits` first to see the numbered cue list, then pass `{find, replace}` or `{cue_index, text}`. Do NOT delete and re-create the rig for a typo.',
+    '- To re-style existing subtitles (font/color/position): delete the old Subtitles layer(s) and call create_subtitles again (cache persists until the next transcription).'
   ].join('\n')
 
   var CORE_PREVIEW = [

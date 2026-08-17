@@ -5219,6 +5219,17 @@ function extensionsLlmChat_createSubtitles (cues, opts) {
     layerName = layerName.replace(/["\\]/g, '');
     layerName = _subtitlesFreeBaseName(comp, layerName);
 
+    // YouTube safe zones (2026). Vertical (Shorts, 9:16): the bottom ~25-35%
+    // is covered by title/channel/music UI (grows to ~400px of 1920 with the
+    // description expanded) and a right-side action column eats ~120-190px —
+    // so subtitles sit at 70% height, capped to 80% width. Landscape (16:9):
+    // the player control bar overlays the bottom ~12% — text block bottom at
+    // 88%, width within the 90% title-safe area.
+    var isVertical = comp.height > comp.width * 1.25;
+    var safeWidthFrac = isVertical ? 0.80 : 0.90;
+    var topEdgeY = Math.round(comp.height * (isVertical ? 0.15 : 0.08));
+    var bottomEdgeY = Math.round(comp.height * (isVertical ? 0.70 : 0.88));
+
     _beginToolUndo('Agent: Create subtitles');
     undoOpen = true;
 
@@ -5258,7 +5269,7 @@ function extensionsLlmChat_createSubtitles (cues, opts) {
         dMeasure.text = widestLine;
         textProp.setValue(dMeasure);
         var mRect = textLayer.sourceRectAtTime(0, false);
-        var maxW = comp.width * 0.92;
+        var maxW = comp.width * safeWidthFrac;
         if (mRect.width > maxW && mRect.width > 0) {
           var dShrink = textProp.value;
           dShrink.fontSize = Math.max(10, Math.floor(dShrink.fontSize * maxW / mRect.width));
@@ -5300,11 +5311,11 @@ function extensionsLlmChat_createSubtitles (cues, opts) {
     var posExpr;
     var cw = 'thisComp.width/2';
     if (posName === 'top') {
-      posExpr = 'var r = sourceRectAtTime(time, false);\n[' + cw + ', ' + Math.round(comp.height * 0.08) + ' - r.top];';
+      posExpr = 'var r = sourceRectAtTime(time, false);\n[' + cw + ', ' + topEdgeY + ' - r.top];';
     } else if (posName === 'center') {
       posExpr = 'var r = sourceRectAtTime(time, false);\n[' + cw + ', ' + Math.round(comp.height * 0.5) + ' - (r.top + r.height/2)];';
     } else {
-      posExpr = 'var r = sourceRectAtTime(time, false);\n[' + cw + ', ' + Math.round(comp.height * 0.9) + ' - (r.top + r.height)];';
+      posExpr = 'var r = sourceRectAtTime(time, false);\n[' + cw + ', ' + bottomEdgeY + ' - (r.top + r.height)];';
     }
     var posProp = textLayer.property('ADBE Transform Group').property('ADBE Position');
     posProp.expression = posExpr;
@@ -5451,11 +5462,11 @@ function extensionsLlmChat_createSubtitles (cues, opts) {
       if (refHeight > 0) {
         var baselineY;
         if (posName === 'top') {
-          baselineY = Math.round(comp.height * 0.08) - refTop;
+          baselineY = topEdgeY - refTop;
         } else if (posName === 'center') {
           baselineY = Math.round(comp.height * 0.5) - (refTop + refHeight / 2);
         } else {
-          baselineY = Math.round(comp.height * 0.9) - (refTop + refHeight);
+          baselineY = bottomEdgeY - (refTop + refHeight);
         }
         posProp.expression = '';
         posProp.setValue([comp.width / 2, baselineY]);
@@ -5576,6 +5587,242 @@ function extensionsLlmChat_createSubtitles (cues, opts) {
   }
 }
 
+/**
+ * Read an existing subtitle rig back into cue data. The rig is fully
+ * self-describing: cue text + times live in the Source Text hold keys, word
+ * timings in the "Word Index" slider keys (word strings are the cue text
+ * split on spaces — the slider value is the 1-based ordinal). No sidecar
+ * storage, so this works even after a project save/reload or manual tweaks.
+ * layerId null → auto-detect: exactly one non-measure text layer with
+ * Source Text keyframes in the active comp, otherwise an error listing
+ * candidates. Read-only.
+ */
+function extensionsLlmChat_readSubtitleRig (layerId) {
+  var result = { ok: false, message: '', layerId: null, layerName: '', animation: 'none', cueCount: 0, cues: [] };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var comp = ctx.comp;
+    var layer = null;
+    var i;
+    if (layerId) {
+      for (i = 1; i <= comp.numLayers; i++) {
+        if (comp.layer(i).id === layerId) { layer = comp.layer(i); break; }
+      }
+      if (!layer) { result.message = 'No layer with id ' + layerId + ' in comp "' + comp.name + '".'; return resultToJson(result); }
+    } else {
+      var candidates = [];
+      for (i = 1; i <= comp.numLayers; i++) {
+        var cand = comp.layer(i);
+        if (!(cand instanceof TextLayer)) continue;
+        if (/ Measure (Prefix|Word)$/.test(cand.name)) continue;
+        try {
+          var tpc = cand.property('ADBE Text Properties').property('ADBE Text Document');
+          if (tpc && tpc.numKeys > 1) candidates.push(cand);
+        } catch (eCand) {}
+      }
+      if (candidates.length === 0) {
+        result.message = 'No subtitle rig found in "' + comp.name + '": no text layer with Source Text keyframes. Create one with create_subtitles first, or pass layer_id.';
+        return resultToJson(result);
+      }
+      if (candidates.length > 1) {
+        var names = [];
+        for (i = 0; i < candidates.length; i++) names.push('"' + candidates[i].name + '" (layer_id ' + candidates[i].id + ')');
+        result.message = 'Multiple subtitle rigs in "' + comp.name + '": ' + names.join(', ') + '. Call again with one of these layer_id values.';
+        return resultToJson(result);
+      }
+      layer = candidates[0];
+    }
+    if (!(layer instanceof TextLayer)) {
+      result.message = 'Layer "' + layer.name + '" is not a text layer — a subtitle rig is the TEXT layer created by create_subtitles.';
+      return resultToJson(result);
+    }
+    var tp = layer.property('ADBE Text Properties').property('ADBE Text Document');
+    if (!tp || tp.numKeys < 1) {
+      result.message = 'Layer "' + layer.name + '" has no Source Text keyframes — not a subtitle rig created by create_subtitles.';
+      return resultToJson(result);
+    }
+    var cues = [];
+    var k;
+    for (k = 1; k <= tp.numKeys; k++) {
+      var txt = '';
+      try { txt = String(tp.keyValue(k).text || ''); } catch (eTxt) { txt = ''; }
+      txt = txt.replace(/\r\n?/g, '\n'); // AE stores line breaks as \r — normalize for the panel
+      if (txt.replace(/\s+/g, '') === '') continue;
+      var endT = (k < tp.numKeys) ? tp.keyTime(k + 1) : layer.outPoint;
+      cues.push({
+        startSec: Math.round(tp.keyTime(k) * 1000) / 1000,
+        endSec: Math.round(endT * 1000) / 1000,
+        text: txt
+      });
+    }
+    if (!cues.length) {
+      result.message = 'Layer "' + layer.name + '" has Source Text keys but no non-empty cue text.';
+      return resultToJson(result);
+    }
+    var idxProp = null;
+    try {
+      var idxFx = layer.property('ADBE Effect Parade').property('Word Index');
+      if (idxFx) idxProp = idxFx.property('ADBE Slider Control-0001');
+    } catch (eIdx) {}
+    var anim = 'none';
+    if (idxProp && idxProp.numKeys > 0) {
+      anim = 'karaoke';
+    } else {
+      try {
+        if (layer.property('ADBE Text Properties').property('ADBE Text Animators').property('Word Reveal')) anim = 'word_reveal';
+      } catch (eAnim) {}
+    }
+    if (anim === 'karaoke') {
+      var events = [];
+      for (k = 1; k <= idxProp.numKeys; k++) {
+        events.push({ t: idxProp.keyTime(k), idx: Math.round(idxProp.keyValue(k)) });
+      }
+      for (i = 0; i < cues.length; i++) {
+        var cue = cues[i];
+        var parts = cue.text.replace(/[\r\n]+/g, ' ').split(' ');
+        var wlist = [];
+        var wi;
+        for (wi = 0; wi < parts.length; wi++) { if (parts[wi] !== '') wlist.push(parts[wi]); }
+        var words = [];
+        for (var ei = 0; ei < events.length; ei++) {
+          var ev = events[ei];
+          if (ev.idx < 1) continue;
+          if (ev.t < cue.startSec - 0.002 || ev.t >= cue.endSec - 0.0005) continue;
+          var wEnd = (ei + 1 < events.length) ? Math.min(events[ei + 1].t, cue.endSec) : cue.endSec;
+          words.push({
+            w: (ev.idx <= wlist.length) ? wlist[ev.idx - 1] : '',
+            s: Math.round(ev.t * 1000) / 1000,
+            e: Math.round(wEnd * 1000) / 1000
+          });
+        }
+        cue.words = words;
+      }
+    }
+    result.ok = true;
+    result.layerId = layer.id;
+    result.layerName = layer.name;
+    result.animation = anim;
+    result.cueCount = cues.length;
+    result.cues = cues;
+    result.message = 'Read subtitle rig "' + layer.name + '": ' + cues.length + ' cue(s), animation "' + anim + '".';
+    return resultToJson(result);
+  } catch (e) {
+    result.message = 'readSubtitleRig error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
+ * Rewrite the keyframes of an existing subtitle rig IN PLACE from updated
+ * cues: Source Text keys on the text layer and, for karaoke, the Word Index
+ * slider keys + both hidden measure layers' Source Text keys. Styling,
+ * position, animators, plate/box layers and their expressions are untouched
+ * (they reference layer NAMES, which do not change) — so an edit never
+ * breaks the animation. One undo group.
+ */
+function extensionsLlmChat_rewriteSubtitleRig (layerId, cues, opts) {
+  var result = { ok: false, message: '', layerId: null, cueCount: 0 };
+  var undoOpen = false;
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var comp = ctx.comp;
+    if (!cues || !cues.length) { result.message = 'No cues provided.'; return resultToJson(result); }
+    var layer = null;
+    var i;
+    for (i = 1; i <= comp.numLayers; i++) {
+      if (comp.layer(i).id === layerId) { layer = comp.layer(i); break; }
+    }
+    if (!layer) { result.message = 'No layer with id ' + layerId + ' in comp "' + comp.name + '".'; return resultToJson(result); }
+    var lockedMsg = _lockedRefusal(layer);
+    if (lockedMsg) { result.message = lockedMsg; return resultToJson(result); }
+    if (!(layer instanceof TextLayer)) { result.message = 'Layer "' + layer.name + '" is not a text layer.'; return resultToJson(result); }
+    var tp = layer.property('ADBE Text Properties').property('ADBE Text Document');
+    var o = opts || {};
+    var tracks = (o.karaokeTracks instanceof Array) ? o.karaokeTracks : null;
+    var idxProp = null;
+    var mPrefixProp = null;
+    var mWordProp = null;
+    if (tracks) {
+      try {
+        var idxFx = layer.property('ADBE Effect Parade').property('Word Index');
+        if (idxFx) idxProp = idxFx.property('ADBE Slider Control-0001');
+      } catch (eIdx) {}
+      var mPrefixName = layer.name + ' Measure Prefix';
+      var mWordName = layer.name + ' Measure Word';
+      for (i = 1; i <= comp.numLayers; i++) {
+        var ml = comp.layer(i);
+        if (ml.name === mPrefixName && ml instanceof TextLayer) {
+          mPrefixProp = ml.property('ADBE Text Properties').property('ADBE Text Document');
+        } else if (ml.name === mWordName && ml instanceof TextLayer) {
+          mWordProp = ml.property('ADBE Text Properties').property('ADBE Text Document');
+        }
+      }
+      if (!idxProp || !mPrefixProp || !mWordProp) {
+        var missing = [];
+        if (!idxProp) missing.push('"Word Index" slider effect');
+        if (!mPrefixProp) missing.push('layer "' + mPrefixName + '"');
+        if (!mWordProp) missing.push('layer "' + mWordName + '"');
+        result.message = 'Karaoke rig incomplete — missing ' + missing.join(', ') +
+          '. The rig was probably renamed or partially deleted; rebuild it with create_subtitles instead.';
+        return resultToJson(result);
+      }
+    }
+
+    _beginToolUndo('Agent: Update subtitles');
+    undoOpen = true;
+
+    while (tp.numKeys > 0) tp.removeKey(1);
+    var GAP_EPS = 0.08;
+    for (i = 0; i < cues.length; i++) {
+      var cue = cues[i];
+      var d = tp.value;
+      d.text = String(cue.text == null ? '' : cue.text);
+      tp.setValueAtTime(cue.startSec, d);
+      var nextStart = (i + 1 < cues.length) ? cues[i + 1].startSec : null;
+      if (nextStart === null || nextStart - cue.endSec > GAP_EPS) {
+        var dEmpty = tp.value;
+        dEmpty.text = '';
+        tp.setValueAtTime(cue.endSec, dEmpty);
+      }
+    }
+
+    if (tracks) {
+      var ti;
+      while (idxProp.numKeys > 0) idxProp.removeKey(1);
+      for (ti = 0; ti < tracks.length; ti++) idxProp.setValueAtTime(tracks[ti].t, tracks[ti].index);
+      for (ti = 1; ti <= idxProp.numKeys; ti++) {
+        try { idxProp.setInterpolationTypeAtKey(ti, KeyframeInterpolationType.HOLD, KeyframeInterpolationType.HOLD); } catch (eHold) {}
+      }
+      var mProps = [mPrefixProp, mWordProp];
+      for (var mi = 0; mi < 2; mi++) {
+        var mProp = mProps[mi];
+        while (mProp.numKeys > 0) mProp.removeKey(1);
+        for (ti = 0; ti < tracks.length; ti++) {
+          var md = mProp.value;
+          md.text = String((mi === 0 ? tracks[ti].prefix : tracks[ti].word) || '');
+          mProp.setValueAtTime(tracks[ti].t, md);
+        }
+      }
+    }
+
+    _endToolUndo();
+    undoOpen = false;
+    result.ok = true;
+    result.layerId = layer.id;
+    result.cueCount = cues.length;
+    result.message = 'Rewrote subtitle rig "' + layer.name + '" in place: ' + cues.length + ' cue(s)' +
+      (tracks ? ' + karaoke word tracks (' + tracks.length + ' keys on slider and both measure layers)' : '') +
+      '. Styling, position and animation untouched.';
+    return resultToJson(result);
+  } catch (e) {
+    if (undoOpen) { try { _endToolUndo(); } catch (x) {} }
+    result.message = 'rewriteSubtitleRig error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
 // ============================================================================
 // Capability handshake — lets the client detect a stale/incomplete host script
 // ============================================================================
@@ -5613,7 +5860,9 @@ function extensionsLlmChat_getCapabilities () {
     'extensionsLlmChat_splitLayer',
     'extensionsLlmChat_openComp',
     'extensionsLlmChat_renderCompAudio',
-    'extensionsLlmChat_createSubtitles'
+    'extensionsLlmChat_createSubtitles',
+    'extensionsLlmChat_readSubtitleRig',
+    'extensionsLlmChat_rewriteSubtitleRig'
   ];
   for (var i = 0; i < probeList.length; i++) {
     var name = probeList[i];

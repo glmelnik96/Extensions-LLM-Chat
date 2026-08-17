@@ -1300,7 +1300,7 @@
             font: { type: 'string', description: 'PostScript font name (e.g. "ArialMT"). Default: current AE default' },
             font_size: { type: 'number', description: 'Font size in px (default ~4.5% of comp height)' },
             fill_color: { type: 'array', items: { type: 'number' }, description: 'Text color [r,g,b] 0-1 (default white)' },
-            position: { type: 'string', description: '"bottom" (default), "center", or "top"' },
+            position: { type: 'string', description: '"bottom" (default), "center", or "top". Defaults sit inside YouTube safe zones: on 16:9 the text clears the bottom ~12% player controls; on vertical (Shorts) comps it sits at ~70% height, clear of the bottom-UI and side action buttons' },
             box: { type: 'boolean', description: 'Background box behind the text (default true; default false for animation "karaoke", which has its own plate)' },
             box_color: { type: 'array', items: { type: 'number' }, description: 'Box color [r,g,b] 0-1 (default black)' },
             box_opacity: { type: 'number', description: 'Box opacity 0-100 (default 60)' },
@@ -1310,6 +1310,33 @@
             max_chars_per_line: { type: 'number', description: 'Line wrap width in characters (default 20)' },
             max_lines: { type: 'number', description: 'Max lines per cue (default 2; ignored for "karaoke")' },
             max_cue_duration: { type: 'number', description: 'Max seconds per cue before splitting (default 4)' }
+          },
+          required: []
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'update_subtitles',
+        description: 'Fix the TEXT of an EXISTING subtitle rig (created by create_subtitles) without breaking its animation: keyframes are rewritten in place on the same layers and all timing is preserved (a word-count change only redistributes time inside that one cue). Use this when the transcription misheard a word — do NOT delete and re-create the rig. Call with NO `edits` first to get the numbered cue list, then pass edits: {find, replace} fixes a word/phrase wherever it occurs (case-insensitive), {cue_index, text} replaces one cue\u2019s whole text (1-based index from the listing).',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_id: { type: 'number', description: 'id of the subtitle TEXT layer. Omit to auto-detect the single subtitle rig in the active comp (errors list candidates if there are several)' },
+            edits: {
+              type: 'array',
+              description: 'Text edits. Omit to just LIST the cues with indices and timing. Each item: {find, replace} or {cue_index, text}.',
+              items: {
+                type: 'object',
+                properties: {
+                  find: { type: 'string', description: 'Word or phrase to find (case-insensitive, matched on the cue text with line breaks flattened)' },
+                  replace: { type: 'string', description: 'Replacement text (may be empty to delete the word)' },
+                  cue_index: { type: 'number', description: '1-based cue number from the listing (alternative to find/replace)' },
+                  text: { type: 'string', description: 'New full text for that cue (used with cue_index)' }
+                }
+              }
+            }
           },
           required: []
         }

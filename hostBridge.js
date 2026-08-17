@@ -183,7 +183,12 @@
       try {
         require('child_process').execFile(
           bin,
-          ['-hide_banner', '-nostats', '-i', audioPath, '-af', 'silencedetect=noise=-30dB:d=0.5', '-f', 'null', '-'],
+          // d=0.3 (not 0.5): sentence-internal pauses of 0.3-0.5s are common
+          // in normal speech and karaoke word timing visibly drifts when they
+          // are invisible to the aligner. _speechIntervals subtracts silences
+          // >= 0.3s and parseSilencedetect merges sub-0.35s voiced blips, so
+          // the shorter window slots straight into the existing pipeline.
+          ['-hide_banner', '-nostats', '-i', audioPath, '-af', 'silencedetect=noise=-30dB:d=0.3', '-f', 'null', '-'],
           { timeout: 120000, maxBuffer: 16 * 1024 * 1024 },
           function (err, stdout, stderr) {
             // A killed/timed-out run has PARTIAL stderr — missing silences would
@@ -362,6 +367,84 @@
   }
 
   /**
+   * update_subtitles: fix wording in an existing subtitle rig WITHOUT
+   * re-timing anything. Reads the rig back from its own keyframes (host),
+   * applies text edits (PURE_SUBTITLES.applySubtitleEdits — word-count-
+   * preserving edits keep per-word times verbatim), rebuilds karaoke tracks
+   * if needed, and rewrites the keys in place on the SAME layers (host).
+   * With no edits it returns the numbered cue list so the agent can target
+   * cue_index precisely.
+   */
+  function _updateSubtitles (args) {
+    var readCall = 'extensionsLlmChat_readSubtitleRig(' +
+      toESLiteral((typeof args.layer_id === 'number') ? args.layer_id : null) + ')'
+    return evalHostFunction(readCall).then(function (rig) {
+      if (!rig || rig.ok !== true) return rig
+      var edits = (args.edits && args.edits.length) ? args.edits : null
+      if (!edits) {
+        var listing = []
+        for (var li = 0; li < rig.cues.length; li++) {
+          var lc = rig.cues[li]
+          listing.push('#' + (li + 1) + ' [' + Number(lc.startSec).toFixed(2) + '-' + Number(lc.endSec).toFixed(2) + 's] ' +
+            String(lc.text).replace(/\n/g, ' | '))
+        }
+        return {
+          ok: true,
+          message: 'Subtitle rig "' + rig.layerName + '" (layer_id ' + rig.layerId + ', animation "' + rig.animation + '"), ' +
+            rig.cueCount + ' cue(s):\n' + listing.join('\n') +
+            '\nNothing changed — call update_subtitles again with `edits` ({find, replace} or {cue_index, text}).',
+          layerId: rig.layerId,
+          layerName: rig.layerName,
+          animation: rig.animation,
+          cueCount: rig.cueCount
+        }
+      }
+      // Re-wrap with the rig's EXISTING look: the widest current line is the
+      // effective wrap width (create_subtitles' maxChars is not persisted).
+      var maxChars = 0
+      var maxLines = 1
+      for (var ci = 0; ci < rig.cues.length; ci++) {
+        var ls = String(rig.cues[ci].text || '').split('\n')
+        if (ls.length > maxLines) maxLines = ls.length
+        for (var si = 0; si < ls.length; si++) { if (ls[si].length > maxChars) maxChars = ls[si].length }
+      }
+      if (rig.animation === 'karaoke') maxLines = 1
+      if (maxChars < 10) maxChars = 10
+      var r = window.PURE_SUBTITLES.applySubtitleEdits(rig.cues, edits, { maxCharsPerLine: maxChars, maxLines: maxLines })
+      if (!r.changedIndexes.length) {
+        return {
+          ok: false,
+          message: 'update_subtitles: no cue changed.' +
+            (r.notFound.length ? ' Not found in any cue: "' + r.notFound.join('", "') + '" — call update_subtitles without edits to see the exact cue text.' : '') +
+            (r.warnings.length ? ' ' + r.warnings.join(' ') : '')
+        }
+      }
+      var hostCues = []
+      for (var hi = 0; hi < r.cues.length; hi++) {
+        hostCues.push({ startSec: r.cues[hi].startSec, endSec: r.cues[hi].endSec, text: r.cues[hi].text })
+      }
+      var rewriteOpts = {}
+      if (rig.animation === 'karaoke') {
+        rewriteOpts.karaokeTracks = window.PURE_SUBTITLES.buildKaraokeTracks(r.cues, 0.08)
+      }
+      var rewriteCall = 'extensionsLlmChat_rewriteSubtitleRig(' +
+        toESLiteral(rig.layerId) + ',' + toESLiteral(hostCues) + ',' + toESLiteral(rewriteOpts) + ')'
+      return evalHostFunction(rewriteCall, 120000).then(function (res) {
+        if (res && res._nonJson) {
+          return { ok: false, message: 'Host returned a non-JSON result (likely an ExtendScript error): ' + String(res.raw == null ? '' : res.raw).slice(0, 300) }
+        }
+        if (res && res.ok === true) {
+          res.changedCues = r.changedIndexes
+          res.message = 'Updated cue(s) ' + r.changedIndexes.join(', ') + '. ' + res.message +
+            (r.notFound.length ? ' NOT found (left unchanged): "' + r.notFound.join('", "') + '".' : '') +
+            (r.warnings.length ? ' WARNING: ' + r.warnings.join(' ') : '')
+        }
+        return res
+      })
+    })
+  }
+
+  /**
    * Salvage array arguments that the model emitted as a JSON STRING instead
    * of a real array. Observed live (round-5, GLM-4.7): set_keyframes_batch
    * got `targets: "[{\"layer_id\": 1, ...}]"` and hard-failed on validation,
@@ -369,7 +452,7 @@
    * never legitimately strings, so parsing them is safe; anything that does
    * not parse to an array is left as-is for _validateRequiredArgs to reject.
    */
-  var _ARRAY_ARG_NAMES = { targets: 1, keyframes: 1, layer_indices: 1, calls: 1 }
+  var _ARRAY_ARG_NAMES = { targets: 1, keyframes: 1, layer_indices: 1, calls: 1, edits: 1, segments: 1 }
   function _unstringifyArrayArgs (args) {
     // Duck-typed array check (like isArr in _validateRequiredArgs): args may
     // cross JS-context boundaries where `instanceof Array` lies.
@@ -1244,6 +1327,14 @@
         })
       case 'create_subtitles':
         return _createSubtitles(args).then(function (res) {
+          _recordToolOutcome(toolName, args, res)
+          return res
+        }, function (err) {
+          _recordToolOutcome(toolName, args, { ok: false, message: (err && err.message) || String(err) })
+          throw err
+        })
+      case 'update_subtitles':
+        return _updateSubtitles(args).then(function (res) {
           _recordToolOutcome(toolName, args, res)
           return res
         }, function (err) {
