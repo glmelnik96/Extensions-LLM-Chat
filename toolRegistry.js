@@ -248,7 +248,7 @@
       type: 'function',
       function: {
         name: 'set_layer_timing',
-        description: 'Set in point, out point, and/or start time for a layer (in seconds).',
+        description: 'Set in point, out point, and/or start time for a layer (in seconds). USE THIS for "visible from A to B" / "show only between X and Y" / "starts at" requests — a trim is a hard cut. Opacity keyframes are NOT a substitute: linear 0→100→0 ramps leave the layer half-transparent for most of its window; if opacity must be used, take hold keys.',
         parameters: {
           type: 'object',
           properties: {
@@ -298,8 +298,8 @@
                 properties: {
                   time: { type: 'number', description: 'Time in seconds' },
                   value: { description: 'Value — number for 1D properties, array for multi-dimensional' },
-                  in_type: { type: 'string', enum: ['linear', 'bezier', 'hold'], description: 'Incoming interpolation (default: bezier)' },
-                  out_type: { type: 'string', enum: ['linear', 'bezier', 'hold'], description: 'Outgoing interpolation (default: bezier)' },
+                  in_type: { type: 'string', enum: ['linear', 'bezier', 'hold'], description: 'Incoming interpolation (default: bezier). hold = the value jumps at the key: use hold for on/off switching and visibility windows' },
+                  out_type: { type: 'string', enum: ['linear', 'bezier', 'hold'], description: 'Outgoing interpolation (default: bezier). hold = the value stays until the next key' },
                   ease_in: {
                     type: 'array',
                     items: { type: 'object', properties: { speed: { type: 'number' }, influence: { type: 'number' } } },
@@ -498,8 +498,8 @@
                       properties: {
                         time: { type: 'number', description: 'Time in seconds' },
                         value: { description: 'Value — number for 1D properties, array for multi-dimensional' },
-                        in_type: { type: 'string', enum: ['linear', 'bezier', 'hold'], description: 'Incoming interpolation (default: bezier)' },
-                        out_type: { type: 'string', enum: ['linear', 'bezier', 'hold'], description: 'Outgoing interpolation (default: bezier)' },
+                        in_type: { type: 'string', enum: ['linear', 'bezier', 'hold'], description: 'Incoming interpolation (default: bezier). hold = the value jumps at the key: use hold for on/off switching and visibility windows' },
+                        out_type: { type: 'string', enum: ['linear', 'bezier', 'hold'], description: 'Outgoing interpolation (default: bezier). hold = the value stays until the next key' },
                         ease_in: {
                           type: 'array',
                           items: { type: 'object', properties: { speed: { type: 'number' }, influence: { type: 'number' } } },

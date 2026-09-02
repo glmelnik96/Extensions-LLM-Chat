@@ -57,6 +57,14 @@
        *  and fixes. Once per run — closes the loop on "reported but not done". */
       agentVerifyTurn: true,
 
+      /** Tool gating (2026-09-02): offer the model CORE tool schemas plus the
+       *  groups the conversation mentions (shapes, masks, effects, expressions,
+       *  3D, markers, project, compositing, subtitles, capture); a gated group
+       *  loads on demand when the model calls one of its tools. Eval corpus
+       *  2026-09-02: same pass-rate as ungated (19/21), -21% prompt tokens per
+       *  call, -24% wall-clock. Set false to offer all 69 schemas every call. */
+      agentToolGating: true,
+
       /** ── Token→ruble pricing (Cloud.ru tariffs) ──────────────────────────
        *  ₽ per 1,000,000 tokens (Cloud.ru tariffs, update as prices change).
        *  Cost is priced per usage event with the split input (prompt) / output

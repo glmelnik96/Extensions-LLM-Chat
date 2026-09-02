@@ -29,6 +29,7 @@ node_modules/
 # E2E test reports (generated, timestamped)
 scripts/e2e-report-*.json
 scripts/cost-report-*.json
+scripts/eval-report-*.json
 
 # Local project memory/artifacts
 .omc/

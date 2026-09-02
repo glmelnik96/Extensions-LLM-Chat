@@ -1243,6 +1243,26 @@ function _parentCloneExprError (layer, targetProp, expressionText) {
           '(e.g. `value + wiggle(freq, amp)`); parenting already applies the parent\'s movement.';
       }
     }
+    // Same disease, other properties (eval corpus 2026-09-02: "speed up the
+    // moon" ended with the child's Position rotating by the parent's rotation
+    // ON TOP of the parent's own rotation — the orbit ran at 6x, not 3x).
+    var kinds = ['rotation', 'scale', 'anchorPoint'];
+    for (var k = 0; k < kinds.length; k++) {
+      var kindRefs = [
+        'layer("' + pn + '").transform.' + kinds[k],
+        'layer("' + pn + '").' + kinds[k],
+        "layer('" + pn + "').transform." + kinds[k],
+        "layer('" + pn + "')." + kinds[k]
+      ];
+      for (var r = 0; r < kindRefs.length; r++) {
+        if (expressionText.indexOf(kindRefs[r]) !== -1) {
+          return 'Rejected: this expression reads the ' + kinds[k] + ' of "' + pn + '", which is the PARENT of layer "' +
+            layer.name + '". Parenting ALREADY applies the parent\'s ' + kinds[k] + ' to this layer, so re-applying it ' +
+            'in the child\'s Position doubles the motion (an orbit spins twice as fast, a scaled parent scales twice). ' +
+            'Keep the child\'s Position a plain offset in parent space (e.g. [300, 0]) and change the PARENT\'s ' + kinds[k] + ' instead.';
+        }
+      }
+    }
   } catch (e) {}
   return '';
 }
@@ -2026,6 +2046,33 @@ function _applyKeyframesToProp (prop, keyframes) {
  * it. Live round-5 evidence (GLM-4.7): adding "70→100%" Scale keys on top of
  * an existing intro animation produced mangled values like [70, 100, 0, 100].
  */
+/**
+ * Before the FIRST keyframe a property holds that key's value — AE has no
+ * "static value before the keys". Eval corpus 2026-09-02 (explicit-mapping):
+ * set_property_value(0) + keys 1s→100 / 2s→0 was meant as "hidden until 1s"
+ * and showed the layer from t=0. Only visibility-class properties (Opacity,
+ * Scale) with a VISIBLE first key that sits after the in-point get the note.
+ * Returns '' when not applicable.
+ */
+function _firstKeyNote (layer, prop) {
+  try {
+    if (!layer || !prop || prop.numKeys < 1) return '';
+    var mn = prop.matchName;
+    if (mn !== 'ADBE Opacity' && mn !== 'ADBE Scale') return '';
+    var frameDur = 1 / 30;
+    try { if (layer.containingComp && layer.containingComp.frameDuration > 0) frameDur = layer.containingComp.frameDuration; } catch (eFd) {}
+    var t1 = prop.keyTime(1);
+    if (t1 <= layer.inPoint + frameDur) return '';
+    var v1 = prop.keyValue(1);
+    var visible = (v1 instanceof Array) ? (Math.abs(v1[0]) > 0.5 && Math.abs(v1[1]) > 0.5) : (v1 > 0.5);
+    if (!visible) return '';
+    var vs = (v1 instanceof Array) ? '[' + _r2(v1).join(', ') + ']' : String(_r2(v1));
+    return ' NOTE: before the first key (t=' + _r2(t1) + 's) this property holds the first key\'s value ' + vs +
+      ' — the layer is VISIBLE from its in-point (t=' + _r2(layer.inPoint) + 's), not from ' + _r2(t1) + 's; a value set earlier with set_property_value does not survive keyframes.' +
+      ' If it must be hidden until ' + _r2(t1) + 's, add a key at the in-point with the off value (hold keys for a hard switch) or trim the layer with set_layer_timing.';
+  } catch (e) { return ''; }
+}
+
 function _mergedKeysNote (prevKeys, prop) {
   if (!(prevKeys > 0)) return '';
   return ' WARNING: this property ALREADY had ' + prevKeys + ' keyframe(s) — your new keys were MERGED into the existing animation (now ' + prop.numKeys + ' total), they did NOT replace it. If you meant to REPLACE the animation, first delete the old keyframes (delete_keyframes / remove them), or set new values at the EXISTING key times.';
@@ -2064,6 +2111,8 @@ function extensionsLlmChat_addKeyframes (layerIndex, layerId, propertyPath, keyf
     if (kfRemapNote) { result.timeRemapEnabled = true; kfMsg += kfRemapNote; }
     var kfMergeNote = _mergedKeysNote(kfPrevKeys, prop);
     if (kfMergeNote) { result.mergedIntoExisting = true; kfMsg += kfMergeNote; }
+    var kfFirstNote = _firstKeyNote(layer, prop);
+    if (kfFirstNote) { result.firstKeyNote = true; kfMsg += kfFirstNote; }
     var kfPsNote = _parentSpaceNote(layer, propertyPath);
     if (kfPsNote) { result.parentSpace = true; kfMsg += kfPsNote; }
     var kfHiddenMsg = _hiddenLayerWarning(layer);
@@ -2164,6 +2213,8 @@ function extensionsLlmChat_setKeyframesBatch (targets) {
         if (kbRemapNote) { itemResult.timeRemapEnabled = true; itemResult.message += kbRemapNote; }
         var kbMergeNote = _mergedKeysNote(kbPrevKeys, prop);
         if (kbMergeNote) { itemResult.mergedIntoExisting = true; itemResult.message += kbMergeNote; }
+        var kbFirstNote = _firstKeyNote(layer, prop);
+        if (kbFirstNote) { itemResult.firstKeyNote = true; itemResult.message += kbFirstNote; }
         var kbPsNote = _parentSpaceNote(layer, propertyPath);
         if (kbPsNote) { itemResult.parentSpace = true; itemResult.message += kbPsNote; }
         var kbHiddenMsg = _hiddenLayerWarning(layer);
@@ -2986,6 +3037,8 @@ function extensionsLlmChat_probeMotion (layerIndex, layerId, propertyPath, times
       return (String(a) === String(b)) ? 0 : 1;
     }
 
+    var fd = comp.frameDuration > 0 ? comp.frameDuration : (1 / 30);
+    var autoSpaced = !(times instanceof Array) || ts.length === 0 || (times instanceof Array && times.length === 0);
     var first = null;
     var maxDelta = 0;
     var anyVisible = false;
@@ -3019,11 +3072,23 @@ function extensionsLlmChat_probeMotion (layerIndex, layerId, propertyPath, times
       result.samples.push({ t: _r2(t), value: _r2(val), visible: visible });
     }
 
+    // Instantaneous speed at the first sample, measured over ONE frame. This
+    // number cannot alias: evenly spaced samples over the visible window can
+    // land on the same phase of a fast rotation/orbit and look static or
+    // random (eval corpus 2026-09-02: a correct 3x-faster orbit read as
+    // "random" from 5 samples and the model started "fixing" a healthy rig).
+    var speed = null;
+    try {
+      var sa = useComp ? _compSpacePosition(layer, ts[0]) : prop.valueAtTime(ts[0], false);
+      var sb = useComp ? _compSpacePosition(layer, ts[0] + fd) : prop.valueAtTime(ts[0] + fd, false);
+      if (typeof sa === 'number' || sa instanceof Array) speed = _r2(dist(sa, sb) / fd);
+    } catch (eSp) {}
     var summary = {
-      changes: maxDelta > 0.001,
+      changes: maxDelta > 0.001 || (speed !== null && speed > 0.001),
       maxDelta: _r2(maxDelta),
       first: result.samples[0].value,
       last: result.samples[result.samples.length - 1].value,
+      speed: speed,
       numKeys: 0,
       hasExpression: false,
       expressionError: ''
@@ -3037,6 +3102,12 @@ function extensionsLlmChat_probeMotion (layerIndex, layerId, propertyPath, times
       (useComp ? ' in COMP space (parent chain applied)' : '') + ': ' +
       (summary.changes ? 'value CHANGES over time, max delta ' + summary.maxDelta : 'value is STATIC (no change across samples)') +
       ' (' + summary.numKeys + ' key(s), expression ' + (summary.hasExpression ? 'on' : 'off') + ').';
+    if (speed !== null) {
+      msg += ' Speed at t=' + _r2(ts[0]) + 's: ' + speed + ' units/s (px, deg or % per second, measured over one frame) — compare speeds to judge "faster/slower"; sparse samples can alias fast periodic motion.';
+    }
+    if (autoSpaced && ts.length < 12) {
+      msg += ' Samples are evenly spaced over the visible window: for anything that rotates or cycles faster than once per ' + _r2((ts[ts.length - 1] - ts[0]) / Math.max(1, ts.length - 1) * 2) + 's, pass explicit `times` a few frames apart.';
+    }
     if (!anyVisible) {
       msg += ' WARNING: the layer is NOT visible at any sampled time (video switch, in/out window, opacity 0 or scale 0) — whatever it does is not seen.';
     }
@@ -6190,7 +6261,8 @@ function extensionsLlmChat_getCapabilities () {
     'extensionsLlmChat_readSubtitleRig',
     'extensionsLlmChat_rewriteSubtitleRig',
     'extensionsLlmChat_probeMotion',
-    '_compSpacePosition'
+    '_compSpacePosition',
+    '_firstKeyNote'
   ];
   for (var i = 0; i < probeList.length; i++) {
     var name = probeList[i];

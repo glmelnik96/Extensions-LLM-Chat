@@ -1859,6 +1859,7 @@
       // default ON; config flags turn them off.
       planTurn: agentCfg.agentPlanTurn !== false,
       verifyTurn: agentCfg.agentVerifyTurn !== false,
+      toolGating: agentCfg.agentToolGating !== false,
       getSceneDiff: function () { return sceneDiffSince(beforeSnap) },
       onPlan: function (planText) {
         _setThinkingLabel('Agent · plan ready, executing…')

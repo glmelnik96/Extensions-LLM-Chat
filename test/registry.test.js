@@ -294,6 +294,14 @@ test('registry: update_subtitles (2026-08-17) registered with correct schema', (
   assert.match(us.function.description, /do NOT delete and re-create/i, 'steers away from rebuild')
 })
 
+test('registry: timing/hold guidance for "visible from A to B" requests (2026-09-02)', () => {
+  assert.match(findTool('set_layer_timing').function.description, /visible from A to B/)
+  const kf = findTool('add_keyframes').function.parameters.properties.keyframes.items.properties
+  assert.match(kf.in_type.description, /hold = the value jumps/)
+  const bt = findTool('set_keyframes_batch').function.parameters.properties.targets.items.properties.keyframes.items.properties
+  assert.match(bt.out_type.description, /hold = the value stays/)
+})
+
 test('prompt: closed-loop rules present (2026-09-02)', () => {
   const full = builder.buildFull()
   assert.match(full, /Reason from THESE values/, 'summary values are the source of truth')
@@ -314,23 +322,23 @@ test('prompt: subtitles guidance present', () => {
 
 test('prompt: round-3 hardening bullets present (2026-08-16)', () => {
   const full = builder.buildFull()
-  assert.match(full, /Map sequences by the NAMES the user lists/, 'name-order mapping rule')
+  assert.match(full, /Follow the ORDER the request gives/, 'name-order mapping rule')
   assert.match(full, /REVERSE of naming\/creation order/, 'stacking-order inversion warning')
   assert.match(full, /Locked layers.*`locked: true`.*mutating tools refuse such layers/, 'locked-layer refusal rule')
-  assert.match(full, /Keep every batch ≤ 8 inner calls/, 'batch size cap')
-  assert.match(full, /do NOT retry the same giant batch/, 'no giant-batch retry')
-  assert.match(full, /Position is in PARENT space/, 'parent-space position rule')
-  assert.match(full, /value \+ wiggle\(freq, amp\)/, 'value-base example')
-  assert.match(full, /host REJECTS parent-position-clone expressions/, 'host rejection mentioned')
+  assert.match(full, /≤ 8 inner calls each/, 'batch size cap')
+  assert.match(full, /split the batch, never resend it/, 'no giant-batch retry')
+  assert.match(full, /live in PARENT space/, 'parent-space position rule')
+  assert.match(full, /value [+] wiggle[(]f, a[)]/, 'value-base example')
+  assert.match(full, /host REJECTS expressions that read the parent/, 'host rejection mentioned')
   assert.match(full, /Scale your design to THIS comp/, 'comp-dimension scaling rule')
   assert.match(full, /Center = \[width\/2, height\/2\]/, 'dynamic center rule')
-  assert.match(full, /If the requested state ALREADY exists, change nothing/, 'already-satisfied rule')
-  assert.match(full, /DOUBLES the stagger/, 'stagger-doubling example')
+  assert.match(full, /If the requested state already exists, change nothing/, 'already-satisfied rule')
+  assert.match(full, /DOUBLES? (the stagger|it)/, 'stagger-doubling example')
 })
 
 test('prompt: round-4 hardening bullets present (2026-08-16)', () => {
   const full = builder.buildFull()
-  assert.match(full, /Parent space applies to VALUES too/, 'parent-space values rule')
+  assert.match(full, /Parented layers live in PARENT space — values AND expressions/, 'parent-space values rule')
   assert.match(full, /video switch OFF \(`enabled: false` in the comp summary\) renders NOTHING/, 'hidden-layer rule')
   assert.match(full, /contrast and size/, 'contrast/size rule')
   assert.match(full, /data being correct does NOT refute a visibility report/, 'data vs visibility rule')
@@ -338,5 +346,5 @@ test('prompt: round-4 hardening bullets present (2026-08-16)', () => {
   assert.match(full, /linear\(slider, 0, 100, min, max\)/, 'linear mapping example')
   assert.match(full, /Do not build rigs on `thisLayer\.index`/, 'no index rigs rule')
   assert.match(full, /Rename duplicates/, 'rename duplicates rule')
-  assert.match(full, /Explicit constraints in the request are HARD limits/, 'hard constraints rule')
+  assert.match(full, /Explicit constraints are HARD limits/, 'hard constraints rule')
 })

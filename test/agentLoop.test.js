@@ -15,6 +15,8 @@ function loadLoop () {
   const code = fs.readFileSync(path.join(__dirname, '..', 'agentToolLoop.js'), 'utf8')
   const sandbox = { window: {}, console }
   vm.createContext(sandbox)
+  // Tool gating module (pure) — the loop looks it up on window when options.toolGating is set.
+  vm.runInContext(fs.readFileSync(path.join(__dirname, '..', 'lib', 'pure', 'toolGating.js'), 'utf8'), sandbox, { filename: 'toolGating.js' })
   vm.runInContext(code, sandbox, { filename: 'agentToolLoop.js' })
   return sandbox.window
 }
@@ -395,7 +397,28 @@ test('loop: plan turn runs tool-less first, keeps the plan in history, prepends 
   assert.ok(calls[1].options.tools && calls[1].options.tools.length === 1, 'tool turn has tools')
   assert.ok(calls[1].messages.some(m => m.role === 'assistant' && /PLAN: 1\)/.test(m.content)), 'plan stays in the loop history')
   assert.strictEqual(result.content, 'PLAN: 1) target Circle 2) no constraints 3) opacity 0→100 4) add_keyframes\n\nГотово: opacity анимирована.')
+  assert.strictEqual(result.outcome, 'Готово: opacity анимирована.', 'outcome = final message without the plan')
+  assert.strictEqual(result.plan, 'PLAN: 1) target Circle 2) no constraints 3) opacity 0→100 4) add_keyframes')
   assert.strictEqual(result.toolCallLog.length, 1)
+})
+
+test('loop: verify turn reports layers unlocked during the run (also inside batch_call)', async () => {
+  const win = loadLoop()
+  const calls = scriptProvider(win, [
+    resp(toolCallMsg('batch_call', { calls: [{ tool: 'set_layer_switches', args: { layer_id: 160, locked: false } }, { tool: 'set_property_value', args: { layer_id: 160, property_path: 'Transform>Position', value: [740, 640] } }, { tool: 'set_layer_switches', args: { layer_id: 160, locked: true } }] }), 'tool_calls'),
+    resp({ role: 'assistant', content: 'Сдвинул.' }, 'stop'),
+    resp({ role: 'assistant', content: 'Сдвинул (слой был заблокирован — снял и вернул блокировку).' }, 'stop')
+  ])
+  fakeHost(win)
+  const result = await win.AGENT_TOOL_LOOP.runAgentLoop({
+    modelId: 'm', messages: [{ role: 'user', content: 'сдвинь Card 2 вниз' }], tools: ONE_TOOL,
+    verifyTurn: true, getSceneDiff: () => Promise.resolve({ text: '~ "Card 2": position: [740,540,0] → [740,640,0]', changed: true })
+  })
+  const verifyReq = calls[2].messages[calls[2].messages.length - 1].content
+  assert.match(verifyReq, /UNLOCKED layer\(s\) during this run \(layer_id 160\)/)
+  assert.match(result.outcome, /снял и вернул/)
+  assert.strictEqual(JSON.stringify(win.AGENT_TOOL_LOOP.collectUnlocks([{ name: 'set_layer_switches', status: 'ok', args: { layer_index: 3, locked: false } }, { name: 'set_layer_switches', status: 'ok', args: { layer_id: 5, locked: true } }])), JSON.stringify(['layer_index 3']))
+  assert.ok(!/UNLOCKED/.test(win.AGENT_TOOL_LOOP.buildVerifyMessage({ text: 'x', changed: true }, [])))
 })
 
 test('loop: plan turn [[final]] marker short-circuits pure questions', async () => {
@@ -474,6 +497,32 @@ test('loop: verify turn is skipped for read-only runs, and flags a run that chan
   const hiddenMsg = win.AGENT_TOOL_LOOP.buildVerifyMessage({ text: '~ "Label" [video switch OFF — not visible]: scale: [100,100,100] → [80,80,100]', changed: true })
   assert.match(hiddenMsg, /renders NOTHING/)
   assert.match(hiddenMsg, /set_layer_switches enabled:true/)
+})
+
+test('loop: tool gating offers CORE + keyword groups and loads a gated group on demand', async () => {
+  const win = loadLoop()
+  const tools = ['create_layer', 'add_mask', 'apply_expression', 'set_camera_properties'].map(n => ({ type: 'function', function: { name: n, parameters: { type: 'object', properties: {} } } }))
+  const calls = scriptProvider(win, [
+    resp(toolCallMsg('add_mask', { layer_id: 1 }), 'tool_calls'),
+    resp({ role: 'assistant', content: 'Маска добавлена.' }, 'stop')
+  ])
+  fakeHost(win)
+  const result = await win.AGENT_TOOL_LOOP.runAgentLoop({
+    modelId: 'm', messages: [{ role: 'user', content: 'сделай так, чтобы слой мигал через выражение' }], tools, toolGating: true
+  })
+  const names = c => (c.options.tools || []).map(t => t.function.name)
+  assert.strictEqual(JSON.stringify(names(calls[0])), JSON.stringify(['create_layer', 'apply_expression']), 'turn 1: CORE + expressions (keyword), masks/3D gated')
+  assert.strictEqual(JSON.stringify(names(calls[1])), JSON.stringify(['create_layer', 'add_mask', 'apply_expression']), 'turn 2: masks loaded on demand after the model called add_mask')
+  assert.strictEqual(result.toolCallLog[0].name, 'add_mask')
+  assert.strictEqual(result.toolCallLog[0].status, 'ok', 'the gated call still executed')
+  assert.strictEqual(JSON.stringify(result.toolGating.initialGroups), JSON.stringify(['expressions']))
+  assert.strictEqual(JSON.stringify(result.toolGating.loadedOnDemand), JSON.stringify(['masks']))
+  assert.strictEqual(result.toolGating.allTools, 4)
+  // Off by default: every tool is offered and no toolGating summary is attached.
+  const calls2 = scriptProvider(win, [resp({ role: 'assistant', content: 'ок' }, 'stop')])
+  const r2 = await win.AGENT_TOOL_LOOP.runAgentLoop({ modelId: 'm', messages: [{ role: 'user', content: 'привет' }], tools })
+  assert.strictEqual(names(calls2[0]).length, 4)
+  assert.strictEqual(r2.toolGating, undefined)
 })
 
 test('loop: probe_motion is read-only (parallelizable, not counted for Undo)', () => {

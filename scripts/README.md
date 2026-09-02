@@ -66,3 +66,34 @@ node scripts/e2e-golden.js --timeout 300
 - Agent runs are sequential; the panel must be idle between scenarios.
 - Agent calls use real LLM API tokens. A full suite run typically takes 3-8
   minutes and costs ~20-50k tokens depending on the model.
+
+## `eval-corpus.js` — behaviour eval corpus (pass-rate, not vibes)
+
+Runs a fixed corpus of human-style Russian requests (`eval-cases.js`, 21 cases) against the REAL agent loop in a running AE and checks the resulting comp state semantically. Every case gets a fresh fixture in the `Eval-Comp` composition, one or more agent turns (plan + verify + scene diff wired exactly like `main.js`), a structural probe (values at times, comp-space positions, keyframe/expression info, switches, colors, text) and pure check functions. Checks test observable outcomes, never the method — keyframes and expressions both pass.
+
+### Usage
+
+```bash
+# full corpus (≈ 10–20 min, real LLM calls)
+node scripts/eval-corpus.js
+
+# subset by id / tag / count
+node scripts/eval-corpus.js --only fade-in,orbit-faster
+node scripts/eval-corpus.js --tag guard
+node scripts/eval-corpus.js --limit 5
+
+# A/B the harness: plan-first turn, verify turn and tool gating on/off
+node scripts/eval-corpus.js --plan off --verify off
+node scripts/eval-corpus.js --gating on
+
+# another model, and a regression comparison against an earlier report
+node scripts/eval-corpus.js --model MiniMaxAI/MiniMax-M2.5 --compare scripts/eval-report-<ts>.json
+```
+
+### Output
+
+Console: per-case PASS/FAIL lines with measured details, the tool chain, tokens, seconds and the scene diff; a summary with pass-rate per tag. JSON report `scripts/eval-report-<timestamp>.json` (gitignored) carries `meta` (model, `planTurn`/`verifyTurn`, `promptHash` = sha1 of `agentSystemPrompt.js` + `toolRegistry.js`, `gitRev`), every case with its checks, calls, failed calls, usage, plan text, diff text and final answer, and `summary` (cases, checks, tokens, time, byTag).
+
+### Adding a case
+
+Add an entry to `cases` in `eval-cases.js`: `{ id, tags, fixture, prompt, sampleTimes?, preProbe?, checks(after, before, run) }` — `after`/`before` are probe states (see `probeState` in the runner), `run` has `content`, `toolCallLog`, `diffText`, `plan`, `usage`. Reuse a fixture or add one to `fixtures` (ExtendScript ES3 inside `fx(...)`; helpers `circle`, `solid`, `pos`). Multi-turn cases use `turns: [{ prompt, checks }]` with shared history.

@@ -49,6 +49,18 @@
     var systemPrompt = options.systemPrompt || ''
     var conversationMessages = options.messages || []
     var tools = options.tools || (window.AGENT_TOOL_REGISTRY && window.AGENT_TOOL_REGISTRY.tools) || []
+    // Tool gating (2026-09-02, lib/pure/toolGating.js): the 69 schemas cost
+    // ~17k tokens per model call. With options.toolGating the model is offered
+    // CORE tools + the groups the conversation mentions; a gated group is
+    // loaded the moment the model calls one of its tools (it knows the names
+    // from the prompt), and that call still executes — a missed keyword costs
+    // nothing but one schema-less call.
+    var gating = options.toolGating === true && !!window.PURE_TOOL_GATING && tools.length > 0
+    var allTools = tools
+    var activeGroups = gating ? window.PURE_TOOL_GATING.initialGroups(conversationMessages) : []
+    var initialGroupsSnapshot = activeGroups.slice()
+    var loadedOnDemand = []
+    if (gating) tools = window.PURE_TOOL_GATING.selectTools(allTools, activeGroups)
     var maxSteps = (typeof options.maxSteps === 'number') ? options.maxSteps : DEFAULT_MAX_STEPS
     var temperature = (typeof options.temperature === 'number') ? options.temperature : DEFAULT_TEMPERATURE
     var onToolCall = options.onToolCall || function () {}
@@ -241,6 +253,7 @@
             // Push the assistant message with tool_calls into conversation.
             messages.push(assistantMsg)
 
+            if (gating) expandGroupsFor(toolCalls)
             return executeToolCallsSequentially(toolCalls, toolCallLog, onToolCall)
               .then(function (results) {
                 // Push each tool result as a tool message.
@@ -307,17 +320,13 @@
             verifyUsed = true
             return options.getSceneDiff().then(function (diff) {
               messages.push({ role: 'assistant', content: content })
-              messages.push({ role: 'user', content: buildVerifyMessage(diff) })
+              messages.push({ role: 'user', content: buildVerifyMessage(diff, collectUnlocks(toolCallLog)) })
               return step(stepIndex + 1)
             }, function () {
-              return { content: composeFinal(content), toolCallLog: toolCallLog, usage: totalUsage }
+              return finalResult(content)
             })
           }
-          return {
-            content: composeFinal(content),
-            toolCallLog: toolCallLog,
-            usage: totalUsage
-          }
+          return finalResult(content)
         })
     }
 
@@ -327,6 +336,13 @@
         totalUsage.completion_tokens += response.usage.completion_tokens || 0
         totalUsage.total_tokens += response.usage.total_tokens || 0
       }
+    }
+
+    // Result shape: `content` = what the user sees (plan + outcome), `outcome`
+    // = the model's final message alone (what evals and guards should judge),
+    // `plan` = the plan-turn text ('' when no plan turn ran).
+    function finalResult (content) {
+      return { content: composeFinal(content), outcome: content, plan: planText, toolCallLog: toolCallLog, usage: totalUsage }
     }
 
     // The plan is shown to the user once; the outcome follows it. With no
@@ -359,11 +375,8 @@
           return step(0)
         }
         if (text.indexOf(PLAN_FINAL_MARKER) !== -1) {
-          return {
-            content: text.split(PLAN_FINAL_MARKER).join('').replace(/^\s+|\s+$/g, ''),
-            toolCallLog: toolCallLog,
-            usage: totalUsage
-          }
+          var answer = text.split(PLAN_FINAL_MARKER).join('').replace(/^\s+|\s+$/g, '')
+          return { content: answer, outcome: answer, plan: '', toolCallLog: toolCallLog, usage: totalUsage }
         }
         planText = text.replace(/\s+$/, '')
         messages.push({ role: 'assistant', content: planText })
@@ -375,8 +388,38 @@
     // Attach the partial tool log to any rejection so the UI can render
     // already-executed calls (layers may exist in AE even when the LLM call
     // later times out) and replay them to the model on the next turn (P0-3).
+    // Load the groups of any gated tool the model is calling (also inside
+    // batch_call items) so its schema is visible from the next turn on.
+    function expandGroupsFor (calls) {
+      var TG = window.PURE_TOOL_GATING
+      var names = []
+      for (var i = 0; i < calls.length; i++) {
+        var fn = calls[i] && calls[i].function
+        if (!fn) continue
+        names.push(fn.name)
+        if (fn.name === 'batch_call') {
+          try {
+            var parsed = typeof fn.arguments === 'string' ? JSON.parse(fn.arguments) : fn.arguments
+            var items = (parsed && parsed.calls) || []
+            for (var b = 0; b < items.length; b++) if (items[b] && items[b].tool) names.push(items[b].tool)
+          } catch (_) {}
+        }
+      }
+      var added = false
+      for (var n = 0; n < names.length; n++) {
+        var g = TG.groupOfTool(names[n])
+        if (g && activeGroups.indexOf(g) === -1) { activeGroups.push(g); loadedOnDemand.push(g); added = true }
+      }
+      if (added) tools = TG.selectTools(allTools, activeGroups)
+    }
+
     var start = (planTurn && tools.length > 0) ? runPlanTurn : function () { return step(0) }
-    return start().catch(function (err) {
+    return start().then(function (res) {
+      if (gating && res && typeof res === 'object') {
+        res.toolGating = { initialGroups: initialGroupsSnapshot, loadedOnDemand: loadedOnDemand, offeredTools: tools.length, allTools: allTools.length }
+      }
+      return res
+    }).catch(function (err) {
       var e = err || new Error('Agent loop failed')
       try { e.toolCallLog = toolCallLog; e.usage = totalUsage } catch (_) {}
       throw e
@@ -402,9 +445,15 @@
    * [SYSTEM] message for the verify turn. `diff` = { text, changed } from the
    * panel's scene-diff (changed === false means the run mutated nothing).
    */
-  function buildVerifyMessage (diff) {
+  function buildVerifyMessage (diff, unlocked) {
     var text = (diff && diff.text) ? String(diff.text) : 'Scene diff unavailable.'
     var head = '[SYSTEM] VERIFY before finishing. Ground truth — actual changes in the composition since the request started:\n' + text + '\n\n'
+    // Eval corpus 2026-09-02: the model unlocked a locked layer inside a
+    // batch_call, moved it, locked it again and reported a plain move. The
+    // snapshot diff cannot see a transient unlock — the tool log can.
+    if (unlocked && unlocked.length) {
+      head += 'You UNLOCKED layer(s) during this run (' + unlocked.join(', ') + ') — the user locked them on purpose. State this explicitly in your answer (and whether you locked them again); never present the change as if the lock had not been there. '
+    }
     if (diff && diff.changed === false) {
       head += 'NO changes were detected: your tool calls did not alter the composition state (wrong target, value overridden by an expression, or nothing applied). '
     }
@@ -418,6 +467,29 @@
       'Compare this with your PLAN (targets, hard constraints, expected result). Where motion or timing matters, MEASURE it now with probe_motion ' +
       '(space:"comp" for parented layers) or get_keyframes instead of assuming. If anything is missing, wrong, or touched something the request said not to touch, fix it now with tool calls. ' +
       'Then give the final answer for the user: what changed (layers, properties, timings) and what was NOT done. Never report unperformed work.'
+  }
+
+  /** Layers whose lock was released by set_layer_switches during the run (also inside batch_call). */
+  function collectUnlocks (log) {
+    var out = []
+    function note (args) {
+      if (!args || args.locked !== false) return
+      var label = (typeof args.layer_id === 'number') ? 'layer_id ' + args.layer_id
+        : (typeof args.layer_index === 'number') ? 'layer_index ' + args.layer_index : 'a layer'
+      if (out.indexOf(label) === -1) out.push(label)
+    }
+    for (var i = 0; i < (log ? log.length : 0); i++) {
+      var e = log[i]
+      if (!e || e.status !== 'ok') continue
+      if (e.name === 'set_layer_switches') note(e.args)
+      if (e.name === 'batch_call' && e.args && e.args.calls instanceof Array) {
+        for (var b = 0; b < e.args.calls.length; b++) {
+          var it = e.args.calls[b]
+          if (it && it.tool === 'set_layer_switches') note(it.args)
+        }
+      }
+    }
+    return out
   }
 
   /** True when at least one mutating (non read-only) call succeeded. */
@@ -675,6 +747,7 @@
       createAbortHandle: createAbortHandle,
       buildPlanInstruction: buildPlanInstruction,
       buildVerifyMessage: buildVerifyMessage,
+      collectUnlocks: collectUnlocks,
       PLAN_FINAL_MARKER: PLAN_FINAL_MARKER,
       // Single source of truth for "read-only" tools (no AE undo group, safe
       // to parallelize). main.js uses this to count undoable agent actions —
