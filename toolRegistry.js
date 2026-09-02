@@ -37,7 +37,7 @@
       type: 'function',
       function: {
         name: 'get_detailed_comp_summary',
-        description: 'Get a summary of the active composition: layers, types, parents, effects, timing, expressions, 3D status, dimensions. Always call this first. For large comps (20+ layers), use compact:true or filters to reduce token usage.',
+        description: 'Snapshot of the active composition — the state you must reason from. Per layer: type, id, in/out, parent, `enabled` (video switch), `locked`, current `transform` values (position/scale/rotation/opacity/anchorPoint at comp time), `compPosition` for parented layers, `animated` = keyframe ranges per property ({numKeys, from, to}), expressions (path, snippet, error), effects, `text` for text layers. Root: width/height, time, bgColor. Always call this first and use the VALUES it returns instead of guessing. For large comps (20+ layers), use compact:true or filters to reduce token usage.',
         parameters: {
           type: 'object',
           properties: {
@@ -88,6 +88,25 @@
             property_path: { type: 'string', description: 'Property path' }
           },
           required: ['layer_index', 'property_path']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
+        name: 'probe_motion',
+        description: 'Measure what a property ACTUALLY does over time, with keyframes and expressions applied — the scripted equivalent of scrubbing the timeline. Use it to VERIFY motion before reporting (does it move, how far, when, is the layer visible then). `space:"comp"` returns Position in composition space with the parent chain applied — use it for parented layers, orbits and rigs. Returns samples [{t, value, visible}] and a summary {changes, maxDelta, first, last, numKeys, hasExpression, expressionError}.',
+        parameters: {
+          type: 'object',
+          properties: {
+            layer_index: { type: 'number', description: '1-based layer index' },
+            layer_id: { type: 'number', description: 'Persistent layer ID (preferred)' },
+            property_path: { type: 'string', description: 'Property path, e.g. "Transform>Position", "Transform>Scale", "Effects>Slider Control>Slider". Default: Transform>Position' },
+            times: { type: 'array', items: { type: 'number' }, description: 'Sample times in seconds (max 25). Omit to sample evenly across the layer\'s visible window.' },
+            samples: { type: 'number', description: 'Number of evenly spaced samples when `times` is omitted (2-25, default 5)' },
+            space: { type: 'string', enum: ['layer', 'comp'], description: '"comp" = composition space (parent chain applied; Position only). Default "layer" (the raw property value, i.e. PARENT space for parented layers)' }
+          },
+          required: []
         }
       }
     },

@@ -66,6 +66,19 @@
     // end-to-end (94s vs 18.8min) with equal-quality output on the reference
     // task. Set thinkingFirstTurn: true to allow a thinking planning turn.
     var thinkingFirstTurn = options.thinkingFirstTurn === true
+    // Plan-first turn (2026-09-02): one tool-less model call that writes
+    // targets / hard constraints / expected result / steps before anything is
+    // touched. The plan is shown to the user and stays in the loop history so
+    // the VERIFY turn can hold the model to it. Opt-in via options.planTurn;
+    // thinkingFirstTurn applies to this turn when it runs.
+    var planTurn = options.planTurn === true
+    var onPlan = options.onPlan || function () {}
+    var planText = ''
+    // Verify turn (2026-09-02): before accepting a final answer after >= 1
+    // successful mutating call, hand the model the ACTUAL scene diff (from
+    // options.getSceneDiff) and demand measurement + fixes. Once per run.
+    var verifyTurn = options.verifyTurn === true && typeof options.getSceneDiff === 'function'
+    var verifyUsed = false
 
     // Build the full message array for the API.
     var messages = []
@@ -286,22 +299,133 @@
               return step(stepIndex + 1)
             }
           }
+          // Verify turn: the model wants to finish after real mutations. Hand
+          // it the ACTUAL scene diff once and let it measure/fix before the
+          // answer is accepted — the final text is then grounded in state,
+          // not in the model's memory of what it meant to do.
+          if (verifyTurn && !verifyUsed && hasSuccessfulMutation(toolCallLog) && !(abortHandle && abortHandle.aborted)) {
+            verifyUsed = true
+            return options.getSceneDiff().then(function (diff) {
+              messages.push({ role: 'assistant', content: content })
+              messages.push({ role: 'user', content: buildVerifyMessage(diff) })
+              return step(stepIndex + 1)
+            }, function () {
+              return { content: composeFinal(content), toolCallLog: toolCallLog, usage: totalUsage }
+            })
+          }
           return {
-            content: content,
+            content: composeFinal(content),
             toolCallLog: toolCallLog,
             usage: totalUsage
           }
         })
     }
 
+    function addUsage (response) {
+      if (response && response.usage) {
+        totalUsage.prompt_tokens += response.usage.prompt_tokens || 0
+        totalUsage.completion_tokens += response.usage.completion_tokens || 0
+        totalUsage.total_tokens += response.usage.total_tokens || 0
+      }
+    }
+
+    // The plan is shown to the user once; the outcome follows it. With no
+    // tool calls both turns may carry the answer — keep the fuller one.
+    function composeFinal (content) {
+      if (!planText) return content
+      if (toolCallLog.length === 0) return (content && content.length > planText.length) ? content : planText
+      return planText + '\n\n' + content
+    }
+
+    // One tool-less model call: plan (targets, constraints, expected result,
+    // steps) or, for a pure question, the answer itself marked [[final]].
+    function runPlanTurn () {
+      messages.push({ role: 'user', content: buildPlanInstruction() })
+      var planOptions = {
+        max_tokens: 2048,
+        temperature: temperature,
+        abortHandle: abortHandle
+      }
+      if (!thinkingFirstTurn) planOptions.chat_template_kwargs = { enable_thinking: false }
+      try { onStepStart(0) } catch (_) {}
+      return window.CHAT_PROVIDER.invoke(modelId, messages, planOptions).then(function (response) {
+        addUsage(response)
+        var msg = response.choices && response.choices[0] && response.choices[0].message
+        var text = (msg && msg.content) ? String(msg.content) : ''
+        // A model that answers only in its reasoning channel leaves content
+        // empty — no plan then; drop the instruction and run as before.
+        if (!text.replace(/\s+/g, '')) {
+          messages.pop()
+          return step(0)
+        }
+        if (text.indexOf(PLAN_FINAL_MARKER) !== -1) {
+          return {
+            content: text.split(PLAN_FINAL_MARKER).join('').replace(/^\s+|\s+$/g, ''),
+            toolCallLog: toolCallLog,
+            usage: totalUsage
+          }
+        }
+        planText = text.replace(/\s+$/, '')
+        messages.push({ role: 'assistant', content: planText })
+        try { onPlan(planText) } catch (_) {}
+        return step(0)
+      })
+    }
+
     // Attach the partial tool log to any rejection so the UI can render
     // already-executed calls (layers may exist in AE even when the LLM call
     // later times out) and replay them to the model on the next turn (P0-3).
-    return step(0).catch(function (err) {
+    var start = (planTurn && tools.length > 0) ? runPlanTurn : function () { return step(0) }
+    return start().catch(function (err) {
       var e = err || new Error('Agent loop failed')
       try { e.toolCallLog = toolCallLog; e.usage = totalUsage } catch (_) {}
       throw e
     })
+  }
+
+  // Marker a model appends when its plan-turn message IS the final answer
+  // (pure question, nothing to do in AE) — the loop then skips the tool turns.
+  var PLAN_FINAL_MARKER = '[[final]]'
+
+  /** [SYSTEM] instruction for the tool-less plan turn. */
+  function buildPlanInstruction () {
+    return '[SYSTEM] PLAN FIRST — no tool calls in this message. Write a short plan (max 10 lines, in the language of the conversation):\n' +
+      '1. TARGETS: which layers exactly (names/ids if known from the conversation; otherwise say what you will look up first — never guess a target; if it depends on the current selection or is ambiguous, say you will ask).\n' +
+      '2. HARD CONSTRAINTS: everything the request forbids or qualifies ("don\'t touch X", "small", "slow", "only", explicit numbers, order, names).\n' +
+      '3. EXPECTED RESULT: what a designer would SEE and MEASURE afterwards (which property changes, from what to what, when; what must stay unchanged).\n' +
+      '4. STEPS: the tool calls you intend to make.\n' +
+      'This plan is shown to the user as-is; after executing it, your final answer must report the OUTCOME (what actually changed), not repeat the plan. ' +
+      'If the request is a pure question that needs no tools at all, answer it now instead of planning and end your message with the marker ' + PLAN_FINAL_MARKER + '.'
+  }
+
+  /**
+   * [SYSTEM] message for the verify turn. `diff` = { text, changed } from the
+   * panel's scene-diff (changed === false means the run mutated nothing).
+   */
+  function buildVerifyMessage (diff) {
+    var text = (diff && diff.text) ? String(diff.text) : 'Scene diff unavailable.'
+    var head = '[SYSTEM] VERIFY before finishing. Ground truth — actual changes in the composition since the request started:\n' + text + '\n\n'
+    if (diff && diff.changed === false) {
+      head += 'NO changes were detected: your tool calls did not alter the composition state (wrong target, value overridden by an expression, or nothing applied). '
+    }
+    // Live finding (2026-09-02): the model scaled a layer whose video switch
+    // was off, got the host WARNING, and still told the user nothing. The
+    // diff marks such layers; make the verify turn act on the mark.
+    if (text.indexOf('[video switch OFF') !== -1) {
+      head += 'A layer marked [video switch OFF] renders NOTHING — whatever you changed on it is invisible: enable it (set_layer_switches enabled:true) if the request implies it should be seen, otherwise state explicitly in your answer that the layer is hidden. '
+    }
+    return head +
+      'Compare this with your PLAN (targets, hard constraints, expected result). Where motion or timing matters, MEASURE it now with probe_motion ' +
+      '(space:"comp" for parented layers) or get_keyframes instead of assuming. If anything is missing, wrong, or touched something the request said not to touch, fix it now with tool calls. ' +
+      'Then give the final answer for the user: what changed (layers, properties, timings) and what was NOT done. Never report unperformed work.'
+  }
+
+  /** True when at least one mutating (non read-only) call succeeded. */
+  function hasSuccessfulMutation (log) {
+    for (var i = 0; i < (log ? log.length : 0); i++) {
+      if (log[i].status === 'ok' && !READ_ONLY_TOOLS[log[i].name]) return true
+    }
+    return false
   }
 
   // Keep this many most-recent tool results untouched; older ones are
@@ -364,6 +488,7 @@
     get_property_value: 1,
     get_expression: 1,
     get_keyframes: 1,
+    probe_motion: 1,
     get_layer_properties: 1,
     get_effect_properties: 1,
     search_layers: 1,
@@ -548,6 +673,9 @@
     window.AGENT_TOOL_LOOP = {
       runAgentLoop: runAgentLoop,
       createAbortHandle: createAbortHandle,
+      buildPlanInstruction: buildPlanInstruction,
+      buildVerifyMessage: buildVerifyMessage,
+      PLAN_FINAL_MARKER: PLAN_FINAL_MARKER,
       // Single source of truth for "read-only" tools (no AE undo group, safe
       // to parallelize). main.js uses this to count undoable agent actions —
       // keep ONE list so the Undo count can never drift out of sync again.

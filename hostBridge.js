@@ -452,7 +452,7 @@
    * never legitimately strings, so parsing them is safe; anything that does
    * not parse to an array is left as-is for _validateRequiredArgs to reject.
    */
-  var _ARRAY_ARG_NAMES = { targets: 1, keyframes: 1, layer_indices: 1, calls: 1, edits: 1, segments: 1 }
+  var _ARRAY_ARG_NAMES = { targets: 1, keyframes: 1, layer_indices: 1, calls: 1, edits: 1, segments: 1, times: 1 }
   function _unstringifyArrayArgs (args) {
     // Duck-typed array check (like isArr in _validateRequiredArgs): args may
     // cross JS-context boundaries where `instanceof Array` lies.
@@ -865,6 +865,15 @@
           toESLiteral(args.layer_index) + ',' +
           toESLiteral(args.layer_id || null) + ',' +
           toESLiteral(args.property_path) + ')'
+        break
+      case 'probe_motion':
+        call = 'extensionsLlmChat_probeMotion(' +
+          toESLiteral(args.layer_index) + ',' +
+          toESLiteral(args.layer_id || null) + ',' +
+          toESLiteral(args.property_path || null) + ',' +
+          toESLiteral(args.times || null) + ',' +
+          toESLiteral(args.space || null) + ',' +
+          toESLiteral(typeof args.samples === 'number' ? args.samples : null) + ')'
         break
       case 'get_layer_properties':
         call = 'extensionsLlmChat_getLayerProperties(' +

@@ -368,6 +368,120 @@ test('loop: step cap falls back to the stub when the finalization turn fails', a
   assert.strictEqual(result.toolCallLog.length, 1, 'partial log preserved')
 })
 
+/* ── Plan-first + verify turns (2026-09-02) ─────────────────────────── */
+
+const ONE_TOOL = [{ type: 'function', function: { name: 'add_keyframes', parameters: { type: 'object', properties: {} } } }]
+function toolCallMsg (name, args) {
+  return { role: 'assistant', content: null, tool_calls: [{ id: 'c_' + name, type: 'function', function: { name, arguments: JSON.stringify(args || {}) } }] }
+}
+
+test('loop: plan turn runs tool-less first, keeps the plan in history, prepends it to the outcome', async () => {
+  const win = loadLoop()
+  const calls = scriptProvider(win, [
+    resp({ role: 'assistant', content: 'PLAN: 1) target Circle 2) no constraints 3) opacity 0→100 4) add_keyframes' }, 'stop'),
+    resp(toolCallMsg('add_keyframes', { layer_id: 1, property_path: 'Transform>Opacity', keyframes: [{ time: 0, value: 0 }] }), 'tool_calls'),
+    resp({ role: 'assistant', content: 'Готово: opacity анимирована.' }, 'stop')
+  ])
+  fakeHost(win)
+  const result = await win.AGENT_TOOL_LOOP.runAgentLoop({
+    modelId: 'm', systemPrompt: 'sys', messages: [{ role: 'user', content: 'сделай fade' }], tools: ONE_TOOL, planTurn: true
+  })
+  assert.strictEqual(calls.length, 3)
+  assert.strictEqual(calls[0].options.tools, undefined, 'plan turn carries no tools')
+  const planReq = calls[0].messages[calls[0].messages.length - 1]
+  assert.strictEqual(planReq.role, 'user')
+  assert.match(planReq.content, /PLAN FIRST/)
+  assert.match(planReq.content, /HARD CONSTRAINTS/)
+  assert.ok(calls[1].options.tools && calls[1].options.tools.length === 1, 'tool turn has tools')
+  assert.ok(calls[1].messages.some(m => m.role === 'assistant' && /PLAN: 1\)/.test(m.content)), 'plan stays in the loop history')
+  assert.strictEqual(result.content, 'PLAN: 1) target Circle 2) no constraints 3) opacity 0→100 4) add_keyframes\n\nГотово: opacity анимирована.')
+  assert.strictEqual(result.toolCallLog.length, 1)
+})
+
+test('loop: plan turn [[final]] marker short-circuits pure questions', async () => {
+  const win = loadLoop()
+  const calls = scriptProvider(win, [resp({ role: 'assistant', content: 'wiggle(f, a) — процедурный шум. [[final]]' }, 'stop')])
+  fakeHost(win)
+  const result = await win.AGENT_TOOL_LOOP.runAgentLoop({
+    modelId: 'm', messages: [{ role: 'user', content: 'что такое wiggle?' }], tools: ONE_TOOL, planTurn: true
+  })
+  assert.strictEqual(calls.length, 1)
+  assert.strictEqual(result.content, 'wiggle(f, a) — процедурный шум.')
+  assert.strictEqual(result.toolCallLog.length, 0)
+})
+
+test('loop: empty plan content falls back to the normal first turn without the instruction', async () => {
+  const win = loadLoop()
+  const calls = scriptProvider(win, [
+    resp({ role: 'assistant', content: null }, 'stop'),
+    resp({ role: 'assistant', content: 'Ответ без плана.' }, 'stop')
+  ])
+  fakeHost(win)
+  const result = await win.AGENT_TOOL_LOOP.runAgentLoop({
+    modelId: 'm', messages: [{ role: 'user', content: 'привет' }], tools: ONE_TOOL, planTurn: true
+  })
+  assert.strictEqual(calls.length, 2)
+  const last = calls[1].messages[calls[1].messages.length - 1]
+  assert.strictEqual(last.content, 'привет', 'plan instruction dropped from history')
+  assert.ok(calls[1].options.tools, 'tools restored on the normal turn')
+  assert.strictEqual(result.content, 'Ответ без плана.')
+})
+
+test('loop: verify turn injects the scene diff once after a mutating run', async () => {
+  const win = loadLoop()
+  const calls = scriptProvider(win, [
+    resp(toolCallMsg('add_keyframes', { layer_id: 1 }), 'tool_calls'),
+    resp({ role: 'assistant', content: 'Готово.' }, 'stop'),
+    resp({ role: 'assistant', content: 'Готово (проверено).' }, 'stop')
+  ])
+  fakeHost(win)
+  let diffCalls = 0
+  const result = await win.AGENT_TOOL_LOOP.runAgentLoop({
+    modelId: 'm', messages: [{ role: 'user', content: 'анимируй' }], tools: ONE_TOOL,
+    verifyTurn: true,
+    getSceneDiff: () => { diffCalls++; return Promise.resolve({ text: 'Actual changes in "Main": 0 added, 0 removed, 1 changed.\n~ "Circle": opacity: keyframes added (2 keys, 0.00–1.00s)', changed: true }) }
+  })
+  assert.strictEqual(diffCalls, 1)
+  assert.strictEqual(calls.length, 3)
+  const verifyReq = calls[2].messages[calls[2].messages.length - 1]
+  assert.strictEqual(verifyReq.role, 'user')
+  assert.match(verifyReq.content, /VERIFY before finishing/)
+  assert.match(verifyReq.content, /keyframes added \(2 keys/)
+  assert.match(verifyReq.content, /probe_motion/)
+  assert.ok(!/NO changes were detected/.test(verifyReq.content))
+  assert.strictEqual(result.content, 'Готово (проверено).')
+})
+
+test('loop: verify turn is skipped for read-only runs, and flags a run that changed nothing', async () => {
+  const win = loadLoop()
+  const calls = scriptProvider(win, [
+    resp(toolCallMsg('get_keyframes', { layer_index: 1, property_path: 'Transform>Opacity' }), 'tool_calls'),
+    resp({ role: 'assistant', content: 'Вот ключи.' }, 'stop')
+  ])
+  fakeHost(win)
+  let diffCalls = 0
+  const result = await win.AGENT_TOOL_LOOP.runAgentLoop({
+    modelId: 'm', messages: [{ role: 'user', content: 'покажи ключи' }], tools: ONE_TOOL,
+    verifyTurn: true, getSceneDiff: () => { diffCalls++; return Promise.resolve({ text: 'x', changed: false }) }
+  })
+  assert.strictEqual(diffCalls, 0, 'read-only run never triggers verify')
+  assert.strictEqual(calls.length, 2)
+  assert.strictEqual(result.content, 'Вот ключи.')
+  const msg = win.AGENT_TOOL_LOOP.buildVerifyMessage({ text: 'No changes detected in composition "Main".', changed: false })
+  assert.match(msg, /NO changes were detected/)
+  assert.match(msg, /No changes detected in composition "Main"/)
+  assert.ok(!/renders NOTHING/.test(msg), 'hidden-layer sentence only when the diff marks one')
+  const hiddenMsg = win.AGENT_TOOL_LOOP.buildVerifyMessage({ text: '~ "Label" [video switch OFF — not visible]: scale: [100,100,100] → [80,80,100]', changed: true })
+  assert.match(hiddenMsg, /renders NOTHING/)
+  assert.match(hiddenMsg, /set_layer_switches enabled:true/)
+})
+
+test('loop: probe_motion is read-only (parallelizable, not counted for Undo)', () => {
+  const win = loadLoop()
+  assert.strictEqual(win.AGENT_TOOL_LOOP.READ_ONLY_TOOLS.probe_motion, 1)
+  assert.strictEqual(win.AGENT_TOOL_LOOP.READ_ONLY_TOOLS.get_detailed_comp_summary, 1)
+})
+
 test('loop: tool results are paired to tool_call ids in the conversation', async () => {
   const win = loadLoop()
   fakeHost(win, { create_layer: { ok: true, message: 'Created.' } })

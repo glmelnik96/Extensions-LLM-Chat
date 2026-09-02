@@ -1838,8 +1838,11 @@
     if (kbContext) systemPrompt += '\n\n## Expression Reference (from documentation)\n\n' + kbContext
 
     var runLog = [] // accumulated tool-call log for mid-run crash persistence
+    // Scene snapshot before the run (fingerprint mode): the VERIFY turn and the
+    // "actual changes" note diff against it. No snapshot → no diff, run as usual.
+    var beforeSnap = null
 
-    window.AGENT_TOOL_LOOP.runAgentLoop({
+    var loopOptions = {
       modelId: session.model,
       systemPrompt: systemPrompt,
       messages: apiMessages,
@@ -1852,6 +1855,15 @@
       streaming: agentCfg.agentStreaming === true,
       // Thinking OFF on all loop turns by default (12x faster, see config).
       thinkingFirstTurn: agentCfg.agentThinkingFirstTurn === true,
+      // Plan-first + verify turns (2026-09-02) — see agentToolLoop.js. Both
+      // default ON; config flags turn them off.
+      planTurn: agentCfg.agentPlanTurn !== false,
+      verifyTurn: agentCfg.agentVerifyTurn !== false,
+      getSceneDiff: function () { return sceneDiffSince(beforeSnap) },
+      onPlan: function (planText) {
+        _setThinkingLabel('Agent · plan ready, executing…')
+        updateThinkingWithStreamText('\n' + planText + '\n')
+      },
       abortHandle: state.currentAbortHandle,
       onTextChunk: function (chunk) {
         updateThinkingWithStreamText(chunk)
@@ -1874,6 +1886,11 @@
         setStatus('Step ' + (stepIdx + 1) + '/' + maxSteps + ' (' + results.length + ' tool calls)')
         savePendingRun(session.id, runLog)
       }
+    }
+
+    snapshotScene().then(function (snap) {
+      beforeSnap = snap
+      return window.AGENT_TOOL_LOOP.runAgentLoop(loopOptions)
     }).then(function (result) {
       removeThinking()
 
@@ -1913,19 +1930,34 @@
       persistState()
       clearPendingRun()
 
-      // ── Vision check (post-agent) ──────────────────────────────────
-      // Trigger only when: toggle enabled, run succeeded, mutating calls > 0.
-      if (isVisionCheckEnabled() && mutatingCount > 0 && window.PURE_VISION_CHECK && window.HOST_BRIDGE) {
-        var agentSummary = result.content || ''
-        return runVisionCheck(text, agentSummary, session, false).then(function () {
-          // Update status with final token count after vision + possible correction.
-          var finalUsage = ' | tokens session: ' + (session.totalTokens || 0)
-          if (session.costRub > 0 && window.PURE_PRICING) {
-            finalUsage += ' · ≈ ' + window.PURE_PRICING.formatRub(session.costRub)
-          }
-          setStatus('Ready' + finalUsage)
-        })
-      }
+      // ── Actual changes note (scene diff, 2026-09-02) ───────────────
+      // Ground truth under every mutating run: what really changed in the
+      // comp, from the before/after snapshots — independent of the model's
+      // own report. Never blocks the run on failure.
+      var diffNote = (mutatingCount > 0 && beforeSnap)
+        ? sceneDiffSince(beforeSnap).then(function (d) {
+          state.lastSceneDiff = d.diff || null
+          session.messages.push({ role: 'system', text: 'Actual changes (scene diff): ' + d.text })
+          renderTranscript()
+          persistState()
+        }).catch(function () {})
+        : Promise.resolve()
+
+      return diffNote.then(function () {
+        // ── Vision check (post-agent) ────────────────────────────────
+        // Trigger only when: toggle enabled, run succeeded, mutating calls > 0.
+        if (isVisionCheckEnabled() && mutatingCount > 0 && window.PURE_VISION_CHECK && window.HOST_BRIDGE) {
+          var agentSummary = result.content || ''
+          return runVisionCheck(text, agentSummary, session, false).then(function () {
+            // Update status with final token count after vision + possible correction.
+            var finalUsage = ' | tokens session: ' + (session.totalTokens || 0)
+            if (session.costRub > 0 && window.PURE_PRICING) {
+              finalUsage += ' · ≈ ' + window.PURE_PRICING.formatRub(session.costRub)
+            }
+            setStatus('Ready' + finalUsage)
+          })
+        }
+      })
     }).catch(function (err) {
       removeThinking()
       // Preserve already-executed tool calls (P0-3): the layers/keyframes may
@@ -2368,6 +2400,33 @@
    * truth): a stale local copy once inflated the count and Undo then reverted
    * the user's OWN edits.
    */
+  // ── Scene snapshots (2026-09-02) ──────────────────────────────────────
+  // Fingerprint snapshot of the active comp (host summary + value hashes).
+  // Never rejects: no comp / host error → null, and the diff degrades to
+  // "unavailable" instead of blocking the run.
+  function snapshotScene () {
+    if (!window.HOST_BRIDGE) return Promise.resolve(null)
+    return window.HOST_BRIDGE.evalHostFunction('extensionsLlmChat_getDetailedCompSummary({fingerprint:true})')
+      .then(function (res) { return (res && res.ok === true) ? res : null })
+      .catch(function () { return null })
+  }
+
+  /** Diff the comp now against a snapshot taken before the run → { text, changed, diff }. */
+  function sceneDiffSince (beforeSnap) {
+    var SD = window.PURE_SCENE_DIFF
+    if (!SD || !beforeSnap) {
+      return Promise.resolve({ text: 'Scene diff unavailable (no snapshot before the run).', changed: null, diff: null })
+    }
+    return snapshotScene().then(function (afterSnap) {
+      var d = SD.diffScenes(beforeSnap, afterSnap)
+      return {
+        text: SD.formatDiff(d, { maxChars: 2000 }),
+        changed: (d.ok && !d.compSwitched) ? d.count > 0 : null,
+        diff: d
+      }
+    })
+  }
+
   function countUndoUnits (log) {
     var readOnly = (window.AGENT_TOOL_LOOP && window.AGENT_TOOL_LOOP.READ_ONLY_TOOLS) || {}
     var calls = log || []

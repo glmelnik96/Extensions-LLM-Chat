@@ -23,9 +23,23 @@ function loadBrowserGlobal (file) {
 const registryWindow = loadBrowserGlobal('toolRegistry.js')
 const tools = registryWindow.AGENT_TOOL_REGISTRY && registryWindow.AGENT_TOOL_REGISTRY.tools
 
-test('registry: exposes 68 tools', () => {
+test('registry: exposes 69 tools', () => {
   assert.ok(Array.isArray(tools), 'tools array exported')
-  assert.strictEqual(tools.length, 68)
+  assert.strictEqual(tools.length, 69)
+})
+
+test('registry: probe_motion (2026-09-02) — read-only motion sampler with comp-space option', () => {
+  const pm = findTool('probe_motion')
+  assert.ok(pm, 'probe_motion registered')
+  assert.strictEqual(JSON.stringify(pm.function.parameters.required), JSON.stringify([]))
+  for (const key of ['layer_index', 'layer_id', 'property_path', 'times', 'samples', 'space']) {
+    assert.ok(pm.function.parameters.properties[key], 'probe_motion param: ' + key)
+  }
+  assert.strictEqual(JSON.stringify(pm.function.parameters.properties.space.enum), JSON.stringify(['layer', 'comp']))
+  assert.match(pm.function.description, /VERIFY/i, 'positions the tool as the verification step')
+  const cs = findTool('get_detailed_comp_summary')
+  assert.match(cs.function.description, /enabled/, 'summary description advertises the video switch')
+  assert.match(cs.function.description, /transform/, 'summary description advertises transform values')
 })
 
 test('registry: batch_call takes {tool, args} items', () => {
@@ -171,7 +185,7 @@ test('prompt: new behavior rules present', () => {
   assert.match(full, /Verify before claiming done/, 'self-verification rule')
   assert.match(full, /brief numbered plan/, 'plan rule')
   assert.ok(!full.includes('No chain-of-thought in the visible response'), 'old no-CoT rule replaced')
-  assert.match(full, /67 tools/, 'tool count updated')
+  assert.match(full, /69 tools/, 'tool count updated')
 })
 
 test('registry: compositing tools (2026-07-27) registered with correct schemas', () => {
@@ -280,6 +294,15 @@ test('registry: update_subtitles (2026-08-17) registered with correct schema', (
   assert.match(us.function.description, /do NOT delete and re-create/i, 'steers away from rebuild')
 })
 
+test('prompt: closed-loop rules present (2026-09-02)', () => {
+  const full = builder.buildFull()
+  assert.match(full, /Reason from THESE values/, 'summary values are the source of truth')
+  assert.match(full, /`animated` \(keyframe ranges per property\)/, 'keyframe ranges advertised')
+  assert.match(full, /probe_motion/, 'motion measurement tool mentioned')
+  assert.match(full, /\[SYSTEM\] VERIFY/, 'verify turn explained')
+  assert.match(full, /`locked: true`/, 'locked flag in summary')
+})
+
 test('prompt: subtitles guidance present', () => {
   const full = builder.buildFull()
   assert.ok(full.includes('## Subtitles'), 'subtitles section present')
@@ -293,7 +316,7 @@ test('prompt: round-3 hardening bullets present (2026-08-16)', () => {
   const full = builder.buildFull()
   assert.match(full, /Map sequences by the NAMES the user lists/, 'name-order mapping rule')
   assert.match(full, /REVERSE of naming\/creation order/, 'stacking-order inversion warning')
-  assert.match(full, /Locked layers.*refuse layers with `locked: true`/, 'locked-layer refusal rule')
+  assert.match(full, /Locked layers.*`locked: true`.*mutating tools refuse such layers/, 'locked-layer refusal rule')
   assert.match(full, /Keep every batch ≤ 8 inner calls/, 'batch size cap')
   assert.match(full, /do NOT retry the same giant batch/, 'no giant-batch retry')
   assert.match(full, /Position is in PARENT space/, 'parent-space position rule')
@@ -308,7 +331,7 @@ test('prompt: round-3 hardening bullets present (2026-08-16)', () => {
 test('prompt: round-4 hardening bullets present (2026-08-16)', () => {
   const full = builder.buildFull()
   assert.match(full, /Parent space applies to VALUES too/, 'parent-space values rule')
-  assert.match(full, /video switch OFF \(`enabled: false`\) renders NOTHING/, 'hidden-layer rule')
+  assert.match(full, /video switch OFF \(`enabled: false` in the comp summary\) renders NOTHING/, 'hidden-layer rule')
   assert.match(full, /contrast and size/, 'contrast/size rule')
   assert.match(full, /data being correct does NOT refute a visibility report/, 'data vs visibility rule')
   assert.match(full, /Normalize slider rigs/, 'slider normalization rule')

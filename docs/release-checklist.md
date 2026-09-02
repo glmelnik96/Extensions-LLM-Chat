@@ -27,6 +27,10 @@ Pre-release validation for the AE Motion Agent CEP extension.
 - [ ] Export: saves JSON to Desktop
 - [ ] Report: generates LLM-analyzed report to Desktop
 - [ ] Streaming: text appears incrementally during generation
+- [ ] Plan turn: the run indicator shows a plan (targets / constraints / expected result) before the first tool call; a pure question is answered without a plan
+- [ ] Scene diff: after a mutating run the transcript shows `Actual changes (scene diff): …` listing the real layer/property changes
+- [ ] Verify turn: the model receives `[SYSTEM] VERIFY` once after a mutating run and its final answer matches the diff (no unperformed work reported)
+- [ ] `probe_motion` on a parented layer with `space:"comp"` returns changing comp-space samples; `get_detailed_comp_summary` shows `enabled`/`locked`/`transform`/`animated`
 
 See [qa-test-plan.md](qa-test-plan.md) for full smoke list.
 

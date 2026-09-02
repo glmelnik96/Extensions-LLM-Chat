@@ -29,7 +29,7 @@ Extensions LLM Chat/
 ├── agentToolLoop.js           ← LLM ↔ tool execution cycle (parallel reads, validation, abort)
 ├── chatProvider.js            ← Cloud.ru API, retry on 429/5xx, SSE streaming
 ├── hostBridge.js              ← Tool name → ExtendScript mapping, anti-spam guard, idempotency, validation
-├── toolRegistry.js            ← 67 OpenAI-format tool definitions
+├── toolRegistry.js            ← 69 OpenAI-format tool definitions
 ├── host/
 │   └── index.jsx              ← ExtendScript: ALL AE operations (~4600 lines)
 ├── CSXS/manifest.xml          ← CEP manifest
@@ -235,6 +235,18 @@ Two `main.js`-only fixes for "the panel looks frozen", both live-verified via CD
 
 *`panelConfirm()` replaces native `confirm()`.* User report: "почему-то зависает кнопка Clear". Root cause measured via CDP: in CEP, `window.confirm()` opens a **detached OS window** — it does not render inside the panel, so it can end up behind AE, and it blocks the panel's JS thread for exactly as long as it goes unanswered (`jsBlockedMs: 1508` for a 1500ms hold). `panelConfirm(message, confirmLabel)` returns a Promise and draws an in-panel `.confirm-backdrop` + `.studio-panel` overlay (Esc / backdrop click = cancel, Enter = confirm, focus starts on Cancel, message goes in via `textContent` since chat titles are user-supplied). Converted: `handleClearSession`, `handleClearAllSessions`, `handleDeleteSession`, `handleQuickActionReset`. **Still native and still blocking** (same bug class, not yet converted): every `prompt()` flow (chat rename, quick-action add/edit, transcript path) and every `alert()`.
 
+### Closed-loop agent (2026-09-02) — scene snapshot, `probe_motion`, scene diff, plan + verify turns (67 → 69)
+Analysis after six hunt rounds (plan: `docs/superpowers/specs/2026-09-02-agent-reliability-plan.md`): failures on simple human requests share three structural causes — the agent never observed what it did (one still frame was the only feedback), its world model carried no values / keyframe ranges / switches (the prompt said "check `enabled` in the comp summary" while no read tool exposed it), and nothing was planned before mutating (thinking off, `tool_choice: auto`). GLM-5.1 is unavailable, so every fix is harness-level and model-independent (default `openai/gpt-oss-120b`):
+
+- **Scene snapshot** — `extensionsLlmChat_getDetailedCompSummary` (full mode) adds per layer `enabled`/`locked`/`solo`/`shy`, `transform` values at comp time (`_SNAPSHOT_PROPS`), `compPosition` for parented layers (`_compSpacePosition`: parent chain, 2D + Z rotation — ported from the round-6 hunt probe), `animated` = `{numKeys, from, to}` per animated property (+ `sourceText`, `timeRemap`), `text`, `timeRemapEnabled`, `numMasks`; root `compId`, `time`, `bgColor`. Compact mode adds `enabled:false` / `locked:true` only when set. Panel-only `fingerprint:true` (NOT in the tool schema) adds `sig` hashes (`_hashStr`, djb2/base36) to keyframe ranges, expressions, effects (`_effectSig`) and text so snapshots can be diffed without dumping values.
+- **`probe_motion`** (READ_ONLY) — `extensionsLlmChat_probeMotion`: samples a property at explicit `times` (≤ 25) or N evenly spaced samples over the layer's visible window, keyframes + expressions applied; `space:"comp"` returns Position through the parent chain (Position only, else an explicit error); per-sample `visible` (video switch, in/out, opacity 0, scale 0) and a never-visible WARNING; summary `{changes, maxDelta, first, last, numKeys, hasExpression, expressionError}`. This is the agent's only way to verify motion — the vision check is one still frame.
+- **Scene diff** — `lib/pure/sceneDiff.js` (`PURE_SCENE_DIFF`, 8 tests): `diffScenes(before, after)` → added/removed/changed/moved layers with readable change lists (rename, switches, parent, in/out, transform values, keyframe ranges + value edits via `sig`, expressions set/changed/removed + errors, effects added/removed/settings changed, text, time remap, masks); a comp switch mid-run short-circuits; `formatDiff` caps layers/chars. `main.js`: `snapshotScene()` before every `handleSend` run, `sceneDiffSince()` after a mutating run appends the transcript note `Actual changes (scene diff): …` (transcript-only, like the vision notes).
+- **Plan + verify turns** — `agentToolLoop.js`, options `planTurn` / `verifyTurn` / `getSceneDiff` / `onPlan`; `main.js` wires them from `agentPlanTurn` / `agentVerifyTurn` (both default on; the correction loop does not use them). Plan: one tool-less call with `[SYSTEM] PLAN FIRST` (`buildPlanInstruction`: targets / hard constraints / expected observable result / steps); the plan stays in the loop history, is streamed into the thinking indicator and prepended to the final answer; `[[final]]` (`PLAN_FINAL_MARKER`) short-circuits pure questions; empty plan content drops the instruction and runs as before. Verify: when the model wants to finish after ≥ 1 successful mutating call, ONE `[SYSTEM] VERIFY` message (`buildVerifyMessage`) carries the actual scene diff, says "NO changes were detected" when tools ran but nothing changed, and demands `probe_motion` / `get_keyframes` measurement + fixes before the final answer. Worst case +2 model turns per run — the user's stated priority is quality over cost.
+
+Prompt: CORE_RULES 1 (reason from snapshot values) and 9 (measure, then expect `[SYSTEM] VERIFY`) rewritten; hidden/locked bullets now point at fields the summary really exposes; tool count 69. Tests 253 → 269 (`test/sceneDiff.test.js`, loop plan/verify cases, registry/prompt assertions; ES3 lint passes on the new host code).
+
+Live-verified via CDP in AE 2026 on a scratch comp (null `Orbit` with `time*90` rotation, parented shape `Moon` at `[300,0]`, hidden + locked solid, text with opacity keys): summary shows `enabled:false, locked:true`, `compPosition [1260,540]`, `animated.opacity {2 keys, 0–1s}`; `probe_motion(space:"comp")` on Moon traced the 300 px orbit (max delta 599.79) while layer space stayed static; hidden layer → `visible:false` + WARNING; bad path / bad space → actionable errors; the scene diff after 7 mutations listed exactly `+ "NewNull"`, Orbit expression changed, Moon scale `[100,100,100] → [50,50,100]` + rotation keys added, Label switch off + Gaussian Blur + text change. Real agent run («Moon плавно появлялся 0→100 за 0.5 с, остальное не трогай», gpt-oss-120b): plan turn → summary → `set_keyframes_batch` → VERIFY with the diff (`Moon: opacity keys 0.00–0.50s`, nothing else) → honest final answer; 27 s, 4 model calls, 88k prompt tokens. A second UI-level run exposed the next gap: the model scaled a layer whose video switch was OFF, received the host WARNING, and still told the user nothing — so the diff now marks such layers `[video switch OFF — not visible]` (added/changed entries carry `hidden`), and `buildVerifyMessage` adds a "renders NOTHING — enable it or say so" sentence when the mark is present; on the rerun the final answer said «Слой по-прежнему отключён (eyeball off)… включите через set_layer_switches» unprompted.
+
 ### Broad bug-hunt fixes (2026-08-16, round 4) — parent-space VALUES, hidden layers, visibility vs data
 A fourth hunt (5 human-style Russian prompts: mass duplication with constraints, slider rigs, delay chains, scatter across frame) produced 7 findings (N1–N7); all fixed the same day.
 
@@ -329,7 +341,7 @@ ExtendScript (ES3) quirks verified live: `string + Array` throws; `addProperty()
 | Question | File |
 |---|---|
 | User-facing setup, features, install | `README.md` |
-| 67 tools, capabilities, limitations | `docs/capabilities-and-roadmap.md` |
+| 69 tools, capabilities, limitations | `docs/capabilities-and-roadmap.md` |
 | Live AE validation methodology + bug tables | `docs/superpowers/specs/2026-06-10-deep-audit-report.md` |
 | Agent loop architecture, tool categories | `docs/final-architecture.md` |
 | Config fields, loading order, secrets | `docs/configuration.md`, `docs/secret-handling.md` |
@@ -400,7 +412,7 @@ For external (Obsidian) context, see also:
 ## Boundaries and red flags
 
 **You should escalate (ask user) before:**
-- Adding new tools that mutate AE state outside the current 67
+- Adding new tools that mutate AE state outside the current 69
 - Changing the API provider or the `AVAILABLE_MODELS` selector list (adding/removing/replacing a model)
 - Modifying `_resolveLayer` selection-fallback behavior
 - Changing the localStorage `ae-motion-agent-state` schema (breaks existing sessions)
@@ -425,4 +437,4 @@ The vault folder note is the single source of truth for project status. The mast
 
 ---
 
-*Last updated 2026-08-16 — after the broad bug-hunt round 2 fixes (vision false positives, target discipline, AE-semantics rules, RU quick actions). If you read this and it feels out of date, refresh it before touching code.*
+*Last updated 2026-09-02 — after the closed-loop agent work (scene snapshot, `probe_motion`, scene diff, plan + verify turns). If you read this and it feels out of date, refresh it before touching code.*

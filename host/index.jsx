@@ -2910,6 +2910,149 @@ function extensionsLlmChat_getPropertyValue (layerIndex, layerId, propertyPath, 
 }
 
 /**
+ * Sample a property over time with expressions AND keyframes applied — the
+ * scripted equivalent of scrubbing the timeline. This is the agent's only
+ * way to verify motion (the vision check sees one still frame). Position can
+ * be read in comp space (parent chain applied) for orbits and parented rigs.
+ *
+ * @param {number|null} layerIndex
+ * @param {number|null} layerId
+ * @param {string|null} propertyPath  default "Transform>Position"
+ * @param {number[]|null} times       explicit sample times (seconds)
+ * @param {string|null} space         "layer" (default) | "comp" (Position only)
+ * @param {number|null} samples       when `times` is empty: evenly spaced
+ *                                    samples over the layer's visible window
+ */
+function extensionsLlmChat_probeMotion (layerIndex, layerId, propertyPath, times, space, samples) {
+  var result = { ok: false, message: '', layerName: '', propertyPath: '', space: 'layer', samples: [], summary: null };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var comp = ctx.comp;
+    var layer = _resolveLayer(comp, layerIndex, layerId);
+    if (!layer) { result.message = _layerNotFoundMsg(layerId, layerIndex); return resultToJson(result); }
+    var path = (typeof propertyPath === 'string' && propertyPath.length > 0) ? propertyPath : 'Transform>Position';
+    var prop = _resolveProperty(layer, path);
+    if (!prop || !(prop instanceof Property)) {
+      result.message = 'probe_motion: property "' + path + '" not found on "' + layer.name + '" (or it is a group). Use get_layer_properties to discover paths.';
+      return resultToJson(result);
+    }
+    var useComp = false;
+    if (space === 'comp') {
+      if (path !== 'Transform>Position') {
+        result.message = 'probe_motion: space "comp" is only meaningful for Transform>Position.';
+        return resultToJson(result);
+      }
+      useComp = true;
+    }
+    result.layerName = layer.name;
+    result.propertyPath = path;
+    result.space = useComp ? 'comp' : 'layer';
+
+    // Sample times: explicit list, else N evenly spaced over the layer's
+    // visible window (clipped to the comp) — where the animation can be seen.
+    var MAX_SAMPLES = 25;
+    var ts = [];
+    var i;
+    if (times instanceof Array) {
+      for (i = 0; i < times.length && ts.length < MAX_SAMPLES; i++) {
+        if (typeof times[i] === 'number' && isFinite(times[i])) ts.push(times[i]);
+      }
+    }
+    if (ts.length === 0) {
+      var n = (typeof samples === 'number' && samples >= 2) ? Math.min(Math.round(samples), MAX_SAMPLES) : 5;
+      var frameDur = comp.frameDuration > 0 ? comp.frameDuration : (1 / 30);
+      var t0 = layer.inPoint > 0 ? layer.inPoint : 0;
+      var t1 = layer.outPoint < comp.duration ? layer.outPoint : comp.duration;
+      if (t1 <= t0) { t0 = 0; t1 = comp.duration; }
+      t1 = t1 - frameDur;
+      if (t1 < t0) t1 = t0;
+      for (i = 0; i < n; i++) ts.push(t0 + (t1 - t0) * i / (n - 1));
+    }
+
+    var enabled = true;
+    try { enabled = layer.enabled !== false; } catch (eEn) {}
+    var tr = null;
+    try { tr = layer.property('ADBE Transform Group'); } catch (eTr) {}
+
+    function dist (a, b) {
+      if (typeof a === 'number' && typeof b === 'number') return Math.abs(a - b);
+      if (a instanceof Array && b instanceof Array) {
+        var acc = 0;
+        var dims = a.length < b.length ? a.length : b.length;
+        for (var d = 0; d < dims; d++) acc += (a[d] - b[d]) * (a[d] - b[d]);
+        return Math.sqrt(acc);
+      }
+      return (String(a) === String(b)) ? 0 : 1;
+    }
+
+    var first = null;
+    var maxDelta = 0;
+    var anyVisible = false;
+    for (i = 0; i < ts.length; i++) {
+      var t = ts[i];
+      var val = null;
+      if (useComp) {
+        val = _compSpacePosition(layer, t);
+      } else {
+        val = prop.valueAtTime(t, false);
+        if (val !== null && typeof val === 'object' && !(val instanceof Array)) {
+          try { val = String(val.text); } catch (eTx) { val = String(val); }
+        }
+      }
+      var visible = enabled && t >= layer.inPoint && t < layer.outPoint;
+      if (visible && tr) {
+        try {
+          var op = tr.property('ADBE Opacity');
+          if (op && op.valueAtTime(t, false) <= 0) visible = false;
+        } catch (eOp) {}
+        try {
+          var sc = tr.property('ADBE Scale');
+          var sv = sc ? sc.valueAtTime(t, false) : null;
+          if (sv && sv.length >= 2 && (sv[0] === 0 || sv[1] === 0)) visible = false;
+        } catch (eSc) {}
+      }
+      if (visible) anyVisible = true;
+      if (first === null) first = val;
+      var dd = dist(val, first);
+      if (dd > maxDelta) maxDelta = dd;
+      result.samples.push({ t: _r2(t), value: _r2(val), visible: visible });
+    }
+
+    var summary = {
+      changes: maxDelta > 0.001,
+      maxDelta: _r2(maxDelta),
+      first: result.samples[0].value,
+      last: result.samples[result.samples.length - 1].value,
+      numKeys: 0,
+      hasExpression: false,
+      expressionError: ''
+    };
+    try { summary.numKeys = prop.numKeys; } catch (eNk) {}
+    try { summary.hasExpression = prop.expressionEnabled === true; } catch (eHx) {}
+    try { summary.expressionError = String(prop.expressionError || ''); } catch (eXe) {}
+    result.summary = summary;
+
+    var msg = 'Probed "' + path + '" on "' + layer.name + '" at ' + ts.length + ' time(s)' +
+      (useComp ? ' in COMP space (parent chain applied)' : '') + ': ' +
+      (summary.changes ? 'value CHANGES over time, max delta ' + summary.maxDelta : 'value is STATIC (no change across samples)') +
+      ' (' + summary.numKeys + ' key(s), expression ' + (summary.hasExpression ? 'on' : 'off') + ').';
+    if (!anyVisible) {
+      msg += ' WARNING: the layer is NOT visible at any sampled time (video switch, in/out window, opacity 0 or scale 0) — whatever it does is not seen.';
+    }
+    if (summary.expressionError) {
+      msg += ' WARNING: expression error: ' + summary.expressionError.substr(0, 160);
+    }
+    result.ok = true;
+    result.message = msg;
+    return resultToJson(result);
+  } catch (e) {
+    result.message = 'probeMotion error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
+
+/**
  * Read the expression on a property: text, enabled state, error info.
  */
 function extensionsLlmChat_getExpression (layerIndex, layerId, propertyPath) {
@@ -3463,10 +3606,116 @@ function extensionsLlmChat_setTextDocument (layerIndex, layerId, textProps) {
  * Return a detailed summary of the active composition including layer types,
  * parent chains, in/out points, effects list, and expression status.
  */
+/* ── Scene snapshot helpers (2026-09-02) ─────────────────────────────────
+ * The comp summary is the agent's world model. Until now it carried names,
+ * types and timing but no transform VALUES, no keyframe ranges and no layer
+ * switches — the prompt told the model to "check `enabled` in the summary"
+ * while no read tool exposed it. These helpers add that state (and, in
+ * fingerprint mode, hashes the panel uses to diff before/after a run).
+ */
+
+// Round numbers (and arrays of numbers) to 2 decimals: enough for pixels,
+// percent and degrees, and far cheaper in tokens than raw doubles.
+function _r2 (v) {
+  if (typeof v === 'number') return Math.round(v * 100) / 100;
+  if (v instanceof Array) {
+    var out = [];
+    for (var i = 0; i < v.length; i++) out.push(_r2(v[i]));
+    return out;
+  }
+  return v;
+}
+
+// djb2 string hash → base36. ES3-safe; only used for fingerprint diffs.
+function _hashStr (s) {
+  var h = 5381;
+  var str = String(s == null ? '' : s);
+  for (var i = 0; i < str.length; i++) {
+    h = ((h << 5) + h + str.charCodeAt(i)) & 0x7fffffff;
+  }
+  return h.toString(36);
+}
+
+// Comp-space point of a layer's Position at time t, walking the parent chain
+// (2D, Z rotation only — the same approximation the round-6 hunt probe used
+// to verify orbits; scripting has no toComp()).
+function _compSpacePosition (layer, t) {
+  var v = layer.property('ADBE Transform Group').property('ADBE Position').valueAtTime(t, false);
+  var x = v[0];
+  var y = v[1];
+  var P = layer.parent;
+  var hops = 0;
+  while (P && hops < 16) {
+    var pt = P.property('ADBE Transform Group');
+    var pp = pt.property('ADBE Position').valueAtTime(t, false);
+    var pa = pt.property('ADBE Anchor Point').valueAtTime(t, false);
+    var ps = pt.property('ADBE Scale').valueAtTime(t, false);
+    var pr = pt.property('ADBE Rotate Z').valueAtTime(t, false);
+    var sx = (x - pa[0]) * ps[0] / 100;
+    var sy = (y - pa[1]) * ps[1] / 100;
+    var rad = pr * Math.PI / 180;
+    x = pp[0] + sx * Math.cos(rad) - sy * Math.sin(rad);
+    y = pp[1] + sx * Math.sin(rad) + sy * Math.cos(rad);
+    P = P.parent;
+    hops++;
+  }
+  return [x, y];
+}
+
+// Transform properties reported in the snapshot: [jsonKey, matchName, toolPath].
+var _SNAPSHOT_PROPS = [
+  ['anchorPoint', 'ADBE Anchor Point', 'Transform>Anchor Point'],
+  ['position', 'ADBE Position', 'Transform>Position'],
+  ['scale', 'ADBE Scale', 'Transform>Scale'],
+  ['rotation', 'ADBE Rotate Z', 'Transform>Rotation'],
+  ['opacity', 'ADBE Opacity', 'Transform>Opacity']
+];
+
+// {numKeys, from, to} for an animated property; `sig` (hash of every key's
+// time+value) only in fingerprint mode so the panel can detect value edits
+// that keep the key count.
+function _keyRangeInfo (prop, fingerprint) {
+  var n = prop.numKeys;
+  var o = { numKeys: n, from: _r2(prop.keyTime(1)), to: _r2(prop.keyTime(n)) };
+  if (fingerprint) {
+    var src = '';
+    for (var k = 1; k <= n; k++) {
+      var kv = null;
+      try { kv = prop.keyValue(k); } catch (eKv) {}
+      if (kv !== null && typeof kv === 'object' && !(kv instanceof Array)) {
+        try { kv = String(kv.text); } catch (eTx) { kv = ''; }
+      }
+      src += _r2(prop.keyTime(k)) + ':' + (kv instanceof Array ? _r2(kv).join(',') : String(_r2(kv))) + ';';
+    }
+    o.sig = _hashStr(src);
+  }
+  return o;
+}
+
+// Hash of an effect's first-level property values (fingerprint mode): lets
+// the diff see set_effect_property edits without listing every value.
+function _effectSig (eff) {
+  var src = '';
+  try { src += eff.enabled === false ? 'off;' : 'on;'; } catch (eEn) {}
+  try {
+    for (var i = 1; i <= eff.numProperties; i++) {
+      var p = null;
+      try { p = eff.property(i); } catch (eP) {}
+      if (!p || !(p instanceof Property)) continue;
+      var v = null;
+      try { v = p.value; } catch (eV) {}
+      if (v !== null && typeof v === 'object' && !(v instanceof Array)) v = '';
+      src += (v instanceof Array ? _r2(v).join(',') : String(_r2(v))) + ';';
+      try { if (p.expressionEnabled) src += 'x' + _hashStr(p.expression) + ';'; } catch (eX) {}
+    }
+  } catch (eAll) {}
+  return _hashStr(src);
+}
+
 function extensionsLlmChat_getDetailedCompSummary (filterOptions) {
   var result = {
-    ok: false, message: '', compName: '', width: 0, height: 0,
-    duration: 0, frameRate: 0, numLayers: 0, layers: []
+    ok: false, message: '', compName: '', compId: null, width: 0, height: 0,
+    duration: 0, frameRate: 0, time: 0, bgColor: null, numLayers: 0, layers: []
   };
   try {
     var opts = (typeof filterOptions === 'object' && filterOptions) ? filterOptions : {};
@@ -3484,6 +3733,12 @@ function extensionsLlmChat_getDetailedCompSummary (filterOptions) {
     result.duration = comp.duration;
     result.frameRate = comp.frameRate;
     result.numLayers = comp.numLayers;
+    result.compId = comp.id;
+    result.time = _r2(comp.time);
+    try { result.bgColor = _r2(comp.bgColor); } catch (eBg) {}
+    // fingerprint: panel-only flag (never in the tool schema) — adds `sig`
+    // hashes so before/after snapshots can be diffed without dumping values.
+    var fingerprint = opts.fingerprint === true;
 
     var addedCount = 0;
     for (var i = 1; i <= comp.numLayers; i++) {
@@ -3514,6 +3769,8 @@ function extensionsLlmChat_getDetailedCompSummary (filterOptions) {
           try {
             if (layer.parent) compactInfo.parentIndex = layer.parent.index;
           } catch (ePc) {}
+          try { if (layer.enabled === false) compactInfo.enabled = false; } catch (eEnc) {}
+          try { if (layer.locked === true) compactInfo.locked = true; } catch (eLkc) {}
           result.layers.push(compactInfo);
           addedCount++;
           continue;
@@ -3558,37 +3815,105 @@ function extensionsLlmChat_getDetailedCompSummary (filterOptions) {
             for (var fi = 1; fi <= fx.numProperties; fi++) {
               try {
                 var eff = fx.property(fi);
-                if (eff) info.effects.push({ index: fi, name: eff.name, matchName: eff.matchName || '' });
+                if (eff) {
+                  var effInfo = { index: fi, name: eff.name, matchName: eff.matchName || '' };
+                  if (fingerprint) effInfo.sig = _effectSig(eff);
+                  info.effects.push(effInfo);
+                }
               } catch (eEff) {}
             }
           }
         } catch (eFx) {}
 
-        // Check for expressions on common properties. Report which property
-        // has one (path, snippet, error) so the agent doesn't need a
-        // follow-up get_expression round trip just to find out where/what.
-        var commonPaths = [
-          'Transform>Position', 'Transform>Scale', 'Transform>Rotation', 'Transform>Opacity'
-        ];
-        for (var cp = 0; cp < commonPaths.length; cp++) {
-          try {
-            var pr = _resolveProperty(layer, commonPaths[cp]);
-            if (pr && pr instanceof Property && pr.expressionEnabled) {
-              info.hasExpressions = true;
-              if (!info.expressions) info.expressions = [];
-              var exprEntry = { path: commonPaths[cp] };
-              try {
+        // Layer switches the agent must respect before building on a layer.
+        try { info.enabled = layer.enabled === true; } catch (eEn) {}
+        try { info.locked = layer.locked === true; } catch (eLk) {}
+        try { if (layer.solo === true) info.solo = true; } catch (eSo) {}
+        try { if (layer.shy === true) info.shy = true; } catch (eSh) {}
+
+        // Transform VALUES at comp time, keyframe ranges per animated property
+        // and expressions (path, snippet, error) — the agent no longer has to
+        // guess where things are or spend a round trip per property.
+        var anim = null;
+        var tr = null;
+        try { tr = layer.property('ADBE Transform Group'); } catch (eTr) {}
+        if (tr) {
+          var tv = {};
+          for (var sp = 0; sp < _SNAPSHOT_PROPS.length; sp++) {
+            var spKey = _SNAPSHOT_PROPS[sp][0];
+            var pr = null;
+            try { pr = tr.property(_SNAPSHOT_PROPS[sp][1]); } catch (ePr) {}
+            if (!pr) continue;
+            try { tv[spKey] = _r2(pr.valueAtTime(comp.time, false)); } catch (eVal) {}
+            try {
+              if (pr.numKeys > 0) {
+                if (!anim) anim = {};
+                anim[spKey] = _keyRangeInfo(pr, fingerprint);
+              }
+            } catch (eKeys) {}
+            try {
+              if (pr.expressionEnabled) {
+                info.hasExpressions = true;
+                if (!info.expressions) info.expressions = [];
+                var exprEntry = { path: _SNAPSHOT_PROPS[sp][2] };
                 var exprText = String(pr.expression || '');
                 exprEntry.snippet = exprText.length > 120 ? exprText.substr(0, 120) + '...' : exprText;
-              } catch (eTxt) {}
-              try {
-                var exprErr = pr.expressionError || '';
-                if (exprErr && exprErr.length > 0) exprEntry.error = String(exprErr).substr(0, 160);
-              } catch (eErr) {}
-              info.expressions.push(exprEntry);
-            }
-          } catch (eExp) {}
+                if (fingerprint) exprEntry.sig = _hashStr(exprText);
+                try {
+                  var exprErr = pr.expressionError || '';
+                  if (exprErr && exprErr.length > 0) exprEntry.error = String(exprErr).substr(0, 160);
+                } catch (eErr) {}
+                info.expressions.push(exprEntry);
+              }
+            } catch (eExp) {}
+          }
+          if (info.threeDLayer) {
+            try { tv.xRotation = _r2(tr.property('ADBE Rotate X').valueAtTime(comp.time, false)); } catch (eRx) {}
+            try { tv.yRotation = _r2(tr.property('ADBE Rotate Y').valueAtTime(comp.time, false)); } catch (eRy) {}
+          }
+          info.transform = tv;
+          // Parented layers: Position is in PARENT space — report the comp-space
+          // point too, so frame-relative math has a real reference.
+          if (info.parentIndex !== null) {
+            try { info.compPosition = _r2(_compSpacePosition(layer, comp.time)); } catch (eCp) {}
+          }
         }
+        if (layerType === 'text') {
+          try {
+            var tdProp = layer.property('ADBE Text Properties').property('ADBE Text Document');
+            var tdVal = tdProp.valueAtTime(comp.time, false);
+            var txt = String(tdVal.text || '');
+            info.text = txt.length > 80 ? txt.substr(0, 80) + '...' : txt;
+            if (fingerprint) info.textSig = _hashStr(txt);
+            if (tdProp.numKeys > 0) {
+              if (!anim) anim = {};
+              anim.sourceText = _keyRangeInfo(tdProp, fingerprint);
+            }
+            if (tdProp.expressionEnabled) {
+              info.hasExpressions = true;
+              if (!info.expressions) info.expressions = [];
+              var tdExpr = String(tdProp.expression || '');
+              var tdEntry = { path: 'Text>Source Text', snippet: tdExpr.length > 120 ? tdExpr.substr(0, 120) + '...' : tdExpr };
+              if (fingerprint) tdEntry.sig = _hashStr(tdExpr);
+              info.expressions.push(tdEntry);
+            }
+          } catch (eTd) {}
+        }
+        try {
+          if (layer.canSetTimeRemapEnabled && layer.timeRemapEnabled) {
+            info.timeRemapEnabled = true;
+            var rp = layer.property('ADBE Time Remapping');
+            if (rp && rp.numKeys > 0) {
+              if (!anim) anim = {};
+              anim.timeRemap = _keyRangeInfo(rp, fingerprint);
+            }
+          }
+        } catch (eRm) {}
+        if (anim) info.animated = anim;
+        try {
+          var mk = layer.property('ADBE Mask Parade');
+          if (mk && mk.numProperties > 0) info.numMasks = mk.numProperties;
+        } catch (eMk) {}
 
         result.layers.push(info);
         addedCount++;
@@ -3600,7 +3925,8 @@ function extensionsLlmChat_getDetailedCompSummary (filterOptions) {
     if (filterType) filterNote += ' (type: ' + filterType + ')';
     if (filterName) filterNote += ' (name: "' + opts.nameContains + '")';
     if (compact) filterNote += ' [compact]';
-    result.message = 'Summary of "' + comp.name + '": ' + result.layers.length + '/' + comp.numLayers + ' layers' + filterNote + '.';
+    result.message = 'Summary of "' + comp.name + '": ' + result.layers.length + '/' + comp.numLayers + ' layers' + filterNote + '.' +
+      (compact ? '' : ' Transform values are at t=' + result.time + 's; `animated` lists keyframe ranges per property.');
     return resultToJson(result);
   } catch (e) {
     result.message = 'getDetailedCompSummary error: ' + e.toString();
@@ -5862,7 +6188,9 @@ function extensionsLlmChat_getCapabilities () {
     'extensionsLlmChat_renderCompAudio',
     'extensionsLlmChat_createSubtitles',
     'extensionsLlmChat_readSubtitleRig',
-    'extensionsLlmChat_rewriteSubtitleRig'
+    'extensionsLlmChat_rewriteSubtitleRig',
+    'extensionsLlmChat_probeMotion',
+    '_compSpacePosition'
   ];
   for (var i = 0; i < probeList.length; i++) {
     var name = probeList[i];

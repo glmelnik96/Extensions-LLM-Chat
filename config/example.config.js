@@ -45,6 +45,18 @@
        *  reference task; GLM has no thinking budget, only on/off. */
       agentThinkingFirstTurn: false,
 
+      /** Plan-first turn (2026-09-02): one tool-less model call per request
+       *  that writes targets / hard constraints / expected result / steps
+       *  before anything in the comp is touched. The plan is shown to the
+       *  user and the VERIFY turn holds the model to it. ~1 extra fast call. */
+      agentPlanTurn: true,
+
+      /** Verify turn (2026-09-02): before a final answer is accepted after a
+       *  run that mutated the comp, the loop hands the model the ACTUAL scene
+       *  diff (before/after snapshot) and demands measurement (probe_motion)
+       *  and fixes. Once per run — closes the loop on "reported but not done". */
+      agentVerifyTurn: true,
+
       /** ── Token→ruble pricing (Cloud.ru tariffs) ──────────────────────────
        *  ₽ per 1,000,000 tokens (Cloud.ru tariffs, update as prices change).
        *  Cost is priced per usage event with the split input (prompt) / output
