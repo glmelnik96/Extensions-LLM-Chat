@@ -165,7 +165,7 @@ async function probeState (times) {
       var t = L.property('ADBE Transform Group');
       var info = {
         index: i, id: L.id, name: L.name, type: _layerTypeString(L),
-        enabled: L.enabled === true, locked: L.locked === true, nullLayer: L.nullLayer === true,
+        enabled: L.enabled === true, locked: L.locked === true, nullLayer: L.nullLayer === true, threeD: L.threeDLayer === true,
         parentIndex: L.parent ? L.parent.index : 0, parentName: L.parent ? L.parent.name : '',
         inPoint: r2(L.inPoint), outPoint: r2(L.outPoint), startTime: r2(L.startTime),
         width: L.width, height: L.height,

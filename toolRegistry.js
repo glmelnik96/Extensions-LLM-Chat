@@ -162,7 +162,7 @@
       type: 'function',
       function: {
         name: 'create_layer',
-        description: 'Create a new layer in the active composition. Types: solid, shape, text, null, adjustment, camera, light.',
+        description: 'Create a new layer in the active composition. Types: solid, shape, text, null, adjustment, camera, light. A camera is refused in a comp with no 3D layers (it would render nothing) — for camera shake use apply_motion_recipe(recipe:"shake").',
         parameters: {
           type: 'object',
           properties: {
@@ -298,8 +298,8 @@
                 properties: {
                   time: { type: 'number', description: 'Time in seconds' },
                   value: { description: 'Value — number for 1D properties, array for multi-dimensional' },
-                  in_type: { type: 'string', enum: ['linear', 'bezier', 'hold'], description: 'Incoming interpolation (default: bezier). hold = the value jumps at the key: use hold for on/off switching and visibility windows' },
-                  out_type: { type: 'string', enum: ['linear', 'bezier', 'hold'], description: 'Outgoing interpolation (default: bezier). hold = the value stays until the next key' },
+                  in_type: { type: 'string', enum: ['linear', 'bezier', 'hold'], description: 'Incoming interpolation (default: bezier) — shapes the segment BEFORE this key. Note: to make a value STAY constant after a key, set that key\'s out_type to hold (in_type has no effect on what follows).' },
+                  out_type: { type: 'string', enum: ['linear', 'bezier', 'hold'], description: 'Outgoing interpolation (default: bezier) — shapes the segment AFTER this key. hold = the value stays exactly at this key\'s value until the next key (no ramp). For on/off visibility windows put out_type:"hold" on EVERY key of the window.' },
                   ease_in: {
                     type: 'array',
                     items: { type: 'object', properties: { speed: { type: 'number' }, influence: { type: 'number' } } },
@@ -437,6 +437,37 @@
     {
       type: 'function',
       function: {
+        name: 'apply_motion_recipe',
+        description: 'Apply a standard motion pattern to one or more layers in ONE call, done right by construction: keys start at each layer\'s IN-POINT (never comp 0), easy-ease, parent space handled, undo as one group. PREFER this over hand-built keyframes for: pop_in (centres the anchor without moving the layer, Scale 0→current with a small overshoot), slide_in (enters from fully OUTSIDE the frame on the chosen side and lands on the current position), fade (opacity in / out at the out-point / both), pulse (smooth scale breathing expression), orbit (parents the layer to a new rotating null at the reference layer — constant radius, one turn per `period`), follow (Position expression follows a leader layer with `delay` seconds lag, keeping the current offset), shake (camera-shake wiggle on Position + Rotation; with NO layer_ids it builds a whole-comp rig: a "Camera Shake" null at the comp centre that every 2D layer is parented to — use this for "тряска камеры" in 2D comps, where a real camera does nothing). Use `direction:"out"` for exits. Returns per-layer what was done (times, values, offscreen start point).',
+        parameters: {
+          type: 'object',
+          properties: {
+            recipe: { type: 'string', enum: ['pop_in', 'slide_in', 'fade', 'pulse', 'orbit', 'follow', 'shake'], description: 'Which pattern to apply' },
+            layer_ids: { type: 'array', items: { type: 'number' }, description: 'Persistent ids of the target layers (preferred)' },
+            layer_indices: { type: 'array', items: { type: 'number' }, description: '1-based indices, used when layer_ids is absent' },
+            duration: { type: 'number', description: 'Seconds per layer for pop_in / slide_in / fade (default 0.6)' },
+            delay: { type: 'number', description: 'Seconds after the layer\'s in-point before the motion starts (default 0). For `follow`: the lag behind the leader (default 0.5)' },
+            stagger: { type: 'number', description: 'Extra seconds added per successive layer, in the given order (default 0)' },
+            direction: { type: 'string', enum: ['in', 'out', 'both'], description: 'in (default) = entrance from the in-point; out = exit (fade: ends at the out-point); both = fade in and out' },
+            from: { type: 'string', enum: ['left', 'right', 'top', 'bottom'], description: 'slide_in: which frame edge the layer enters from (default left)' },
+            ease: { type: 'number', description: 'Easy-ease influence in percent, 0–100 (default 75)' },
+            overshoot: { type: 'number', description: 'Fraction of the travel to overshoot before settling, e.g. 0.1 (pop_in defaults to 0.1, others 0)' },
+            period: { type: 'number', description: 'pulse: seconds per breath (default 1); orbit: seconds per full turn (default 4)' },
+            amount: { type: 'number', description: 'pulse: ± scale percent (default 10); shake: wiggle amplitude in px (default 20)' },
+            frequency: { type: 'number', description: 'shake: wiggles per second (default 4)' },
+            rotation: { type: 'number', description: 'shake: rotation wiggle amplitude in degrees (default 1, 0 = none)' },
+            radius: { type: 'number', description: 'orbit: radius in px (default: the current distance to the reference layer)' },
+            around_layer_id: { type: 'number', description: 'orbit: layer to orbit around; follow: leader layer to follow' },
+            around_layer_index: { type: 'number', description: 'orbit / follow: 1-based index alternative to around_layer_id' },
+            replace: { type: 'boolean', description: 'Replace existing keyframes on the animated property (default true). false = merge with existing keys' }
+          },
+          required: ['recipe']
+        }
+      }
+    },
+    {
+      type: 'function',
+      function: {
         name: 'randomize_property',
         description: 'Give each of several layers a random value on one transform property — for organic variation (scatter positions, jitter rotations, vary scales). Multi-dimensional properties get an independent random per axis unless per-axis ranges are given; scale is uniform by default.',
         parameters: {
@@ -498,8 +529,8 @@
                       properties: {
                         time: { type: 'number', description: 'Time in seconds' },
                         value: { description: 'Value — number for 1D properties, array for multi-dimensional' },
-                        in_type: { type: 'string', enum: ['linear', 'bezier', 'hold'], description: 'Incoming interpolation (default: bezier). hold = the value jumps at the key: use hold for on/off switching and visibility windows' },
-                        out_type: { type: 'string', enum: ['linear', 'bezier', 'hold'], description: 'Outgoing interpolation (default: bezier). hold = the value stays until the next key' },
+                        in_type: { type: 'string', enum: ['linear', 'bezier', 'hold'], description: 'Incoming interpolation (default: bezier) — shapes the segment BEFORE this key. Note: to make a value STAY constant after a key, set that key\'s out_type to hold (in_type has no effect on what follows).' },
+                        out_type: { type: 'string', enum: ['linear', 'bezier', 'hold'], description: 'Outgoing interpolation (default: bezier) — shapes the segment AFTER this key. hold = the value stays exactly at this key\'s value until the next key (no ramp). For on/off visibility windows put out_type:"hold" on EVERY key of the window.' },
                         ease_in: {
                           type: 'array',
                           items: { type: 'object', properties: { speed: { type: 'number' }, influence: { type: 'number' } } },
@@ -680,7 +711,7 @@
       type: 'function',
       function: {
         name: 'set_layer_3d',
-        description: 'Enable or disable 3D on a layer. Does not apply to camera/light layers (always 3D).',
+        description: 'Enable or disable 3D on a layer. Does not apply to camera/light layers (always 3D). Never switch 2D layers to 3D just so a camera can shake or move them — use apply_motion_recipe(recipe:"shake") or a parent null instead; 3D changes rendering (perspective, sorting, blur) for the whole comp.',
         parameters: {
           type: 'object',
           properties: {

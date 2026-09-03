@@ -32,7 +32,7 @@ test('toolGating: every gated tool exists in the registry, no tool is in two gro
 test('toolGating: CORE keeps the everyday tools and drops the rare ones', () => {
   const tools = loadRegistry()
   const core = TG.selectTools(tools, []).map(t => t.function.name)
-  for (const must of ['batch_call', 'get_detailed_comp_summary', 'probe_motion', 'create_layer', 'add_keyframes', 'set_keyframes_batch', 'set_property_value', 'set_text_document', 'set_layer_switches', 'stagger_layers', 'duplicate_layer', 'rename_layer', 'delete_layer', 'set_layer_parent', 'set_layer_timing']) {
+  for (const must of ['batch_call', 'apply_motion_recipe', 'get_detailed_comp_summary', 'probe_motion', 'create_layer', 'add_keyframes', 'set_keyframes_batch', 'set_property_value', 'set_text_document', 'set_layer_switches', 'stagger_layers', 'duplicate_layer', 'rename_layer', 'delete_layer', 'set_layer_parent', 'set_layer_timing']) {
     assert.ok(core.includes(must), 'core must include ' + must)
   }
   for (const gated of ['apply_expression', 'add_effect', 'add_mask', 'set_camera_properties', 'add_marker', 'import_file', 'set_time_remap', 'create_subtitles', 'capture_comp_frame', 'add_shape_ellipse']) {

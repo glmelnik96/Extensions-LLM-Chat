@@ -23,9 +23,26 @@ function loadBrowserGlobal (file) {
 const registryWindow = loadBrowserGlobal('toolRegistry.js')
 const tools = registryWindow.AGENT_TOOL_REGISTRY && registryWindow.AGENT_TOOL_REGISTRY.tools
 
-test('registry: exposes 69 tools', () => {
+test('registry: exposes 70 tools', () => {
   assert.ok(Array.isArray(tools), 'tools array exported')
-  assert.strictEqual(tools.length, 69)
+  assert.strictEqual(tools.length, 70)
+})
+
+test('registry: create_layer documents the camera-in-2D refusal (2026-09-02)', () => {
+  assert.match(findTool('create_layer').function.description, /camera is refused in a comp with no 3D layers/)
+  const host = fs.readFileSync(path.join(__dirname, '..', 'host', 'index.jsx'), 'utf8')
+  assert.ok(host.indexOf('CAMERA_IN_2D_COMP') !== -1, 'host guard present')
+})
+
+test('registry: apply_motion_recipe (2026-09-02) — seven deterministic motion patterns', () => {
+  const t = findTool('apply_motion_recipe')
+  assert.ok(t, 'apply_motion_recipe registered')
+  assert.strictEqual(JSON.stringify(t.function.parameters.required), JSON.stringify(['recipe']))
+  assert.strictEqual(JSON.stringify(t.function.parameters.properties.recipe.enum), JSON.stringify(['pop_in', 'slide_in', 'fade', 'pulse', 'orbit', 'follow', 'shake']))
+  for (const key of ['layer_ids', 'layer_indices', 'duration', 'delay', 'stagger', 'direction', 'from', 'ease', 'overshoot', 'period', 'amount', 'around_layer_id', 'replace']) {
+    assert.ok(t.function.parameters.properties[key], 'param ' + key)
+  }
+  assert.match(t.function.description, /IN-POINT/)
 })
 
 test('registry: probe_motion (2026-09-02) — read-only motion sampler with comp-space option', () => {
@@ -185,7 +202,7 @@ test('prompt: new behavior rules present', () => {
   assert.match(full, /Verify before claiming done/, 'self-verification rule')
   assert.match(full, /brief numbered plan/, 'plan rule')
   assert.ok(!full.includes('No chain-of-thought in the visible response'), 'old no-CoT rule replaced')
-  assert.match(full, /69 tools/, 'tool count updated')
+  assert.match(full, /70 tools/, 'tool count updated')
 })
 
 test('registry: compositing tools (2026-07-27) registered with correct schemas', () => {
@@ -297,9 +314,10 @@ test('registry: update_subtitles (2026-08-17) registered with correct schema', (
 test('registry: timing/hold guidance for "visible from A to B" requests (2026-09-02)', () => {
   assert.match(findTool('set_layer_timing').function.description, /visible from A to B/)
   const kf = findTool('add_keyframes').function.parameters.properties.keyframes.items.properties
-  assert.match(kf.in_type.description, /hold = the value jumps/)
+  assert.match(kf.in_type.description, /segment BEFORE this key/)
   const bt = findTool('set_keyframes_batch').function.parameters.properties.targets.items.properties.keyframes.items.properties
-  assert.match(bt.out_type.description, /hold = the value stays/)
+  assert.match(bt.out_type.description, /segment AFTER this key/)
+  assert.match(bt.out_type.description, /out_type:"hold" on EVERY key/)
 })
 
 test('prompt: closed-loop rules present (2026-09-02)', () => {

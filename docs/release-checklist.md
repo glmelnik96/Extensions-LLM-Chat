@@ -31,6 +31,7 @@ Pre-release validation for the AE Motion Agent CEP extension.
 - [ ] Scene diff: after a mutating run the transcript shows `Actual changes (scene diff): …` listing the real layer/property changes
 - [ ] Verify turn: the model receives `[SYSTEM] VERIFY` once after a mutating run and its final answer matches the diff (no unperformed work reported)
 - [ ] `probe_motion` on a parented layer with `space:"comp"` returns changing comp-space samples; `get_detailed_comp_summary` shows `enabled`/`locked`/`transform`/`animated`
+- [ ] `apply_motion_recipe`: pop_in on a layer with in-point > 0 starts scaling at the in-point; slide_in on a parented layer starts outside the frame; shake with no targets builds the "Camera Shake" null rig
 - [ ] Eval corpus: `node scripts/eval-corpus.js` (AE open, real LLM calls) — pass-rate not below the last committed report; `--compare <previous report>` lists no unexplained REGRESSED cases
 
 See [qa-test-plan.md](qa-test-plan.md) for full smoke list.

@@ -342,7 +342,17 @@
     // = the model's final message alone (what evals and guards should judge),
     // `plan` = the plan-turn text ('' when no plan turn ran).
     function finalResult (content) {
-      return { content: composeFinal(content), outcome: content, plan: planText, toolCallLog: toolCallLog, usage: totalUsage }
+      var clean = stripFinalMarker(content)
+      if (!clean && planText && toolCallLog.length === 0) clean = planText
+      return { content: composeFinal(clean), outcome: clean, plan: planText, toolCallLog: toolCallLog, usage: totalUsage }
+    }
+
+    // The model may echo the plan-turn marker on any later turn ('[[final]]'
+    // alone, or appended to an answer). It is never part of the answer.
+    function stripFinalMarker (text) {
+      var t = String(text || '')
+      if (t.indexOf(PLAN_FINAL_MARKER) === -1) return t
+      return t.split(PLAN_FINAL_MARKER).join('').replace(/^\s+|\s+$/g, '')
     }
 
     // The plan is shown to the user once; the outcome follows it. With no
@@ -350,6 +360,7 @@
     function composeFinal (content) {
       if (!planText) return content
       if (toolCallLog.length === 0) return (content && content.length > planText.length) ? content : planText
+      if (content === planText) return content
       return planText + '\n\n' + content
     }
 
@@ -460,6 +471,9 @@
     // Live finding (2026-09-02): the model scaled a layer whose video switch
     // was off, got the host WARNING, and still told the user nothing. The
     // diff marks such layers; make the verify turn act on the mark.
+    if (text.indexOf('holds ') !== -1 && text.indexOf(' BEFORE ') !== -1) {
+      head += 'A property marked "holds X BEFORE t" is at that value from the layer\'s in-point until its first key — the layer is VISIBLE before its window. Add a key at the in-point with the off value (out_type hold) or trim with set_layer_timing if it must be hidden until then. '
+    }
     if (text.indexOf('[video switch OFF') !== -1) {
       head += 'A layer marked [video switch OFF] renders NOTHING — whatever you changed on it is invisible: enable it (set_layer_switches enabled:true) if the request implies it should be seen, otherwise state explicitly in your answer that the layer is hidden. '
     }

@@ -1629,6 +1629,18 @@ function extensionsLlmChat_createLayer (layerType, name, opts) {
       layer.adjustmentLayer = true;
     } else if (layerType === 'camera') {
       var camPreset = typeof opts.preset === 'string' ? opts.preset : '';
+      var any3d = false;
+      for (var c3 = 1; c3 <= comp.numLayers; c3++) {
+        try { if (comp.layer(c3).threeDLayer === true) { any3d = true; break; } } catch (e3d) {}
+      }
+      if (!any3d && opts.force !== true) {
+        _endToolUndo();
+        result.message = 'create_layer(camera) refused: this composition has NO 3D layers, so a camera would change nothing on screen. ' +
+          'For camera shake / camera moves in this 2D comp use apply_motion_recipe(recipe:"shake") with no layer_ids — it builds a null rig every layer follows. ' +
+          'Do NOT switch layers to 3D to make a camera work: that changes how everything renders. Add a camera only when the user explicitly asks for a 3D scene.';
+        result.error_code = 'CAMERA_IN_2D_COMP';
+        return resultToJson(result);
+      }
       layer = comp.layers.addCamera(layerName, [comp.width / 2, comp.height / 2]);
     } else if (layerType === 'light') {
       layer = comp.layers.addLight(layerName, [comp.width / 2, comp.height / 2]);
@@ -1781,6 +1793,11 @@ function extensionsLlmChat_setLayerParent (layerIndex, layerId, parentLayerIndex
     if (!parent) {
       _endToolUndo();
       result.message = 'Parent layer not found.';
+      return resultToJson(result);
+    }
+    if (parent.id === child.id) {
+      _endToolUndo();
+      result.message = 'set_layer_parent: child and parent resolve to the SAME layer ("' + child.name + '", index ' + child.index + ', id ' + child.id + '). Pass the child as layer_id and the parent as parent_layer_id — two different layers.';
       return resultToJson(result);
     }
     child.parent = parent;
@@ -2073,6 +2090,32 @@ function _firstKeyNote (layer, prop) {
   } catch (e) { return ''; }
 }
 
+/**
+ * Visibility built as a RAMP: Opacity keys that go 0 -> visible -> 0 with
+ * linear/bezier interpolation leave the layer half-transparent for most of
+ * its window (eval corpus 2026-09-02, explicit-mapping x3: "visible 1-2 s"
+ * built as 0->100->0 bezier keys = 50% at the midpoints, 16-83% on a 4-key
+ * card). Measure halfway between consecutive keys and report the dips.
+ * Returns '' when every midpoint is fully on or fully off.
+ */
+function _opacityRampNote (layer, prop) {
+  try {
+    if (!layer || !prop || prop.matchName !== 'ADBE Opacity' || prop.numKeys < 2) return '';
+    var dips = [];
+    for (var k = 1; k < prop.numKeys; k++) {
+      var ta = prop.keyTime(k); var tb = prop.keyTime(k + 1);
+      if (tb - ta < 0.02) continue;
+      var mid = (ta + tb) / 2;
+      var v = prop.valueAtTime(mid, false);
+      if (v > 3 && v < 97) dips.push('t=' + _r2(mid) + 's: ' + _r2(v) + '%');
+      if (dips.length >= 4) break;
+    }
+    if (!dips.length) return '';
+    return ' WARNING: Opacity is HALF-TRANSPARENT between keys (' + dips.join(', ') + ') — these keys form a gradual ramp, not an on/off window.' +
+      ' For "visible from A to B" set out_type:"hold" on EVERY key of the window (hold acts on the segment AFTER a key; in_type:"hold" does nothing for what follows), or trim the layer with set_layer_timing; keep a ramp only if a slow fade was requested.';
+  } catch (e) { return ''; }
+}
+
 function _mergedKeysNote (prevKeys, prop) {
   if (!(prevKeys > 0)) return '';
   return ' WARNING: this property ALREADY had ' + prevKeys + ' keyframe(s) — your new keys were MERGED into the existing animation (now ' + prop.numKeys + ' total), they did NOT replace it. If you meant to REPLACE the animation, first delete the old keyframes (delete_keyframes / remove them), or set new values at the EXISTING key times.';
@@ -2113,6 +2156,8 @@ function extensionsLlmChat_addKeyframes (layerIndex, layerId, propertyPath, keyf
     if (kfMergeNote) { result.mergedIntoExisting = true; kfMsg += kfMergeNote; }
     var kfFirstNote = _firstKeyNote(layer, prop);
     if (kfFirstNote) { result.firstKeyNote = true; kfMsg += kfFirstNote; }
+    var kfRampNote = _opacityRampNote(layer, prop);
+    if (kfRampNote) { result.opacityRamp = true; kfMsg += kfRampNote; }
     var kfPsNote = _parentSpaceNote(layer, propertyPath);
     if (kfPsNote) { result.parentSpace = true; kfMsg += kfPsNote; }
     var kfHiddenMsg = _hiddenLayerWarning(layer);
@@ -2215,6 +2260,8 @@ function extensionsLlmChat_setKeyframesBatch (targets) {
         if (kbMergeNote) { itemResult.mergedIntoExisting = true; itemResult.message += kbMergeNote; }
         var kbFirstNote = _firstKeyNote(layer, prop);
         if (kbFirstNote) { itemResult.firstKeyNote = true; itemResult.message += kbFirstNote; }
+        var kbRampNote = _opacityRampNote(layer, prop);
+        if (kbRampNote) { itemResult.opacityRamp = true; itemResult.message += kbRampNote; }
         var kbPsNote = _parentSpaceNote(layer, propertyPath);
         if (kbPsNote) { itemResult.parentSpace = true; itemResult.message += kbPsNote; }
         var kbHiddenMsg = _hiddenLayerWarning(layer);
@@ -3748,6 +3795,13 @@ var _SNAPSHOT_PROPS = [
 function _keyRangeInfo (prop, fingerprint) {
   var n = prop.numKeys;
   var o = { numKeys: n, from: _r2(prop.keyTime(1)), to: _r2(prop.keyTime(n)) };
+  // First/last key VALUES: before the first key a property holds the first
+  // key's value, after the last key the last one — the two numbers that
+  // decide whether a layer is visible outside its keyed window.
+  try {
+    var fv = prop.keyValue(1); var lv = prop.keyValue(n);
+    if (typeof fv === 'number' || fv instanceof Array) { o.firstValue = _r2(fv); o.lastValue = _r2(lv); }
+  } catch (eFv) {}
   if (fingerprint) {
     var src = '';
     for (var k = 1; k <= n; k++) {
@@ -6224,6 +6278,326 @@ function extensionsLlmChat_rewriteSubtitleRig (layerId, cues, opts) {
 // Capability handshake — lets the client detect a stale/incomplete host script
 // ============================================================================
 
+/* ── Motion recipes (2026-09-02) ─────────────────────────────────────────
+ * Deterministic, self-verifying motion primitives. The eval corpus and six
+ * hunt rounds showed the same request classes assembled by hand from 5–15
+ * primitive calls — and failing on the same details every time: anchor not
+ * centred before a scale-in, keys before the in-point, values in comp space
+ * on a parented layer, a slide from an off-screen edge that never crosses
+ * the frame edge, orbits whose radius drifts. One host call per recipe fixes
+ * every one of those in code; parameters stay few and human ("from the
+ * left", "1 second", "with overshoot").
+ *
+ * Every recipe: resolves layers (locked → refuse, hidden → warn), reads the
+ * layer's in-point (never comp 0), writes keys with easing in one undo
+ * group, and returns what it did in comp terms the model can report.
+ */
+
+// Round to 4 decimals for key times (frame-safe).
+function _r4 (v) { return Math.round(v * 10000) / 10000; }
+
+// Ease spec → KeyframeEase[] of the right dimensionality.
+function _easeArr (prop, keyIdx, speed, influence) {
+  var n = _getTemporalEaseDims(prop, keyIdx);
+  var arr = [];
+  for (var d = 0; d < n; d++) arr.push(new KeyframeEase(speed, _clampEaseInfluence(influence)));
+  return arr;
+}
+
+// Two-key move with easy-ease (bezier, influence in %) — the recipe workhorse.
+// overshoot > 0 adds a third key: the value passes the target by `overshoot`
+// (fraction of the travel) and settles.
+function _recipeKeys (prop, t0, v0, t1, v1, influence, overshoot) {
+  var travel = null;
+  if (typeof v0 === 'number') travel = v1 - v0;
+  else { travel = []; for (var i = 0; i < v0.length; i++) travel.push(v1[i] - v0[i]); }
+  var mid = null;
+  if (overshoot > 0) {
+    var tm = t0 + (t1 - t0) * 0.75;
+    if (typeof v0 === 'number') mid = { t: tm, v: v0 + travel * (1 + overshoot) };
+    else { var mv = []; for (var j = 0; j < v0.length; j++) mv.push(v0[j] + travel[j] * (1 + overshoot)); mid = { t: tm, v: mv }; }
+  }
+  var k0 = prop.addKey(t0); prop.setValueAtKey(k0, v0);
+  var keys = [k0];
+  if (mid) { var km = prop.addKey(mid.t); prop.setValueAtKey(km, mid.v); keys.push(km); }
+  var k1 = prop.addKey(t1); prop.setValueAtKey(k1, v1);
+  keys.push(k1);
+  for (var q = 0; q < keys.length; q++) {
+    try { prop.setInterpolationTypeAtKey(keys[q], KeyframeInterpolationType.BEZIER, KeyframeInterpolationType.BEZIER); } catch (eI) {}
+    try {
+      var infl = (q === 0 || q === keys.length - 1) ? influence : 50;
+      prop.setTemporalEaseAtKey(keys[q], _easeArr(prop, keys[q], 0, infl), _easeArr(prop, keys[q], 0, infl));
+    } catch (eE) {}
+  }
+  return keys.length;
+}
+
+// Comp-space point → the layer's Position space (parent chain inverted, 2D).
+function _compToLayerSpace (layer, pt) {
+  var chain = [];
+  var P = layer.parent; var hops = 0;
+  while (P && hops < 16) { chain.push(P); P = P.parent; hops++; }
+  var x = pt[0]; var y = pt[1];
+  for (var i = chain.length - 1; i >= 0; i--) {
+    var tr = chain[i].property('ADBE Transform Group');
+    var pp = tr.property('ADBE Position').value;
+    var pa = tr.property('ADBE Anchor Point').value;
+    var ps = tr.property('ADBE Scale').value;
+    var pr = tr.property('ADBE Rotate Z').value * Math.PI / 180;
+    var dx = x - pp[0]; var dy = y - pp[1];
+    var rx = dx * Math.cos(-pr) - dy * Math.sin(-pr);
+    var ry = dx * Math.sin(-pr) + dy * Math.cos(-pr);
+    x = pa[0] + rx / (ps[0] / 100 || 1);
+    y = pa[1] + ry / (ps[1] / 100 || 1);
+  }
+  return [x, y];
+}
+
+function _recipeClearKeys (prop) {
+  try { while (prop.numKeys > 0) prop.removeKey(1); } catch (e) {}
+}
+
+/**
+ * apply_motion_recipe host entry.
+ * @param {string} recipe  pop_in | slide_in | fade | pulse | orbit | follow | shake
+ * @param {number[]} layerIndices
+ * @param {number[]} layerIds
+ * @param {object} opts  recipe options (see registry description)
+ */
+function extensionsLlmChat_applyMotionRecipe (recipe, layerIndices, layerIds, opts) {
+  var result = { ok: false, message: '', recipe: recipe, applied: [], skipped: [] };
+  try {
+    var ctx = extensionsLlmChat_resolveActiveComp();
+    if (!ctx.ok || !ctx.comp) { result.message = ctx.message; return resultToJson(result); }
+    var comp = ctx.comp;
+    opts = opts || {};
+    var known = { pop_in: 1, slide_in: 1, fade: 1, pulse: 1, orbit: 1, follow: 1, shake: 1 };
+    if (!known[recipe]) { result.message = 'apply_motion_recipe: unknown recipe "' + recipe + '". Use pop_in, slide_in, fade, pulse, orbit, follow or shake.'; return resultToJson(result); }
+    var layers = _resolveLayerList(comp, layerIndices, layerIds);
+    if (!layers.length && recipe === 'shake') {
+      // Whole-composition shake: a null controller parents every unparented
+      // 2D content layer (cameras/lights/existing rigs skipped). One layer's
+      // wiggle then moves the whole frame — the 2D equivalent of a shaking
+      // camera, which would be inert here.
+      _beginToolUndo('Agent: Camera shake rig');
+      var rig = comp.layers.addNull();
+      rig.name = 'Camera Shake';
+      rig.property('ADBE Transform Group').property('ADBE Position').setValue([comp.width / 2, comp.height / 2]);
+      rig.property('ADBE Transform Group').property('ADBE Anchor Point').setValue([50, 50]);
+      rig.moveToBeginning();
+      var attached = [];
+      for (var ri = 1; ri <= comp.numLayers; ri++) {
+        var cl = comp.layer(ri);
+        if (cl.id === rig.id) continue;
+        try {
+          if (cl instanceof CameraLayer || cl instanceof LightLayer) continue;
+          if (cl.parent || cl.locked) continue;
+          cl.parent = rig;
+          attached.push(cl.name);
+        } catch (eAt) {}
+      }
+      var rFreq = (typeof opts.frequency === 'number' && opts.frequency > 0) ? opts.frequency : 4;
+      var rAmp = (typeof opts.amount === 'number') ? opts.amount : 20;
+      var rRot = (typeof opts.rotation === 'number') ? opts.rotation : 1;
+      rig.property('ADBE Transform Group').property('ADBE Position').expression = 'wiggle(' + rFreq + ', ' + rAmp + ')';
+      if (rRot > 0) rig.property('ADBE Transform Group').property('ADBE Rotate Z').expression = 'wiggle(' + rFreq + ', ' + rRot + ')';
+      // Slight scale-up so the frame edges never show while shaking.
+      var over = 100 + Math.min(10, Math.ceil(rAmp / 8));
+      rig.property('ADBE Transform Group').property('ADBE Scale').setValue([over, over]);
+      _endToolUndo();
+      result.ok = true;
+      result.applied.push({ layer: rig.name, layerId: rig.id, attached: attached, frequency: rFreq, amount: rAmp, rotation: rRot, scale: over });
+      result.message = 'Shake: built a "Camera Shake" null at the comp center (Position wiggle(' + rFreq + ', ' + rAmp + ')' + (rRot ? ', Rotation wiggle(' + rFreq + ', ' + rRot + ')' : '') + ', scale ' + over + '% so edges stay hidden) and parented ' + attached.length + ' layer(s) to it: ' + attached.join(', ') + '. Cameras are inert in 2D comps — this null IS the camera shake. Adjust intensity on the null.';
+      return resultToJson(result);
+    }
+    if (!layers.length) { result.message = 'apply_motion_recipe: no resolvable layers — pass layer_ids (or layer_indices) from the comp summary.'; return resultToJson(result); }
+
+    var duration = (typeof opts.duration === 'number' && opts.duration > 0) ? opts.duration : 0.6;
+    var delay = (typeof opts.delay === 'number' && opts.delay >= 0) ? opts.delay : 0;
+    var stagger = (typeof opts.stagger === 'number' && opts.stagger >= 0) ? opts.stagger : 0;
+    var influence = (typeof opts.ease === 'number') ? opts.ease : 75;
+    var overshoot = (typeof opts.overshoot === 'number') ? opts.overshoot : 0;
+    var replace = opts.replace !== false;
+    var direction = (typeof opts.direction === 'string') ? opts.direction : 'in';
+    var frameDur = comp.frameDuration > 0 ? comp.frameDuration : (1 / 30);
+    var warnings = [];
+    var tag = { pop_in: 'Pop in', slide_in: 'Slide in', fade: 'Fade', pulse: 'Pulse', orbit: 'Orbit', follow: 'Follow', shake: 'Shake' }[recipe];
+
+    // Orbit and follow need a reference layer.
+    var refLayer = null;
+    if (recipe === 'orbit' || recipe === 'follow') {
+      refLayer = _resolveLayer(comp, (typeof opts.around_layer_index === 'number') ? opts.around_layer_index : null, (typeof opts.around_layer_id === 'number') ? opts.around_layer_id : null);
+      if (!refLayer) { result.message = 'apply_motion_recipe(' + recipe + '): pass around_layer_id (the layer to orbit around / to follow).'; return resultToJson(result); }
+    }
+
+    _beginToolUndo('Agent: ' + tag);
+    for (var li = 0; li < layers.length; li++) {
+      var layer = layers[li];
+      var lockMsg = _lockedRefusal(layer);
+      if (lockMsg) { result.skipped.push({ layer: layer.name, reason: 'locked' }); continue; }
+      if (refLayer && layer.id === refLayer.id) { result.skipped.push({ layer: layer.name, reason: 'is the reference layer' }); continue; }
+      var tr = layer.property('ADBE Transform Group');
+      var posP = tr.property('ADBE Position');
+      var sclP = tr.property('ADBE Scale');
+      var opP = tr.property('ADBE Opacity');
+      var rotP = tr.property('ADBE Rotate Z');
+      var anchorP = tr.property('ADBE Anchor Point');
+      var t0 = layer.inPoint + delay + stagger * li;
+      var t1 = t0 + duration;
+      var info = { layer: layer.name, layerId: layer.id, start: _r4(t0), end: _r4(t1) };
+      var hiddenMsg = _hiddenLayerWarning(layer);
+      if (hiddenMsg) { info.hidden = true; warnings.push(hiddenMsg); }
+
+      if (recipe === 'pop_in') {
+        // Centre the anchor without moving the layer (a scale-in from a corner
+        // is the classic pop-in failure), then Scale 0 → current with overshoot.
+        try {
+          var rect = layer.sourceRectAtTime(t0, false);
+          var cx = rect.left + rect.width / 2; var cy = rect.top + rect.height / 2;
+          var oa = anchorP.value; var sv0 = sclP.value;
+          var dx = cx - oa[0]; var dy = cy - oa[1];
+          if (Math.abs(dx) > 0.01 || Math.abs(dy) > 0.01) {
+            if (anchorP.numKeys === 0 && posP.numKeys === 0) {
+              anchorP.setValue([cx, cy]);
+              var pv = posP.value;
+              var rad = rotP.value * Math.PI / 180;
+              var ox = dx * sv0[0] / 100; var oy = dy * sv0[1] / 100;
+              var rx = ox * Math.cos(rad) - oy * Math.sin(rad); var ry = ox * Math.sin(rad) + oy * Math.cos(rad);
+              if (pv.length === 3) posP.setValue([pv[0] + rx, pv[1] + ry, pv[2]]); else posP.setValue([pv[0] + rx, pv[1] + ry]);
+              info.anchorCentered = true;
+            }
+          }
+        } catch (eA) {}
+        var target = sclP.value;
+        if (replace) _recipeClearKeys(sclP);
+        var zero = (target.length === 3) ? [0, 0, target[2]] : [0, 0];
+        if (direction === 'out') { _recipeKeys(sclP, t0, target, t1, zero, influence, 0); }
+        else { _recipeKeys(sclP, t0, zero, t1, target, influence, (overshoot > 0) ? overshoot : 0.1); }
+        info.scale = (direction === 'out') ? 'to 0' : '0 → ' + Math.round(target[0]) + '%';
+        info.keys = sclP.numKeys;
+      } else if (recipe === 'slide_in') {
+        // Start fully OUTSIDE the frame on the chosen side (comp space, via the
+        // layer's own bounds) and land on the current position.
+        var side = (typeof opts.from === 'string') ? opts.from : 'left';
+        var cur = posP.value;
+        var world = _compSpacePosition(layer, t0);
+        var w = comp.width; var h = comp.height;
+        var halfW = 0; var halfH = 0;
+        try { var rr = layer.sourceRectAtTime(t0, false); var sc = sclP.value; halfW = Math.abs(rr.width * sc[0] / 100) / 2 + 20; halfH = Math.abs(rr.height * sc[1] / 100) / 2 + 20; } catch (eR) { halfW = 200; halfH = 200; }
+        var offWorld;
+        if (side === 'right') offWorld = [w + halfW, world[1]];
+        else if (side === 'top') offWorld = [world[0], -halfH];
+        else if (side === 'bottom') offWorld = [world[0], h + halfH];
+        else offWorld = [-halfW, world[1]];
+        var offLocal = _compToLayerSpace(layer, offWorld);
+        var startVal = (cur.length === 3) ? [offLocal[0], offLocal[1], cur[2]] : [offLocal[0], offLocal[1]];
+        var endVal = (cur.length === 3) ? [cur[0], cur[1], cur[2]] : [cur[0], cur[1]];
+        if (replace) _recipeClearKeys(posP);
+        if (direction === 'out') _recipeKeys(posP, t0, endVal, t1, startVal, influence, 0);
+        else _recipeKeys(posP, t0, startVal, t1, endVal, influence, overshoot);
+        info.from = side; info.offscreenComp = _r2(offWorld); info.landsAt = _r2(_compSpacePosition(layer, t1 + frameDur));
+        info.keys = posP.numKeys;
+      } else if (recipe === 'fade') {
+        var opTarget = opP.value > 0 ? opP.value : 100;
+        if (replace) _recipeClearKeys(opP);
+        if (direction === 'out') {
+          var tEnd = layer.outPoint; var tStart = tEnd - duration;
+          if (tStart < layer.inPoint) tStart = layer.inPoint;
+          _recipeKeys(opP, tStart, opTarget, tEnd, 0, influence, 0);
+          info.start = _r4(tStart); info.end = _r4(tEnd); info.opacity = opTarget + ' → 0 (ends at out-point)';
+        } else if (direction === 'both') {
+          var tE = layer.outPoint; var tS = tE - duration;
+          _recipeKeys(opP, t0, 0, t1, opTarget, influence, 0);
+          if (tS > t1) { var kA = opP.addKey(tS); opP.setValueAtKey(kA, opTarget); var kB = opP.addKey(tE); opP.setValueAtKey(kB, 0); }
+          info.opacity = '0 → ' + opTarget + ' → 0';
+        } else {
+          _recipeKeys(opP, t0, 0, t1, opTarget, influence, 0);
+          info.opacity = '0 → ' + opTarget;
+        }
+        info.keys = opP.numKeys;
+      } else if (recipe === 'pulse') {
+        // Expression: smooth scale breathing around the current value.
+        var period = (typeof opts.period === 'number' && opts.period > 0) ? opts.period : 1;
+        var amount = (typeof opts.amount === 'number') ? opts.amount : 10;
+        // `value` keeps whatever dimensionality Scale has (2D or 3D); adding a
+        // scalar to an array is per-component in AE expressions.
+        sclP.expression = 'var p = ' + period + '; var a = ' + amount + ';\n' +
+          'var f = a * Math.sin((time - inPoint) * 2 * Math.PI / p);\n' +
+          'value + f;';
+        info.period = period; info.amount = amount; info.expression = 'Scale';
+      } else if (recipe === 'orbit') {
+        // Parent to a null at the reference layer's position that rotates; the
+        // child sits at radius on the +X axis in the null's space. Radius stays
+        // exact by construction, speed = one turn per `period` seconds.
+        var periodO = (typeof opts.period === 'number' && opts.period > 0) ? opts.period : 4;
+        var refWorld = _compSpacePosition(refLayer, comp.time);
+        var childWorld = _compSpacePosition(layer, comp.time);
+        var radius = (typeof opts.radius === 'number' && opts.radius > 0) ? opts.radius : Math.sqrt(Math.pow(childWorld[0] - refWorld[0], 2) + Math.pow(childWorld[1] - refWorld[1], 2));
+        if (radius < 1) radius = 200;
+        var ang0 = Math.atan2(childWorld[1] - refWorld[1], childWorld[0] - refWorld[0]) * 180 / Math.PI;
+        var nul = comp.layers.addNull();
+        nul.name = layer.name + ' Orbit';
+        nul.moveBefore(layer);
+        var np = nul.property('ADBE Transform Group');
+        np.property('ADBE Position').setValue([refWorld[0], refWorld[1]]);
+        np.property('ADBE Anchor Point').setValue([0, 0]);
+        if (refLayer.parent || refLayer.property('ADBE Transform Group').property('ADBE Position').numKeys > 0 || refLayer.property('ADBE Transform Group').property('ADBE Position').expressionEnabled) {
+          nul.parent = refLayer;
+          np.property('ADBE Position').setValue([0, 0]);
+          nul.parent = null;
+          nul.parent = refLayer;
+          var refA = refLayer.property('ADBE Transform Group').property('ADBE Anchor Point').value;
+          np.property('ADBE Position').setValue([refA[0], refA[1]]);
+        }
+        np.property('ADBE Rotate Z').expression = 'var ang0 = ' + _r2(ang0) + '; ang0 + (time - inPoint) * 360 / ' + periodO + ';';
+        _recipeClearKeys(posP);
+        posP.expression = '';
+        layer.parent = null;
+        layer.parent = nul;
+        posP.setValue(posP.value.length === 3 ? [radius, 0, 0] : [radius, 0]);
+        info.radius = _r2(radius); info.period = periodO; info.orbitNull = nul.name; info.around = refLayer.name;
+      } else if (recipe === 'follow') {
+        var lag = (typeof opts.delay === 'number' && opts.delay > 0) ? opts.delay : 0.5;
+        var offsetW = null;
+        try { var a1 = _compSpacePosition(layer, comp.time); var b1 = _compSpacePosition(refLayer, comp.time); offsetW = [a1[0] - b1[0], a1[1] - b1[1]]; } catch (eO) { offsetW = [0, 0]; }
+        if (layer.parent) { warnings.push(' NOTE: "' + layer.name + '" is parented — follow reads the leader in comp space, so its parent was cleared to keep the math honest.'); layer.parent = null; }
+        _recipeClearKeys(posP);
+        posP.expression = 'var L = thisComp.layer("' + refLayer.name.replace(/"/g, '\\"') + '");\n' +
+          'var p = L.toComp(L.anchorPoint, time - ' + lag + ');\n' +
+          '[p[0] + ' + _r2(offsetW[0]) + ', p[1] + ' + _r2(offsetW[1]) + ']';
+        info.leader = refLayer.name; info.lag = lag; info.keepsOffset = _r2(offsetW);
+      } else if (recipe === 'shake') {
+        var freq = (typeof opts.frequency === 'number' && opts.frequency > 0) ? opts.frequency : 4;
+        var amp = (typeof opts.amount === 'number') ? opts.amount : 20;
+        var rotAmp = (typeof opts.rotation === 'number') ? opts.rotation : 1;
+        posP.expression = 'wiggle(' + freq + ', ' + amp + ')';
+        if (rotAmp > 0) rotP.expression = 'wiggle(' + freq + ', ' + rotAmp + ')';
+        info.frequency = freq; info.amount = amp; info.rotation = rotAmp;
+      }
+      result.applied.push(info);
+    }
+    _endToolUndo();
+    result.ok = result.applied.length > 0;
+    var msg = tag + ': ' + result.applied.length + ' layer(s)';
+    if (result.skipped.length) msg += ', ' + result.skipped.length + ' skipped (' + (function () { var a = []; for (var i = 0; i < result.skipped.length; i++) a.push(result.skipped[i].layer + ': ' + result.skipped[i].reason); return a.join('; '); })() + ')';
+    if (result.applied.length) {
+      var f = result.applied[0];
+      if (recipe === 'pop_in' || recipe === 'slide_in' || recipe === 'fade') msg += '; keys from each layer\'s in-point' + (delay ? ' + ' + delay + 's' : '') + (stagger ? ', staggered by ' + stagger + 's' : '') + ', ' + duration + 's each, easy ease ' + influence + '%' + (overshoot ? ', overshoot ' + overshoot : '') + '. First: ' + f.layer + ' ' + f.start + '–' + f.end + 's.';
+      if (recipe === 'slide_in') msg += ' Start point is fully outside the frame on the ' + (f.from) + ' side (comp [' + f.offscreenComp.join(', ') + ']).';
+      if (recipe === 'pulse') msg += '; Scale expression ±' + f.amount + '% every ' + f.period + 's (from each layer\'s in-point).';
+      if (recipe === 'orbit') msg += '; each layer parented to a new rotating null at "' + f.around + '" (radius ' + f.radius + 'px, one turn per ' + f.period + 's). To change speed edit the null\'s Rotation expression; to change radius set the child\'s Position x.';
+      if (recipe === 'follow') msg += '; Position expression follows "' + f.leader + '" with ' + f.lag + 's lag, keeping the current offset.';
+      if (recipe === 'shake') msg += '; Position wiggle(' + f.frequency + ', ' + f.amount + ')' + (f.rotation ? ' + Rotation wiggle(' + f.frequency + ', ' + f.rotation + ')' : '') + '.';
+    }
+    for (var wi = 0; wi < warnings.length; wi++) msg += warnings[wi];
+    result.message = result.ok ? msg : 'apply_motion_recipe: nothing applied — ' + msg;
+    return resultToJson(result);
+  } catch (e) {
+    try { _endToolUndo(); } catch (x) {}
+    result.message = 'applyMotionRecipe error: ' + e.toString();
+    return resultToJson(result);
+  }
+}
 function extensionsLlmChat_getCapabilities () {
   var result = { ok: true, version: '2026-04-30-chat-cleanup', helpers: {}, message: '' };
   var globalScope = (typeof $ !== 'undefined' && $.global) ? $.global : this;
@@ -6262,7 +6636,9 @@ function extensionsLlmChat_getCapabilities () {
     'extensionsLlmChat_rewriteSubtitleRig',
     'extensionsLlmChat_probeMotion',
     '_compSpacePosition',
-    '_firstKeyNote'
+    '_firstKeyNote',
+    '_opacityRampNote',
+    'extensionsLlmChat_applyMotionRecipe'
   ];
   for (var i = 0; i < probeList.length; i++) {
     var name = probeList[i];

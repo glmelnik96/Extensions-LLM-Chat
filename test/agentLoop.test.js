@@ -421,6 +421,29 @@ test('loop: verify turn reports layers unlocked during the run (also inside batc
   assert.ok(!/UNLOCKED/.test(win.AGENT_TOOL_LOOP.buildVerifyMessage({ text: 'x', changed: true }, [])))
 })
 
+test('loop: a plan restated on the execution turn gets one nudge, then the work happens', async () => {
+  const win = loadLoop()
+  const G = require('../lib/pure/doneGuard.js')
+  win.PURE_DONE_GUARD = G
+  const planText = '1. Получить сводку композиции (`get_detailed_comp_summary`).\n2. Найти Circle A.\n3. Применить set_property_value с новым X.'
+  const calls = scriptProvider(win, [
+    resp({ role: 'assistant', content: planText }, 'stop'),
+    resp({ role: 'assistant', content: planText }, 'stop'),
+    resp(toolCallMsg('add_keyframes', { layer_id: 1 }), 'tool_calls'),
+    resp({ role: 'assistant', content: 'Сдвинул Circle A на 200 px.' }, 'stop')
+  ])
+  fakeHost(win)
+  const result = await win.AGENT_TOOL_LOOP.runAgentLoop({
+    modelId: 'm', messages: [{ role: 'user', content: 'подвинь Circle A правее на 200' }], tools: ONE_TOOL, planTurn: true
+  })
+  assert.strictEqual(calls.length, 4)
+  const nudge = calls[2].messages[calls[2].messages.length - 1]
+  assert.strictEqual(nudge.role, 'user')
+  assert.match(nudge.content, /That is a plan, not the work/)
+  assert.strictEqual(result.toolCallLog.length, 1)
+  assert.strictEqual(result.outcome, 'Сдвинул Circle A на 200 px.')
+})
+
 test('loop: plan turn [[final]] marker short-circuits pure questions', async () => {
   const win = loadLoop()
   const calls = scriptProvider(win, [resp({ role: 'assistant', content: 'wiggle(f, a) — процедурный шум. [[final]]' }, 'stop')])
@@ -431,6 +454,25 @@ test('loop: plan turn [[final]] marker short-circuits pure questions', async () 
   assert.strictEqual(calls.length, 1)
   assert.strictEqual(result.content, 'wiggle(f, a) — процедурный шум.')
   assert.strictEqual(result.toolCallLog.length, 0)
+})
+
+test('loop: a bare [[final]] marker on the execution turn means the plan text was the answer', async () => {
+  const win = loadLoop()
+  const answer = 'wiggle(2, 30): частота 2 раза в секунду, амплитуда 30 px.'
+  scriptProvider(win, [
+    resp({ role: 'assistant', content: answer }, 'stop'),
+    resp({ role: 'assistant', content: '[[final]]' }, 'stop')
+  ])
+  fakeHost(win)
+  const result = await win.AGENT_TOOL_LOOP.runAgentLoop({
+    modelId: 'm', messages: [{ role: 'user', content: 'что такое wiggle?' }], tools: ONE_TOOL, planTurn: true
+  })
+  assert.strictEqual(result.outcome, answer, 'outcome is the answer, never the marker')
+  assert.strictEqual(result.content, answer)
+  // marker appended to a real answer is stripped too
+  scriptProvider(win, [resp({ role: 'assistant', content: 'Готово: сдвинул. [[final]]' }, 'stop')])
+  const r2 = await win.AGENT_TOOL_LOOP.runAgentLoop({ modelId: 'm', messages: [{ role: 'user', content: 'x' }], tools: ONE_TOOL })
+  assert.strictEqual(r2.outcome, 'Готово: сдвинул.')
 })
 
 test('loop: empty plan content falls back to the normal first turn without the instruction', async () => {

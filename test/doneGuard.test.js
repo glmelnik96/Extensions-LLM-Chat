@@ -74,6 +74,22 @@ test('unresolved: reply asking the user a question is NOT overridden', () => {
 
 // ── nudge messages ───────────────────────────────────────────────────────
 
+test('plan-only: a numbered to-do plan with zero tool calls is flagged (RU and EN)', () => {
+  const ru = '**План**\n1. Получить полное описание композиции (`get_detailed_comp_summary`).\n2. Найти слой «Circle A» и определить его layerId.\n3. Вычислить новое положение: newX = currentX + 200.\n4. Применить set_property_value.'
+  const en = '1. TARGETS: layer Child (I will read the comp summary first).\n2. HARD CONSTRAINTS: touch nothing else.\n3. EXPECTED RESULT: Child enters from the right.\n4. STEPS: call apply_motion_recipe(slide_in, from:right).'
+  assert.deepStrictEqual(guard.checkPhantomDone(ru, [], {}), { reason: 'plan-only' })
+  assert.deepStrictEqual(guard.checkPhantomDone(en, [], {}), { reason: 'plan-only' })
+  assert.match(guard.buildNudge({ reason: 'plan-only' }), /EXECUTE it/)
+})
+
+test('plan-only: explanations, questions and reports are NOT flagged', () => {
+  assert.strictEqual(guard.checkPhantomDone('wiggle(2, 30) — это выражение: 2 раза в секунду, амплитуда 30 px. Оно добавляет случайное движение.', [], {}), null)
+  assert.strictEqual(guard.checkPhantomDone('Какие именно слои анимировать — все три круга или только Circle A?', [], {}), null)
+  assert.strictEqual(guard.looksLikePlan('- Card 1: opacity 0 → 100 at 1.0–1.5 s\n- Card 2: opacity 0 → 100 at 1.5–2.0 s'), false)
+  // a plan text AFTER real tool calls is not the plan-only case (handled by the verify turn)
+  assert.strictEqual(guard.checkPhantomDone('1. Получить сводку\n2. Применить ключи\n3. Проверить', [{ name: 'set_property_value', status: 'ok' }], {}), null)
+})
+
 test('buildNudge: no-tools message tells the model nothing changed', () => {
   const msg = guard.buildNudge({ reason: 'no-tools' })
   assert.ok(msg.startsWith('[SYSTEM]'))

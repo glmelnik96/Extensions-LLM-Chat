@@ -452,7 +452,7 @@
    * never legitimately strings, so parsing them is safe; anything that does
    * not parse to an array is left as-is for _validateRequiredArgs to reject.
    */
-  var _ARRAY_ARG_NAMES = { targets: 1, keyframes: 1, layer_indices: 1, calls: 1, edits: 1, segments: 1, times: 1 }
+  var _ARRAY_ARG_NAMES = { targets: 1, keyframes: 1, layer_indices: 1, layer_ids: 1, calls: 1, edits: 1, segments: 1, times: 1 }
   function _unstringifyArrayArgs (args) {
     // Duck-typed array check (like isArr in _validateRequiredArgs): args may
     // cross JS-context boundaries where `instanceof Array` lies.
@@ -568,6 +568,11 @@
       case 'stagger_layers':
         if (!isArr(args.layer_indices)) return 'stagger_layers: missing required `layer_indices` array (at least 2 layer indices).'
         if (typeof args.offset !== 'number') return 'stagger_layers: missing required `offset` number.'
+        return null
+      case 'apply_motion_recipe':
+        if (!isStr(args.recipe)) return 'apply_motion_recipe: missing required `recipe` (pop_in, slide_in, fade, pulse, orbit, follow, shake).'
+        if (!isArr(args.layer_ids) && !isArr(args.layer_indices) && args.recipe !== 'shake') return 'apply_motion_recipe: pass `layer_ids` (preferred) or `layer_indices` — the layers to animate.'
+        if ((args.recipe === 'orbit' || args.recipe === 'follow') && typeof args.around_layer_id !== 'number' && typeof args.around_layer_index !== 'number') return 'apply_motion_recipe(' + args.recipe + '): pass `around_layer_id` — the layer to orbit around / follow.'
         return null
       case 'randomize_property':
         if (!isArr(args.layer_indices)) return 'randomize_property: missing required `layer_indices` array.'
@@ -924,6 +929,11 @@
           toESLiteral(args.new_index) + ')'
         break
       case 'set_layer_parent':
+        // Models often write child_layer_id / child_layer_index (eval corpus
+        // 2026-09-02: 8 failed calls in a row, every one read as "parent =
+        // itself"). Accept the aliases instead of failing.
+        if (args.layer_id === undefined && typeof args.child_layer_id === 'number') args.layer_id = args.child_layer_id
+        if (args.layer_index === undefined && typeof args.child_layer_index === 'number') args.layer_index = args.child_layer_index
         call = 'extensionsLlmChat_setLayerParent(' +
           toESLiteral(args.layer_index) + ',' +
           toESLiteral(args.layer_id || null) + ',' +
@@ -1032,6 +1042,18 @@
           toESLiteral(args.property_path) + ',' +
           toESLiteral(typeof args.time_offset === 'number' ? args.time_offset : null) + ',' +
           toESLiteral(args.align_to || null) + ')'
+        break
+      case 'apply_motion_recipe':
+        var recipeOpts = {}
+        var recipeKeys = ['duration', 'delay', 'stagger', 'direction', 'from', 'ease', 'overshoot', 'period', 'amount', 'frequency', 'rotation', 'radius', 'around_layer_id', 'around_layer_index', 'replace']
+        for (var rk = 0; rk < recipeKeys.length; rk++) {
+          if (args[recipeKeys[rk]] !== undefined && args[recipeKeys[rk]] !== null) recipeOpts[recipeKeys[rk]] = args[recipeKeys[rk]]
+        }
+        call = 'extensionsLlmChat_applyMotionRecipe(' +
+          toESLiteral(args.recipe) + ',' +
+          toESLiteral(args.layer_indices || null) + ',' +
+          toESLiteral(args.layer_ids || null) + ',' +
+          toESLiteral(recipeOpts) + ')'
         break
       case 'stagger_layers':
         call = 'extensionsLlmChat_staggerLayers(' +

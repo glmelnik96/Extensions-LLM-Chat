@@ -69,6 +69,10 @@ const fixtures = {
   cards: fx(`
     for (var i = 1; i <= 4; i++) { solid('Card ' + i, [0.2 + 0.15 * i, 0.5, 0.9 - 0.15 * i], 360, 220, 300 + (i - 1) * 440, 540); }
   `),
+  // Cards whose in-points differ (1.0 / 1.5 / 2.0 s) — entrance motion must start at each in-point.
+  cardsLate: fx(`
+    for (var i = 1; i <= 3; i++) { var L = solid('Card ' + i, [0.2 + 0.2 * i, 0.5, 0.9 - 0.2 * i], 360, 220, 400 + (i - 1) * 560, 540); L.inPoint = 0.5 + i * 0.5; }
+  `),
   // Column: Card 4 at the top of the frame and of the stack, Card 1 at the
   // bottom — visual and timeline "top→bottom" agree and differ from name order.
   cardsColumn: fx(`
@@ -411,6 +415,87 @@ const cases = [
         return { n, ok, detail: 'io=' + fmt([+L.inPoint.toFixed(2), +L.outPoint.toFixed(2)]) + ' opacity@mid=' + fmt(L.at.opacity) }
       })
       return [ck('each card is visible only in its named window (by NAME, not stack order; trim or hold keys)', res.every(r => r.ok), fmt(res.map(r => 'Card ' + r.n + ': ' + r.detail)))]
+    }
+  },
+  {
+    id: 'popin-late', tags: ['recipe', 'timing', 'motion'], fixture: 'cardsLate',
+    prompt: 'Сделай pop-in для всех карточек: каждая выскакивает из нуля до своего размера с лёгким перелётом, когда появляется.',
+    sampleTimes: [1.0, 1.5, 2.0, 2.5, 3.5],
+    checks: (a, b, run) => {
+      const cards = (a.layers || []).filter(l => /^Card \d$/.test(l.name))
+      const res = cards.map(l => {
+        const s0 = scalar(l.scale && l.scale.value)
+        const firstAt = l.scale && l.scale.numKeys >= 2 ? l.scale.firstKeyTime : null
+        const startsAtIn = firstAt !== null && near(firstAt, l.inPoint, 0.05)
+        const fromZero = l.scale && l.scale.numKeys >= 2 && scalar(l.at.scale[[1.0, 1.5, 2.0].indexOf(+l.inPoint.toFixed(2))]) <= 5
+        const endsFull = scalar(l.at.scale[4]) >= 95 && scalar(l.at.scale[4]) <= 105
+        return { n: l.name, startsAtIn, fromZero, endsFull, firstAt, in: l.inPoint, at: l.at.scale.map(scalar) }
+      })
+      const recipeUsed = (run.toolCallLog || []).some(e => e.name === 'apply_motion_recipe' && e.status === 'ok')
+      return [
+        ck('every card scales from 0 starting AT its own in-point (1.0 / 1.5 / 2.0 s)', res.length === 3 && res.every(r => r.startsAtIn && r.fromZero), fmt(res.map(r => r.n + ' in=' + r.in + ' firstKey=' + r.firstAt + ' scale@in=' + r.at[[1.0, 1.5, 2.0].indexOf(+r.in.toFixed(2))]))),
+        ck('every card settles at ~100% by 3.5 s', res.every(r => r.endsFull), fmt(res.map(r => r.n + ':' + r.at[4]))),
+        ck('info: apply_motion_recipe used', true, 'recipeUsed=' + recipeUsed)
+      ]
+    }
+  },
+  {
+    id: 'slide-from-right', tags: ['recipe', 'motion', 'parenting'], fixture: 'parented',
+    prompt: 'Пусть Child выезжает справа из-за кадра на своё место за 0.8 секунды.',
+    sampleTimes: [0, 0.4, 0.8, 1.0],
+    checks: (a, b, run) => {
+      const K = byName(a, /^Child$/); const K0 = byName(b, /^Child$/)
+      const w = K && K.at.world
+      const startOff = w && w[0][0] >= 1920
+      const landed = w && K0 && dist(w[3], K0.at.world[0]) <= 6
+      const recipeUsed = (run.toolCallLog || []).some(e => e.name === 'apply_motion_recipe' && e.status === 'ok')
+      return [
+        ck('Child starts fully outside the frame on the RIGHT (comp x ≥ 1920 at t=0)', startOff, 'world@0=' + fmt(w && w[0])),
+        ck('… and lands exactly on its original position by 1.0 s (comp space, parent honoured)', landed, 'world@1.0=' + fmt(w && w[3]) + ' original=' + fmt(K0 && K0.at.world[0])),
+        ck('info: apply_motion_recipe used', true, 'recipeUsed=' + recipeUsed)
+      ]
+    }
+  },
+  {
+    id: 'orbit-new', tags: ['recipe', 'motion', 'parenting'], fixture: 'shapes3',
+    prompt: 'Пусть Circle C крутится вокруг Circle B по кругу, один оборот за 2 секунды, на текущем расстоянии.',
+    sampleTimes: [0, 0.5, 1, 1.5, 2],
+    checks: (a, b, run) => {
+      const C = byName(a, /Circle C/); const B = byName(a, /Circle B/)
+      const center = B ? B.at.world[0] : [960, 540]
+      const w = C && C.at.world
+      const radii = w ? w.map(pt => dist(pt, center)) : []
+      const ang = (pt) => angleDeg(pt, center)
+      const turned = w ? Math.abs(angleDelta(ang(w[0]), ang(w[2]))) : 0
+      const backHome = w ? dist(w[0], w[4]) <= 15 : false
+      const recipeUsed = (run.toolCallLog || []).some(e => e.name === 'apply_motion_recipe' && e.status === 'ok')
+      return [
+        ck('constant radius ≈ 400 px (initial distance) around Circle B', radii.length === 5 && radii.every(r => near(r, 400, 25)), 'radii=' + fmt(radii.map(Math.round))),
+        ck('half a turn by 1 s and back to start by 2 s', near(turned, 180, 30) && backHome, 'turned(0→1s)=' + turned.toFixed(0) + ' backHome=' + backHome),
+        ck('info: apply_motion_recipe used', true, 'recipeUsed=' + recipeUsed)
+      ]
+    }
+  },
+  {
+    id: 'cam-shake', tags: ['recipe', 'motion', 'expressions'], fixture: 'shapes3',
+    prompt: 'Добавь лёгкую тряску камеры на всю композицию.',
+    sampleTimes: [0, 0.1, 0.2, 0.3],
+    checks: (a, b, run) => {
+      const beforeIds = new Set((b.layers || []).map(l => l.id))
+      const moving = (a.layers || []).filter(l => l.at.world.some((p, i) => i > 0 && dist(p, l.at.world[0]) > 1))
+      const circles = (a.layers || []).filter(l => /Circle/.test(l.name))
+      const circlesShake = circles.every(l => l.at.world.some((p, i) => i > 0 && dist(p, l.at.world[0]) > 1))
+      const sane = moving.every(l => l.at.world.every(p => dist(p, l.at.world[0]) < 150))
+      const newLayers = (a.layers || []).filter(l => !beforeIds.has(l.id))
+      const madeCamera = newLayers.some(l => l.type === 'camera')
+      const flipped3d = circles.filter(l => l.threeD === true)
+      const recipeUsed = (run.toolCallLog || []).some(e => e.name === 'apply_motion_recipe' && e.status === 'ok')
+      return [
+        ck('every circle visibly shakes in comp space (its own motion, a parent null or an adjustment rig — not a camera: the comp is 2D)', circles.length === 3 && circlesShake, fmt(circles.map(l => l.name + ':' + Math.round(l.at.world.reduce((m, p) => Math.max(m, dist(p, l.at.world[0])), 0)))) + ' newLayers=' + fmt(newLayers.map(l => l.name + '/' + l.type))),
+        ck('no camera created and no layer switched to 3D just for the shake', !madeCamera && flipped3d.length === 0, 'camera=' + madeCamera + ' flippedTo3D=' + fmt(flipped3d.map(l => l.name))),
+        ck('shake is subtle (< 150 px)', sane),
+        ck('info: apply_motion_recipe used', true, 'recipeUsed=' + recipeUsed)
+      ]
     }
   },
   {

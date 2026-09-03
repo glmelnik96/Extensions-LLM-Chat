@@ -77,6 +77,18 @@ test('sceneDiff: transform values, keyframe ranges and expressions', () => {
   assert.match(c, /Transform>Scale: expression set \("wiggle\(3, 25\)"\)/)
 })
 
+test('sceneDiff: a visible first key after the in-point is reported as held before it', () => {
+  const before = snap([layer({ id: 10, name: 'Card 2', inPoint: 0 })])
+  const after = snap([layer({ id: 10, name: 'Card 2', inPoint: 0, animated: { opacity: { numKeys: 2, from: 1, to: 2, firstValue: 100, lastValue: 0 } } })])
+  const c = SD.diffScenes(before, after).changed[0].changes.join(' | ')
+  assert.match(c, /opacity: keyframes added \(2 keys, 1\.00–2\.00s; holds 100 BEFORE 1\.00s \(visible from the in-point 0\.00s\)\)/)
+  // first key at the in-point, or an invisible first value: no note
+  const ok1 = snap([layer({ id: 10, animated: { opacity: { numKeys: 2, from: 0, to: 1, firstValue: 0, lastValue: 100 } } })])
+  assert.ok(!/holds/.test(SD.diffScenes(before, ok1).changed[0].changes.join(' | ')))
+  const ok2 = snap([layer({ id: 10, animated: { opacity: { numKeys: 2, from: 1, to: 2, firstValue: 0, lastValue: 100 } } })])
+  assert.ok(!/holds/.test(SD.diffScenes(before, ok2).changed[0].changes.join(' | ')))
+})
+
 test('sceneDiff: keyframe value edits (same count) and expression changes via sig', () => {
   const before = snap([layer({
     id: 10,
