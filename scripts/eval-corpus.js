@@ -14,7 +14,7 @@
  *
  * Usage:
  *   node scripts/eval-corpus.js [--model <id>] [--only id,id] [--tag <tag>]
- *        [--limit N] [--plan on|off] [--verify on|off] [--gating on|off]
+ *        [--limit N] [--plan on|off] [--verify on|off] [--gating on|off] [--journal on|off]
  *        [--compare <report.json>]
  * Prereq: AE running with the panel open (CDP 8092) and an API key configured.
  * Reports: scripts/eval-report-<timestamp>.json (gitignored).
@@ -28,12 +28,13 @@ const { execSync } = require('child_process')
 const { cases, fixtures } = require('./eval-cases.js')
 
 // ── CLI ──────────────────────────────────────────────────────────────────
+const JOURNAL = require('../lib/pure/changeJournal.js')
 const argv = process.argv.slice(2)
 const opt = { model: null, only: null, tag: null, limit: 0, plan: true, verify: true, gating: false, compare: null }
 for (let i = 0; i < argv.length; i++) {
   const a = argv[i]
   const v = argv[i + 1]
-  if (a === '--model') { opt.model = v; i++ } else if (a === '--only') { opt.only = v.split(',').map(s => s.trim()).filter(Boolean); i++ } else if (a === '--tag') { opt.tag = v; i++ } else if (a === '--limit') { opt.limit = Number(v) || 0; i++ } else if (a === '--plan') { opt.plan = v !== 'off'; i++ } else if (a === '--verify') { opt.verify = v !== 'off'; i++ } else if (a === '--gating') { opt.gating = v === 'on'; i++ } else if (a === '--compare') { opt.compare = v; i++ } else if (a === '--help' || a === '-h') { console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(1, 22).join('\n')); process.exit(0) }
+  if (a === '--journal') { opt.journal = v !== 'off'; i++ } else if (a === '--model') { opt.model = v; i++ } else if (a === '--only') { opt.only = v.split(',').map(s => s.trim()).filter(Boolean); i++ } else if (a === '--tag') { opt.tag = v; i++ } else if (a === '--limit') { opt.limit = Number(v) || 0; i++ } else if (a === '--plan') { opt.plan = v !== 'off'; i++ } else if (a === '--verify') { opt.verify = v !== 'off'; i++ } else if (a === '--gating') { opt.gating = v === 'on'; i++ } else if (a === '--compare') { opt.compare = v; i++ } else if (a === '--help' || a === '-h') { console.log(fs.readFileSync(__filename, 'utf8').split('\n').slice(1, 22).join('\n')); process.exit(0) }
 }
 
 // ── CDP layer (same scaffolding as the hunt scripts) ─────────────────────
@@ -153,7 +154,7 @@ async function probeState (times) {
     function propInfo (p) {
       if (!p) return null;
       var o = { numKeys: 0, firstKeyTime: null, lastKeyTime: null, expr: '', exprEnabled: false, exprError: '', value: null };
-      try { o.numKeys = p.numKeys; if (p.numKeys > 0) { o.firstKeyTime = r2(p.keyTime(1)); o.lastKeyTime = r2(p.keyTime(p.numKeys)); } } catch (e1) {}
+      try { o.numKeys = p.numKeys; if (p.numKeys > 0) { o.firstKeyTime = r2(p.keyTime(1)); o.lastKeyTime = r2(p.keyTime(p.numKeys)); o.keys = []; for (var kk = 1; kk <= p.numKeys && kk <= 12; kk++) o.keys.push({ t: r2(p.keyTime(kk)), v: r2(p.keyValue(kk)), hold: p.keyOutInterpolationType(kk) === KeyframeInterpolationType.HOLD }); } } catch (e1) {}
       try { o.expr = p.expression ? String(p.expression).slice(0, 240) : ''; o.exprEnabled = p.expressionEnabled === true; } catch (e2) {}
       try { o.exprError = p.expressionError ? String(p.expressionError).slice(0, 160) : ''; } catch (e3) {}
       try { o.value = r2(p.value); } catch (e4) {}
@@ -224,7 +225,7 @@ async function probeState (times) {
 }
 
 // ── Agent turn (plan + verify + scene diff wired like main.js) ───────────
-async function runAgentTurn (history, prompt, timeoutMs) {
+async function runAgentTurn (history, prompt, timeoutMs, journalText) {
   history.push({ role: 'user', content: prompt })
   const code = `
     (function () {
@@ -249,6 +250,7 @@ async function runAgentTurn (history, prompt, timeoutMs) {
           planTurn: ${opt.plan ? 'true' : 'false'},
           verifyTurn: ${opt.verify ? 'true' : 'false'},
           toolGating: ${opt.gating ? 'true' : 'false'},
+          journal: ${JSON.stringify(journalText || '')},
           onPlan: function (p) { plan = p; },
           getSceneDiff: function () {
             return snap().then(function (a) {
@@ -260,7 +262,7 @@ async function runAgentTurn (history, prompt, timeoutMs) {
       }).then(function (r) {
         return snap().then(function (a) {
           var d = SD.diffScenes(before, a);
-          return { content: r.content, outcome: (typeof r.outcome === 'string') ? r.outcome : r.content, toolCallLog: r.toolCallLog, usage: r.usage, plan: plan, diffText: SD.formatDiff(d, { maxChars: 1500 }), elapsedMs: Date.now() - t0, toolGating: r.toolGating || null };
+          return { content: r.content, outcome: (typeof r.outcome === 'string') ? r.outcome : r.content, toolCallLog: r.toolCallLog, usage: r.usage, plan: plan, diff: d, diffText: SD.formatDiff(d, { maxChars: 1500 }), elapsedMs: Date.now() - t0, toolGating: r.toolGating || null };
         });
       });
     })()
@@ -318,8 +320,8 @@ async function main () {
 
   await connectCDP()
   const model = opt.model || await evalInPanel('(window.EXTENSIONS_LLM_CHAT_CONFIG && window.EXTENSIONS_LLM_CHAT_CONFIG.defaultModel) || "?"')
-  const meta = Object.assign({ model, planTurn: opt.plan, verifyTurn: opt.verify, toolGating: opt.gating, startedAt: new Date().toISOString() }, fingerprint())
-  console.log('Eval corpus: ' + selected.length + ' case(s) | model ' + model + ' | plan ' + (opt.plan ? 'on' : 'off') + ' verify ' + (opt.verify ? 'on' : 'off') + ' gating ' + (opt.gating ? 'on' : 'off') + ' | ' + meta.gitRev + '/' + meta.promptHash)
+  const meta = Object.assign({ model, planTurn: opt.plan, verifyTurn: opt.verify, toolGating: opt.gating, journal: opt.journal !== false, startedAt: new Date().toISOString() }, fingerprint())
+  console.log('Eval corpus: ' + selected.length + ' case(s) | model ' + model + ' | plan ' + (opt.plan ? 'on' : 'off') + ' verify ' + (opt.verify ? 'on' : 'off') + ' gating ' + (opt.gating ? 'on' : 'off') + ' journal ' + (opt.journal !== false ? 'on' : 'off') + ' | ' + meta.gitRev + '/' + meta.promptHash)
   await ensureComp()
 
   const report = { meta, cases: [], summary: null }
@@ -337,10 +339,19 @@ async function main () {
       const before = await probeState(times)
       const turns = c.turns || [{ prompt: c.prompt, checks: c.checks }]
       const history = []
+      // Change journal between turns (2026-09-03): built exactly like the
+      // panel does it, so multi-turn cases measure the same context.
+      const journal = []
       for (let ti = 0; ti < turns.length; ti++) {
         const turn = turns[ti]
         console.log('  > ' + turn.prompt)
-        const run = await runAgentTurn(history, turn.prompt, c.timeoutMs || 6 * 60 * 1000)
+        const journalText = (opt.journal !== false && journal.length) ? JOURNAL.formatJournal(journal, { compName: journal[journal.length - 1].comp }) : ''
+        if (journalText) console.log('  journal: ' + journal.length + ' entr' + (journal.length === 1 ? 'y' : 'ies') + ', ' + journalText.length + ' chars')
+        const run = await runAgentTurn(history, turn.prompt, c.timeoutMs || 6 * 60 * 1000, journalText)
+        if (opt.journal !== false) {
+          const je = JOURNAL.buildEntry({ request: turn.prompt, plan: run.plan, outcome: run.outcome, toolCallLog: run.toolCallLog, diff: run.diff || null, diffText: run.diffText, at: ti + 1 })
+          if (je) journal.push(je)
+        }
         if (c.preProbe) { const pr = await probe(c.preProbe); if (!pr || pr.ok !== true) console.log('  (preProbe: ' + JSON.stringify(pr).slice(0, 120) + ')') }
         const after = await probeState(times)
         const fails = failedCalls(run.toolCallLog)

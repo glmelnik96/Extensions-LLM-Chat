@@ -90,6 +90,16 @@ test('registry: every tool has a valid OpenAI function schema', () => {
   }
 })
 
+test('set_property_value: animated properties are refused unless replace_keyframes is explicit', () => {
+  const t = findTool('set_property_value')
+  assert.match(t.function.description, /NO keyframes/)
+  assert.match(t.function.description, /PROPERTY_HAS_KEYFRAMES/)
+  const rk = t.function.parameters.properties.replace_keyframes
+  assert.ok(rk && rk.type === 'boolean', 'replace_keyframes boolean param')
+  assert.match(rk.description, /explicitly asked/)
+  assert.ok(!t.function.parameters.required.includes('replace_keyframes'))
+})
+
 function findTool (name) {
   return tools.find(t => t.function.name === name)
 }

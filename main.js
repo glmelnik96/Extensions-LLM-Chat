@@ -1668,6 +1668,7 @@
       temperature: agentCfg.agentTemperature || 0.3,
       streaming: agentCfg.agentStreaming === true,
       thinkingFirstTurn: agentCfg.agentThinkingFirstTurn === true,
+      journal: journalTextFor(session, ''),
       abortHandle: state.currentAbortHandle,
       onTextChunk: function (chunk) { updateThinkingWithStreamText(chunk) },
       onReasoningChunk: function (chunk) { updateThinkingReasoning(chunk) },
@@ -1720,6 +1721,32 @@
   }
 
   // ── Handle Send ────────────────────────────────────────────────────────
+  // ── Change journal (2026-09-03, lib/pure/changeJournal.js) ────────────
+  // What the agent itself changed earlier in this chat, per comp, sent as
+  // one [SYSTEM] message before every later request (agentToolLoop.js
+  // options.journal) so "ускорь / ещё раз / отмени" edits the rig it built
+  // instead of building a second one. Persisted with the session.
+  function journalTextFor (session, compName) {
+    var J = window.PURE_CHANGE_JOURNAL
+    if (!J || !session) return ''
+    try { return J.formatJournal(session.journal || [], { compName: compName || '' }) } catch (e) { return '' }
+  }
+  function appendJournalEntry (session, run) {
+    var J = window.PURE_CHANGE_JOURNAL
+    if (!J || !session) return
+    try {
+      var entry = J.buildEntry(run)
+      if (!entry) return
+      if (!session.journal) session.journal = []
+      session.journal.push(entry)
+      if (session.journal.length > 30) session.journal.splice(0, session.journal.length - 30)
+    } catch (e) {}
+  }
+  function lastUserText (session) {
+    for (var i = session.messages.length - 1; i >= 0; i--) if (session.messages[i].role === 'user') return session.messages[i].text || ''
+    return ''
+  }
+
   function handleSend () {
     if (state.isRequestInFlight) return
     var text = (els.userInput.value || '').trim()
@@ -1891,6 +1918,7 @@
 
     snapshotScene().then(function (snap) {
       beforeSnap = snap
+      loopOptions.journal = journalTextFor(session, snap && snap.compName)
       return window.AGENT_TOOL_LOOP.runAgentLoop(loopOptions)
     }).then(function (result) {
       removeThinking()
@@ -1938,6 +1966,10 @@
       var diffNote = (mutatingCount > 0 && beforeSnap)
         ? sceneDiffSince(beforeSnap).then(function (d) {
           state.lastSceneDiff = d.diff || null
+          appendJournalEntry(session, {
+            request: lastUserText(session), plan: result.plan, outcome: result.outcome, toolCallLog: allCalls,
+            diff: d.diff || null, diffText: d.text, compName: (d.diff && d.diff.compName) || (beforeSnap && beforeSnap.compName) || ''
+          })
           session.messages.push({ role: 'system', text: 'Actual changes (scene diff): ' + d.text })
           renderTranscript()
           persistState()

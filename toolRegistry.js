@@ -561,14 +561,15 @@
       type: 'function',
       function: {
         name: 'set_property_value',
-        description: 'Set a static value on a property (removes keyframes). For Position use [x, y], for Scale use [x, y] as percentage, for Opacity use a number 0-100, for Rotation use degrees.',
+        description: 'Set a static value on a property that has NO keyframes. For Position use [x, y], for Scale use [x, y] as percentage, for Opacity use a number 0-100, for Rotation use degrees. On an ANIMATED property the call is refused (PROPERTY_HAS_KEYFRAMES) because a static value deletes every key — edit the keys instead; pass replace_keyframes:true only when the user explicitly wants the animation removed.',
         parameters: {
           type: 'object',
           properties: {
             layer_index: { type: 'number', description: '1-based layer index' },
             layer_id: { type: 'number', description: 'Persistent layer ID' },
             property_path: { type: 'string', description: 'Property path' },
-            value: { description: 'The value to set — number, array, or string depending on property type' }
+            value: { description: 'The value to set — number, array, or string depending on property type' },
+            replace_keyframes: { type: 'boolean', description: 'Default false. true = delete ALL keyframes on the property and set the static value — only when the user explicitly asked for the animation to be removed.' }
           },
           required: ['layer_index', 'property_path', 'value']
         }

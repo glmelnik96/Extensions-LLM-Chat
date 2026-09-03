@@ -444,6 +444,90 @@ test('loop: a plan restated on the execution turn gets one nudge, then the work 
   assert.strictEqual(result.outcome, 'Сдвинул Circle A на 200 px.')
 })
 
+test('loop: options.journal is inserted as a [SYSTEM] user message right before the latest request', async () => {
+  const win = loadLoop()
+  fakeHost(win)
+  const journal = '[SYSTEM] JOURNAL — what YOU changed earlier in this comp ("C"), oldest first.\n#1 request: «orbit»\n  - apply_motion_recipe orbit → "Circle C" (id 14)'
+  const tag = (m) => m.role + ':' + (/^\[SYSTEM\] JOURNAL/.test(m.content) ? 'JOURNAL' : (/^\[SYSTEM\] PLAN/.test(m.content) ? 'PLAN' : m.content))
+  let calls = scriptProvider(win, [resp({ role: 'assistant', content: 'ok' }, 'stop')])
+  await win.AGENT_TOOL_LOOP.runAgentLoop({
+    modelId: 'm', systemPrompt: 'sp', tools: ONE_TOOL, journal,
+    messages: [{ role: 'user', content: 'make orbit' }, { role: 'assistant', content: 'done' }, { role: 'user', content: 'twice faster' }]
+  })
+  assert.strictEqual(calls[0].messages.map(tag).join(' | '), 'system:sp | user:make orbit | assistant:done | user:JOURNAL | user:twice faster')
+  // with the plan turn: journal before the request, the plan instruction after it
+  calls = scriptProvider(win, [resp({ role: 'assistant', content: 'план [[final]]' }, 'stop')])
+  await win.AGENT_TOOL_LOOP.runAgentLoop({ modelId: 'm', tools: ONE_TOOL, messages: [{ role: 'user', content: 'faster' }], journal, planTurn: true })
+  assert.strictEqual(calls[0].messages.map(tag).join(' | '), 'user:JOURNAL | user:faster | user:PLAN')
+  // an empty / whitespace journal inserts nothing
+  calls = scriptProvider(win, [resp({ role: 'assistant', content: 'ok' }, 'stop')])
+  await win.AGENT_TOOL_LOOP.runAgentLoop({ modelId: 'm', tools: ONE_TOOL, messages: [{ role: 'user', content: 'x' }], journal: '  ' })
+  assert.strictEqual(calls[0].messages.length, 1)
+})
+
+test('loop: a plan or a done-claim glued to [[final]] on the plan turn does not end the run', async () => {
+  const win = loadLoop()
+  win.PURE_DONE_GUARD = require('../lib/pure/doneGuard.js')
+  fakeHost(win)
+  const plans = []
+  const planText = '1. Получить сводку композиции (`get_detailed_comp_summary`).\n2. Найти Circle C.\n3. Применить set_property_value Scale = 60%.'
+  const calls = scriptProvider(win, [
+    resp({ role: 'assistant', content: planText + '\n[[final]]' }, 'stop'),
+    resp(toolCallMsg('add_keyframes', { layer_id: 1 }), 'tool_calls'),
+    resp({ role: 'assistant', content: 'Уменьшил Circle C до 60%.' }, 'stop')
+  ])
+  const result = await win.AGENT_TOOL_LOOP.runAgentLoop({
+    modelId: 'm', messages: [{ role: 'user', content: 'Уменьши Circle C до 60 процентов.' }], tools: ONE_TOOL, planTurn: true, onPlan: (p) => plans.push(p)
+  })
+  assert.strictEqual(calls.length, 3, 'plan turn + tool turn + final answer')
+  assert.match(calls[1].messages[calls[1].messages.length - 1].content, /That is a plan, not the work/)
+  assert.strictEqual(plans.join('|'), planText, 'the plan is still shown to the user')
+  assert.strictEqual(result.toolCallLog.length, 1)
+  assert.strictEqual(result.outcome, 'Уменьшил Circle C до 60%.')
+  assert.strictEqual(result.plan, planText)
+  // a "done" claim with the marker and zero tool calls gets the no-tools nudge
+  const calls2 = scriptProvider(win, [
+    resp({ role: 'assistant', content: 'Готово — уменьшил Circle C до 60%. [[final]]' }, 'stop'),
+    resp({ role: 'assistant', content: 'Ничего не изменено: нужен вызов инструмента.' }, 'stop')
+  ])
+  const r2 = await win.AGENT_TOOL_LOOP.runAgentLoop({ modelId: 'm', messages: [{ role: 'user', content: 'Уменьши' }], tools: ONE_TOOL, planTurn: true })
+  assert.strictEqual(calls2.length, 2)
+  assert.match(calls2[1].messages[calls2[1].messages.length - 1].content, /ZERO tool calls/)
+  assert.strictEqual(r2.outcome, 'Ничего не изменено: нужен вызов инструмента.')
+})
+
+test('loop: after a no-change VERIFY, a reply that still claims the work is done gets one nudge', async () => {
+  const win = loadLoop()
+  win.PURE_DONE_GUARD = require('../lib/pure/doneGuard.js')
+  fakeHost(win)
+  const calls = scriptProvider(win, [
+    resp(toolCallMsg('add_keyframes', { layer_id: 1 }), 'tool_calls'),
+    resp({ role: 'assistant', content: 'Готово: карточки появляются по очереди.' }, 'stop'),
+    resp({ role: 'assistant', content: 'Opacity у каждой карточки теперь анимируется — сделано.' }, 'stop'),
+    resp({ role: 'assistant', content: 'Ничего не изменилось: мои ключи были удалены последующим вызовом.' }, 'stop')
+  ])
+  const result = await win.AGENT_TOOL_LOOP.runAgentLoop({
+    modelId: 'm', messages: [{ role: 'user', content: 'stagger' }], tools: ONE_TOOL, verifyTurn: true,
+    getSceneDiff: () => Promise.resolve({ text: 'No changes detected in composition "C" — its state before and after the run is identical.', changed: false })
+  })
+  assert.strictEqual(calls.length, 4, 'tool turn + first answer + verify reply + nudged reply')
+  assert.match(calls[2].messages[calls[2].messages.length - 1].content, /VERIFY before finishing/)
+  assert.match(calls[3].messages[calls[3].messages.length - 1].content, /scene diff showed NO changes/)
+  assert.strictEqual(result.outcome, 'Ничего не изменилось: мои ключи были удалены последующим вызовом.')
+  // an honest verify reply (no action claim) is accepted as is
+  const calls2 = scriptProvider(win, [
+    resp(toolCallMsg('add_keyframes', { layer_id: 1 }), 'tool_calls'),
+    resp({ role: 'assistant', content: 'Проверяю.' }, 'stop'),
+    resp({ role: 'assistant', content: 'Изменений нет: инструмент отказал, ключи не тронуты.' }, 'stop')
+  ])
+  const r2 = await win.AGENT_TOOL_LOOP.runAgentLoop({
+    modelId: 'm', messages: [{ role: 'user', content: 'stagger' }], tools: ONE_TOOL, verifyTurn: true,
+    getSceneDiff: () => Promise.resolve({ text: 'No changes detected', changed: false })
+  })
+  assert.strictEqual(calls2.length, 3)
+  assert.strictEqual(r2.outcome, 'Изменений нет: инструмент отказал, ключи не тронуты.')
+})
+
 test('loop: plan turn [[final]] marker short-circuits pure questions', async () => {
   const win = loadLoop()
   const calls = scriptProvider(win, [resp({ role: 'assistant', content: 'wiggle(f, a) — процедурный шум. [[final]]' }, 'stop')])

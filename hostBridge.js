@@ -1099,7 +1099,8 @@
           toESLiteral(args.layer_index) + ',' +
           toESLiteral(args.layer_id || null) + ',' +
           toESLiteral(args.property_path) + ',' +
-          toESLiteral(args.value) + ')'
+          toESLiteral(args.value) + ',' +
+          toESLiteral(args.replace_keyframes === true) + ')'
         break
       case 'apply_expression':
         call = 'extensionsLlmChat_applyExpressionToTarget(' +

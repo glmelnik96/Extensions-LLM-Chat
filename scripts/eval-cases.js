@@ -129,10 +129,36 @@ function hasExprErrors (state) {
   return (state.layers || []).filter(l => ['position', 'scale', 'rotation', 'opacity', 'anchorPoint'].some(k => l[k] && l[k].exprError) || l.textExprError)
 }
 /** Appearance time: in-point if > 0, else first key of opacity/scale (whichever is earliest), else 0. */
+/**
+ * When does a layer first become visible? In-point, the first VISIBLE
+ * opacity/scale key (a leading invisible key — e.g. "0 at t=0 hold, 100 at
+ * 0.4" — is the correct way to hide a card until 0.4 s and must not count as
+ * appearing at 0; eval corpus 2026-09-03 stagger-new judged a right answer
+ * wrong this way), or the first position key (a slide-in from off-screen).
+ * A visible FIRST key means the layer shows from its in-point (AE holds the
+ * first key's value before it).
+ */
 function appearanceTime (l) {
   const cands = []
-  if (l.inPoint > 0.01) cands.push(l.inPoint)
-  for (const k of ['opacity', 'scale', 'position']) if (l[k] && l[k].numKeys > 0 && typeof l[k].firstKeyTime === 'number') cands.push(l[k].firstKeyTime)
+  const inPt = l.inPoint > 0.01 ? l.inPoint : 0
+  if (inPt) cands.push(inPt)
+  const visible = (k, v) => k === 'opacity' ? v > 0.5 : (Array.isArray(v) ? Math.abs(v[0]) > 0.5 && Math.abs(v[1]) > 0.5 : v > 0.5)
+  for (const k of ['opacity', 'scale']) {
+    const p = l[k]
+    if (!p || p.numKeys <= 0) continue
+    if (Array.isArray(p.keys) && p.keys.length) {
+      if (visible(k, p.keys[0].v)) { cands.push(Math.max(inPt, 0)); continue }
+      const j = p.keys.findIndex(key => visible(k, key.v))
+      if (j > 0) {
+        // A fade starts to show at the invisible key it ramps from; a HOLD
+        // key keeps the layer hidden until the visible key itself.
+        cands.push(p.keys[j - 1].hold ? p.keys[j].t : p.keys[j - 1].t)
+        continue
+      }
+    }
+    if (typeof p.firstKeyTime === 'number') cands.push(p.firstKeyTime)
+  }
+  if (l.position && l.position.numKeys > 0 && typeof l.position.firstKeyTime === 'number') cands.push(l.position.firstKeyTime)
   return cands.length ? Math.min(...cands) : 0
 }
 function angleDeg (p, center) { return Math.atan2(p[1] - center[1], p[0] - center[0]) * 180 / Math.PI }
@@ -475,6 +501,53 @@ const cases = [
         ck('info: apply_motion_recipe used', true, 'recipeUsed=' + recipeUsed)
       ]
     }
+  },
+  {
+    // Change journal (2026-09-03): the follow-up must edit the rig the agent
+    // built one turn earlier — not build a second one. The turn-2 prompt is
+    // ambiguous on its own; the journal says what "the rotation" is.
+    id: 'orbit-then-faster', tags: ['journal', 'recipe', 'motion', 'parenting'], fixture: 'shapes3',
+    sampleTimes: [0, 0.5, 1, 1.5, 2],
+    turns: (() => {
+      let layersAfter1 = -1; let nullsAfter1 = -1
+      const T = [0, 0.5, 1, 1.5, 2]
+      const orbitChecks = (a, label, halfIdx, homeIdx) => {
+        const C = byName(a, /Circle C/); const B = byName(a, /Circle B/)
+        const center = B ? B.at.world[0] : [960, 540]
+        const w = C && C.at.world
+        const radii = w ? w.map(pt => dist(pt, center)) : []
+        const ang = (pt) => angleDeg(pt, center)
+        const turned = w ? Math.abs(angleDelta(ang(w[0]), ang(w[halfIdx]))) : 0
+        const backHome = w ? dist(w[0], w[homeIdx]) <= 15 : false
+        return [
+          ck(label + ': constant radius ≈ 400 px around Circle B', radii.length === 5 && radii.every(r => near(r, 400, 25)), 'radii=' + fmt(radii.map(Math.round))),
+          ck(label + ': half a turn by ' + T[halfIdx] + ' s and back to start by ' + T[homeIdx] + ' s', near(turned, 180, 30) && backHome, 'turned=' + turned.toFixed(0) + ' backHome=' + backHome)
+        ]
+      }
+      return [
+        {
+          prompt: 'Пусть Circle C крутится вокруг Circle B по кругу, один оборот за 2 секунды, на текущем расстоянии.',
+          checks: (a) => {
+            layersAfter1 = (a.layers || []).length
+            nullsAfter1 = (a.layers || []).filter(l => l.nullLayer).length
+            return orbitChecks(a, 'turn 1 (period 2 s)', 2, 4)
+          }
+        },
+        {
+          prompt: 'Ускорь вращение в два раза.',
+          checks: (a, b, run) => {
+            const layers = a.layers || []
+            const nulls = layers.filter(l => l.nullLayer).length
+            const names = (run.toolCallLog || []).map(e => e.name + (e.status === 'ok' ? '' : '!'))
+            return orbitChecks(a, 'turn 2 (period 1 s)', 1, 2).concat([
+              ck('follow-up edited the existing rig: no layers added or removed', layersAfter1 >= 0 && layers.length === layersAfter1, 'layers ' + layersAfter1 + ' → ' + layers.length),
+              ck('no second orbit null', nullsAfter1 >= 0 && nulls === nullsAfter1, 'nulls ' + nullsAfter1 + ' → ' + nulls),
+              ck('info: turn-2 tools', true, fmt(names))
+            ])
+          }
+        }
+      ]
+    })()
   },
   {
     id: 'cam-shake', tags: ['recipe', 'motion', 'expressions'], fixture: 'shapes3',

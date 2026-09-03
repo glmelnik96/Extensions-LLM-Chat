@@ -2104,15 +2104,18 @@ function _opacityRampNote (layer, prop) {
     var dips = [];
     for (var k = 1; k < prop.numKeys; k++) {
       var ta = prop.keyTime(k); var tb = prop.keyTime(k + 1);
-      if (tb - ta < 0.02) continue;
+      // Short segments are fades by design (eval corpus 2026-09-03: a 0.2 s
+      // fade-in flagged as "half-transparent" sent the model into a 5x
+      // delete/rewrite loop of correct keys). Only slow ramps get the note.
+      if (tb - ta < 0.4) continue;
       var mid = (ta + tb) / 2;
       var v = prop.valueAtTime(mid, false);
       if (v > 3 && v < 97) dips.push('t=' + _r2(mid) + 's: ' + _r2(v) + '%');
       if (dips.length >= 4) break;
     }
     if (!dips.length) return '';
-    return ' WARNING: Opacity is HALF-TRANSPARENT between keys (' + dips.join(', ') + ') — these keys form a gradual ramp, not an on/off window.' +
-      ' For "visible from A to B" set out_type:"hold" on EVERY key of the window (hold acts on the segment AFTER a key; in_type:"hold" does nothing for what follows), or trim the layer with set_layer_timing; keep a ramp only if a slow fade was requested.';
+    return ' NOTE: Opacity ramps gradually between keys (' + dips.join(', ') + ') — fine for a deliberate fade.' +
+      ' Only if a hard on/off window ("visible from A to B") was intended: set out_type:"hold" on EVERY key of the window (hold acts on the segment AFTER a key; in_type:"hold" does nothing for what follows), or trim the layer with set_layer_timing.';
   } catch (e) { return ''; }
 }
 
@@ -3225,7 +3228,7 @@ function extensionsLlmChat_getExpression (layerIndex, layerId, propertyPath) {
 /**
  * Set a static property value (no keyframes).
  */
-function extensionsLlmChat_setPropertyValue (layerIndex, layerId, propertyPath, value) {
+function extensionsLlmChat_setPropertyValue (layerIndex, layerId, propertyPath, value, replaceKeyframes) {
   var result = { ok: false, message: '' };
   try {
     var ctx = extensionsLlmChat_resolveActiveComp();
@@ -3250,6 +3253,16 @@ function extensionsLlmChat_setPropertyValue (layerIndex, layerId, propertyPath, 
     }
     var spvRemapErr = _timeRemapBlocker(layer, prop);
     if (spvRemapErr) { result.message = spvRemapErr; return resultToJson(result); }
+    // Eval corpus 2026-09-03 (stagger-new): the model built a correct
+    // staggered Opacity animation, then "pinned" Opacity = 100 with this
+    // tool on every card — which silently deleted every key. A static value
+    // on an animated property is refused unless the caller says so.
+    if (prop.numKeys > 0 && replaceKeyframes !== true) {
+      result.error_code = 'PROPERTY_HAS_KEYFRAMES';
+      result.numKeys = prop.numKeys;
+      result.message = 'set_property_value refused: "' + propertyPath + '" on "' + layer.name + '" is ANIMATED (' + prop.numKeys + ' keyframes, ' + _r2(prop.keyTime(1)) + '–' + _r2(prop.keyTime(prop.numKeys)) + 's) — a static value would delete that animation. Nothing was changed. The value at any time comes from the keys: change the animation with set_keyframes_batch / add_keyframes (or leave it as it is).';
+      return resultToJson(result);
+    }
     _beginToolUndo('Agent: Set property value');
     var spvRemapNote = _ensureTimeRemapEnabled(layer, prop);
     // If property has keyframes, remove them first then set static value,
@@ -6497,6 +6510,7 @@ function extensionsLlmChat_applyMotionRecipe (recipe, layerIndices, layerIds, op
         else _recipeKeys(posP, t0, startVal, t1, endVal, influence, overshoot);
         info.from = side; info.offscreenComp = _r2(offWorld); info.landsAt = _r2(_compSpacePosition(layer, t1 + frameDur));
         info.keys = posP.numKeys;
+        info.parent = layer.parent ? layer.parent.name : '';
       } else if (recipe === 'fade') {
         var opTarget = opP.value > 0 ? opP.value : 100;
         if (replace) _recipeClearKeys(opP);
@@ -6583,7 +6597,13 @@ function extensionsLlmChat_applyMotionRecipe (recipe, layerIndices, layerIds, op
     if (result.applied.length) {
       var f = result.applied[0];
       if (recipe === 'pop_in' || recipe === 'slide_in' || recipe === 'fade') msg += '; keys from each layer\'s in-point' + (delay ? ' + ' + delay + 's' : '') + (stagger ? ', staggered by ' + stagger + 's' : '') + ', ' + duration + 's each, easy ease ' + influence + '%' + (overshoot ? ', overshoot ' + overshoot : '') + '. First: ' + f.layer + ' ' + f.start + '–' + f.end + 's.';
-      if (recipe === 'slide_in') msg += ' Start point is fully outside the frame on the ' + (f.from) + ' side (comp [' + f.offscreenComp.join(', ') + ']).';
+      if (recipe === 'slide_in') {
+        msg += ' Start point is fully outside the frame on the ' + (f.from) + ' side (comp [' + f.offscreenComp.join(', ') + ']), landing at comp [' + f.landsAt.join(', ') + '].';
+        // Eval corpus 2026-09-03: on a parented layer the model read the keys
+        // back, saw values that are not comp coordinates, deleted them and
+        // rewrote them by hand (wrong). Say where the numbers live.
+        if (f.parent) msg += ' NOTE: "' + f.layer + '" is parented to "' + f.parent + '" — the keys are stored in PARENT space, so key VALUES differ from comp coordinates by design. Check the motion only with probe_motion(space:"comp"); do not delete or rewrite these keys from comp numbers.';
+      }
       if (recipe === 'pulse') msg += '; Scale expression ±' + f.amount + '% every ' + f.period + 's (from each layer\'s in-point).';
       if (recipe === 'orbit') msg += '; each layer parented to a new rotating null at "' + f.around + '" (radius ' + f.radius + 'px, one turn per ' + f.period + 's). To change speed edit the null\'s Rotation expression; to change radius set the child\'s Position x.';
       if (recipe === 'follow') msg += '; Position expression follows "' + f.leader + '" with ' + f.lag + 's lag, keeping the current offset.';

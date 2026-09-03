@@ -26,6 +26,8 @@
    *   - onToolCall:   function(toolCall) — callback for UI updates per tool call
    *   - onStepStart:  function(stepIndex) — fired before each model request
    *   - onStepComplete: function(stepIndex, toolResults) — callback after each step
+   *   - journal:      string — the agent's own change journal ([SYSTEM] text from
+   *                   lib/pure/changeJournal.js), inserted right before the latest user message
    *
    * @returns {Promise<object>} { content: string, toolCallLog: Array }
    */
@@ -91,6 +93,11 @@
     // options.getSceneDiff) and demand measurement + fixes. Once per run.
     var verifyTurn = options.verifyTurn === true && typeof options.getSceneDiff === 'function'
     var verifyUsed = false
+    // Eval corpus 2026-09-03 (stagger-new): the VERIFY diff said "NO changes"
+    // and the model still reported the animation as done. Remember what the
+    // verify turn saw so the reply after it can be held to it.
+    var verifyNoChange = false
+    var verifyLogLen = -1
 
     // Build the full message array for the API.
     var messages = []
@@ -100,6 +107,16 @@
     // Add conversation history.
     for (var i = 0; i < conversationMessages.length; i++) {
       messages.push(conversationMessages[i])
+    }
+    // Change journal (2026-09-03, lib/pure/changeJournal.js): what this agent
+    // changed earlier in the comp, as one [SYSTEM] message right before the
+    // new request — so "faster / again / undo" edits the rig it built instead
+    // of building a second one. options.journal is the formatted text.
+    var journalText = (typeof options.journal === 'string') ? options.journal.replace(/^\s+|\s+$/g, '') : ''
+    if (journalText) {
+      var lastUserIdx = -1
+      for (var ju = 0; ju < messages.length; ju++) if (messages[ju] && messages[ju].role === 'user') lastUserIdx = ju
+      if (lastUserIdx >= 0) messages.splice(lastUserIdx, 0, { role: 'user', content: journalText })
     }
 
     var toolCallLog = []
@@ -312,6 +329,15 @@
               return step(stepIndex + 1)
             }
           }
+          // After a VERIFY that found NO changes: a reply that still claims
+          // completed work, with no further tool calls, gets one nudge.
+          if (verifyUsed && verifyNoChange && !doneNudgeUsed && toolCallLog.length === verifyLogLen &&
+              assistantMsg.content && window.PURE_DONE_GUARD && window.PURE_DONE_GUARD.ACTION_CLAIM_RE.test(content)) {
+            doneNudgeUsed = true
+            messages.push({ role: 'assistant', content: content })
+            messages.push({ role: 'user', content: '[SYSTEM] The scene diff showed NO changes in the composition and you made no further tool calls, yet your reply reports completed work. Either perform the change NOW with tool calls, or state plainly that nothing was changed and why (e.g. a tool refused or removed what you set).' })
+            return step(stepIndex + 1)
+          }
           // Verify turn: the model wants to finish after real mutations. Hand
           // it the ACTUAL scene diff once and let it measure/fix before the
           // answer is accepted — the final text is then grounded in state,
@@ -319,6 +345,8 @@
           if (verifyTurn && !verifyUsed && hasSuccessfulMutation(toolCallLog) && !(abortHandle && abortHandle.aborted)) {
             verifyUsed = true
             return options.getSceneDiff().then(function (diff) {
+              verifyNoChange = !!(diff && diff.changed === false)
+              verifyLogLen = toolCallLog.length
               messages.push({ role: 'assistant', content: content })
               messages.push({ role: 'user', content: buildVerifyMessage(diff, collectUnlocks(toolCallLog)) })
               return step(stepIndex + 1)
@@ -387,6 +415,20 @@
         }
         if (text.indexOf(PLAN_FINAL_MARKER) !== -1) {
           var answer = text.split(PLAN_FINAL_MARKER).join('').replace(/^\s+|\s+$/g, '')
+          // Eval corpus 2026-09-03 (shrink, and the four "plan restated"
+          // failures the day before): the marker also arrives glued to a PLAN
+          // or to a "done" claim — one model call, zero tools — and this
+          // short-circuit skipped the phantom-done guard entirely. Run the
+          // same guard here: a plan or an action claim is never the final
+          // answer to a request that needs tools.
+          var early = (window.PURE_DONE_GUARD && answer) ? window.PURE_DONE_GUARD.checkPhantomDone(answer, [], READ_ONLY_TOOLS) : null
+          if (early) {
+            doneNudgeUsed = true
+            if (early.reason === 'plan-only') { planText = answer; try { onPlan(planText) } catch (_) {} }
+            messages.push({ role: 'assistant', content: answer })
+            messages.push({ role: 'user', content: window.PURE_DONE_GUARD.buildNudge(early) })
+            return step(0)
+          }
           return { content: answer, outcome: answer, plan: '', toolCallLog: toolCallLog, usage: totalUsage }
         }
         planText = text.replace(/\s+$/, '')
