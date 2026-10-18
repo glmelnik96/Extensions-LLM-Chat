@@ -7,7 +7,8 @@
   if (typeof window !== 'undefined' && window.EXTENSIONS_LLM_CHAT_CONFIG) {
     Object.assign(window.EXTENSIONS_LLM_CHAT_CONFIG, {
       // baseUrl: 'https://foundation-models.api.cloud.ru/v1',
-      // defaultModel: 'openai/gpt-oss-120b',
+      // defaultModel: 'MiniMaxAI/MiniMax-M2.5',
+      // unavailableModels: [],  // e.g. once the project regains access to every model
       // cloudChatTimeoutMs: 300000,
       // agentMaxSteps: 60,
       // agentTemperature: 0.3,

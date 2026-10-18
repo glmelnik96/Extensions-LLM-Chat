@@ -48,6 +48,7 @@ See [secret-handling.md](secret-handling.md).
 
 - **Network / firewall**: check `baseUrl` reachable.
 - **HTTP 4xx/5xx**: verify `baseUrl` and `apiKey`. See [configuration.md](configuration.md).
+- **HTTP 403 `Requested model is not available for this project`**: the Cloud.ru project behind the key cannot call that model, although GET /models lists it and the badge counts it as available (2026-10-18: gpt-oss-120b, Kimi-K2.6, MiniMax-M3, whisper-large-v3). Add the id to `unavailableModels` in the config: the panel hides it from the selector and turns off the visual check or transcription that needs it. `RBAC: Access Denied (hard-deny)` is the organization-level ban on external models.
 - **Automatic retry**: panel retries on 429/5xx with exponential backoff (3 attempts).
 - **Status spinner stuck**: model may be timing out. Bump `cloudChatTimeoutMs` or stop and retry.
 

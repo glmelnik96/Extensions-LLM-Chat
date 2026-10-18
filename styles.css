@@ -1093,3 +1093,16 @@ select.session-select option {
 .vision-toggle:hover .vision-toggle-label {
   color: var(--text);
 }
+
+/* Visual check whose model the project cannot call (config.unavailableModels). */
+.vision-toggle-unavailable,
+.vision-toggle-unavailable input[type="checkbox"] {
+  cursor: not-allowed;
+}
+
+.vision-toggle-unavailable .vision-toggle-label,
+.vision-toggle-unavailable:hover .vision-toggle-label {
+  color: var(--text-dim);
+  opacity: 0.45;
+  text-decoration: line-through;
+}

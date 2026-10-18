@@ -208,6 +208,20 @@
    * normalize segments, cache them for create_subtitles, return them.
    */
   function _transcribeCompAudio (args) {
+    // 2026-10-18: Whisper answers HTTP 403 for this Cloud.ru project. Fail
+    // BEFORE the audio render (which can take minutes on a long comp) with
+    // the one path that still works. config.unavailableModels controls it.
+    var accessCfg = window.EXTENSIONS_LLM_CHAT_CONFIG || {}
+    var access = window.PURE_MODEL_ACCESS
+    if (access && !access.isTranscriptionAvailable(accessCfg)) {
+      return Promise.resolve({
+        ok: false,
+        error_code: 'MODEL_UNAVAILABLE',
+        message: 'Transcription is unavailable: ' + access.transcribeModelId(accessCfg) +
+          ' is not available for this Cloud.ru project (HTTP 403). Do not retry and do not try another way to transcribe. ' +
+          'Subtitles can still be built from a saved transcript: tell the user to load it in the Subtitles studio (Load transcript), then call create_subtitles.'
+      })
+    }
     var span = {
       startTime: (typeof args.start_time === 'number') ? args.start_time : null,
       endTime: (typeof args.end_time === 'number') ? args.end_time : null

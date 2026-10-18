@@ -231,7 +231,7 @@ async function runAgentTurn (history, prompt, timeoutMs, journalText) {
     (function () {
       var HB = window.HOST_BRIDGE, SD = window.PURE_SCENE_DIFF;
       function snap () { return HB.evalHostFunction('extensionsLlmChat_getDetailedCompSummary({fingerprint:true})'); }
-      var modelId = ${opt.model ? JSON.stringify(opt.model) : '(window.EXTENSIONS_LLM_CHAT_CONFIG && window.EXTENSIONS_LLM_CHAT_CONFIG.defaultModel) || "openai/gpt-oss-120b"'};
+      var modelId = ${opt.model ? JSON.stringify(opt.model) : '(window.EXTENSIONS_LLM_CHAT_CONFIG && window.EXTENSIONS_LLM_CHAT_CONFIG.defaultModel) || "MiniMaxAI/MiniMax-M2.5"'};
       var built = window.AGENT_SYSTEM_PROMPT_BUILDER.build(${JSON.stringify(prompt)});
       var systemPrompt = (built && built.prompt) ? built.prompt : (window.AGENT_SYSTEM_PROMPT || '');
       var agentCfg = window.EXTENSIONS_LLM_CHAT_CONFIG || {};

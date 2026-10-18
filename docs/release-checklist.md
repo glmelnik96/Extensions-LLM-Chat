@@ -18,6 +18,7 @@ Pre-release validation for the AE Motion Agent CEP extension.
 ## Functional QA
 
 - [ ] Panel launches, status shows **Ready** (or config message if no key)
+- [ ] Model access: every selector model, the visual-check model and Whisper answer a real request with the release key (GET /models is NOT proof: on 2026-10-18 it listed models that returned HTTP 403 "not available for this project"); `unavailableModels` in `config/example.config.js` names exactly the ones that do not
 - [ ] Agent cycle: happy path — tool calls + final text
 - [ ] Tool errors shown in cards, panel remains responsive
 - [ ] Undo reverts all mutating actions

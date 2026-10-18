@@ -29,7 +29,7 @@ Key: `ae-motion-agent-state`
     "title": "Session",
     "createdAt": 1713012345678,
     "updatedAt": 1713012345678,
-    "model": "openai/gpt-oss-120b",
+    "model": "MiniMaxAI/MiniMax-M2.5",
     "messages": []
   }
 }
@@ -47,7 +47,7 @@ Key: `ae-motion-agent-state`
 | `title` | string | Display name |
 | `createdAt` | number | `Date.now()` at creation |
 | `updatedAt` | number | Updated on message changes |
-| `model` | string | Selected model ID — one of `AVAILABLE_MODELS` (`openai/gpt-oss-120b`, `MiniMaxAI/MiniMax-M2.5`, `zai-org/GLM-4.7`). Unknown/old ids are migrated to `DEFAULT_MODEL` on load via `normalizeModelId` |
+| `model` | string | Selected model ID — one of `AVAILABLE_MODELS` (`ALL_MODELS` minus `config.unavailableModels`; since 2026-10-18 `MiniMaxAI/MiniMax-M2.5`, `zai-org/GLM-4.7`). Unknown, old or now-hidden ids (e.g. `openai/gpt-oss-120b`) are migrated to `DEFAULT_MODEL` on load via `normalizeModelId` |
 | `messages` | array | Conversation history |
 
 ---

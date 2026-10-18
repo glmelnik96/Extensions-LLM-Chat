@@ -45,7 +45,7 @@
    */
   function parseModelId (modelId) {
     if (!modelId || typeof modelId !== 'string') {
-      return { provider: 'cloudru', model: getConfig().defaultModel || 'openai/gpt-oss-120b' }
+      return { provider: 'cloudru', model: getConfig().defaultModel || 'MiniMaxAI/MiniMax-M2.5' }
     }
     if (modelId.indexOf('cloudru/') === 0) {
       return { provider: 'cloudru', model: modelId.substring(8) }

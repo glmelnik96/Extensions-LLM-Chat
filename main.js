@@ -42,13 +42,23 @@
   //                     GLM); streaming + tool_calls both work correctly.
   // `thinking` controls the chat_template_kwargs.enable_thinking flag the loop
   // sends; only the GLM family honors it (others ignore the kwarg harmlessly).
-  var AVAILABLE_MODELS = [
+  var ALL_MODELS = [
     { id: 'openai/gpt-oss-120b', label: 'gpt-oss-120b', family: 'gpt-oss' },
     { id: 'MiniMaxAI/MiniMax-M2.5', label: 'MiniMax-M2.5', family: 'minimax' },
     { id: 'zai-org/GLM-4.7', label: 'GLM-4.7', family: 'glm' },
     { id: 'moonshotai/Kimi-K2.6', label: 'Kimi-K2.6', family: 'kimi' }
   ]
-  // Default = fastest clean model from the benchmark.
+  // 2026-10-18: the Cloud.ru project behind the key answers HTTP 403 for
+  // gpt-oss-120b and Kimi-K2.6 although GET /models still lists them, so the
+  // selector shows only what config.unavailableModels does not name
+  // (lib/pure/modelAccess.js). Sessions saved with a hidden model migrate to
+  // the default through normalizeModelId.
+  var MODEL_ACCESS = window.PURE_MODEL_ACCESS || null
+  var AVAILABLE_MODELS = MODEL_ACCESS
+    ? MODEL_ACCESS.filterModels(ALL_MODELS, window.EXTENSIONS_LLM_CHAT_CONFIG || {})
+    : ALL_MODELS
+  // Default = first callable entry: gpt-oss-120b (fastest clean model from the
+  // benchmark) when the project can call it, MiniMax-M2.5 otherwise.
   var DEFAULT_MODEL = AVAILABLE_MODELS[0].id
   var DEFAULT_AGENT_MAX_STEPS = 60
 
@@ -1391,7 +1401,18 @@
   }
 
   // ── Vision check helpers ────────────────────────────────────────────────
+  // The check needs an image-capable model. On 2026-10-18 the project could
+  // not call MiniMax-M3 (HTTP 403) and none of the callable chat models takes
+  // images, so a listed vision model turns the check off: otherwise every
+  // mutating run renders a frame and then fails open with a 403.
+  function isVisionModelCallable () {
+    var VC = window.PURE_VISION_CHECK
+    if (!VC || !MODEL_ACCESS) return true
+    return !MODEL_ACCESS.isUnavailable(VC.VISION_MODEL_ID, window.EXTENSIONS_LLM_CHAT_CONFIG || {})
+  }
+
   function isVisionCheckEnabled () {
+    if (!isVisionModelCallable()) return false
     try {
       var stored = localStorage.getItem(VISION_CHECK_KEY)
       if (stored === 'false') return false
@@ -1401,6 +1422,20 @@
 
   function initVisionCheckToggle () {
     if (!els.visionCheckToggle) return
+    if (!isVisionModelCallable()) {
+      // Stored preference is left untouched so the check comes back as it
+      // was once the model is removed from config.unavailableModels.
+      els.visionCheckToggle.checked = false
+      els.visionCheckToggle.disabled = true
+      var toggleLabel = els.visionCheckToggle.parentNode
+      if (toggleLabel && toggleLabel.classList) {
+        toggleLabel.classList.add('vision-toggle-unavailable')
+        toggleLabel.setAttribute('title', 'Visual check is off: its model ' + window.PURE_VISION_CHECK.VISION_MODEL_ID +
+          ' is not available for this Cloud.ru project (HTTP 403), and no callable model accepts images. ' +
+          'Remove it from config.unavailableModels once access is restored.')
+      }
+      return
+    }
     els.visionCheckToggle.checked = isVisionCheckEnabled()
     els.visionCheckToggle.addEventListener('change', function () {
       try {
@@ -2058,6 +2093,24 @@
       els.subtitlesFont, els.subtitlesFontStyle, els.subtitlesFontSize, els.subtitlesColor,
       els.subtitlesPlateColor, els.subtitlesSpokenColor]
     for (var i = 0; i < ctrls.length; i++) if (ctrls[i]) ctrls[i].disabled = !!disabled
+    // Transcription stays off while its model is not callable — re-enabling
+    // the task controls after a Rebuild must not bring the button back.
+    if (els.subtitlesBtn && !isTranscriptionCallable()) els.subtitlesBtn.disabled = true
+  }
+
+  // Whisper access (2026-10-18: HTTP 403 for the project). Without it the
+  // studio still works from a saved transcript: Load transcript, then Rebuild.
+  function isTranscriptionCallable () {
+    if (!MODEL_ACCESS) return true
+    return MODEL_ACCESS.isTranscriptionAvailable(window.EXTENSIONS_LLM_CHAT_CONFIG || {})
+  }
+
+  function initTranscriptionAvailability () {
+    if (!els.subtitlesBtn || isTranscriptionCallable()) return
+    els.subtitlesBtn.disabled = true
+    els.subtitlesBtn.setAttribute('title', 'Transcription is off: ' +
+      MODEL_ACCESS.transcribeModelId(window.EXTENSIONS_LLM_CHAT_CONFIG || {}) +
+      ' is not available for this Cloud.ru project (HTTP 403). Load a saved transcript, then Rebuild.')
   }
 
   // ── Subtitles studio (overlay) ─────────────────────────────────────────
@@ -2269,6 +2322,10 @@
       return
     }
     if (!window.HOST_BRIDGE) return
+    if (!reuseTranscript && !isTranscriptionCallable()) {
+      setSubtitlesStatus('Transcription is unavailable: Whisper is not available for this Cloud.ru project. Load a saved transcript, then Rebuild.', true)
+      return
+    }
     if (reuseTranscript && !window.HOST_BRIDGE.getLastTranscription()) {
       setSubtitlesStatus('No transcript cached \u2014 run Subtitles or load a saved transcript first.', true)
       return
@@ -3268,6 +3325,7 @@
 
     bindEvents()
     initVisionCheckToggle()
+    initTranscriptionAvailability()
     loadSubtitleSettings()
     setStatus('Ready')
     updateUndoButton()

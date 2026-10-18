@@ -12,11 +12,30 @@
       /** Timeout for Cloud.ru chat requests (ms). Reasoning models (GLM-5.1 etc.)
        *  spend time "thinking" before the first token, so this is generous. */
       cloudChatTimeoutMs: 300000,
-      /** Default model when none is selected. The panel exposes a selector
-       *  (gpt-oss-120b / MiniMax-M2.5 / GLM-4.7 / Kimi-K2.6 — see
-       *  AVAILABLE_MODELS in main.js); gpt-oss-120b is the fastest clean
-       *  tool-caller from the 2026-06-18 benchmark, so it is the default. */
-      defaultModel: 'openai/gpt-oss-120b',
+      /** Default model for code paths outside the panel selector (chat
+       *  provider fallback, eval corpus). The panel itself defaults to the
+       *  first selector entry that is NOT in unavailableModels (ALL_MODELS
+       *  in main.js) — keep the two in step. gpt-oss-120b was the default
+       *  until the project lost access to it (2026-10-18); MiniMax-M2.5 had
+       *  the cleanest tool use of the callable models in the 2026-06-18
+       *  benchmark (4/4, 0 errors). */
+      defaultModel: 'MiniMaxAI/MiniMax-M2.5',
+
+      /** Models THIS Cloud.ru project cannot call. GET /models lists the
+       *  whole catalog, but chat/completions answered HTTP 403 "Requested
+       *  model is not available for this project" for these on 2026-10-18
+       *  (same key that ran the corpus on gpt-oss-120b on 2026-09-03). The
+       *  panel hides listed models from the selector, turns the visual check
+       *  off when MiniMax-M3 is listed and disables transcription (Whisper)
+       *  — see lib/pure/modelAccess.js. Delete an id once access is back.
+       *  Callable on 2026-10-18: MiniMax-M2.5, GLM-4.7,
+       *  ai-sage/GigaChat3.5-432B-A28B-Reasoning (not in the selector). */
+      unavailableModels: [
+        'openai/gpt-oss-120b',
+        'moonshotai/Kimi-K2.6',
+        'MiniMaxAI/MiniMax-M3',
+        'openai/whisper-large-v3'
+      ],
 
       /** ── Agent mode settings ─────────────────────────────────────────── */
 

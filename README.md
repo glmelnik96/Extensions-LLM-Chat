@@ -47,7 +47,7 @@ AI-агент принимает запросы на естественном я
 - **Export** — сессия в JSON на Desktop
 - **Errors** — только ошибочные tool calls в JSON
 - **Report** — LLM-анализ сессии + tool latency table на Desktop
-- Auto-resize textarea, селектор моделей в chat header (`Cloud.ru` + 3 кнопки: gpt-oss-120b / MiniMax-M2.5 / GLM-4.7; переключение блокируется во время запроса), token usage display
+- Auto-resize textarea, селектор моделей в chat header (`Cloud.ru` + кнопки моделей, доступных проекту: с 2026-10-18 это MiniMax-M2.5 / GLM-4.7; переключение блокируется во время запроса), token usage display
 
 ### Архитектура надёжности (после MVP + итераций 1-4)
 
@@ -231,7 +231,7 @@ Extensions LLM Chat/
 
 **Cloud.ru Foundation Models** — OpenAI-compatible chat/completions с tool calling + SSE streaming.
 
-Модели (селектор в панели, хранится per-session как `session.model`, список — `AVAILABLE_MODELS` в `main.js`): `openai/gpt-oss-120b` (дефолт, самый быстрый чистый tool-caller), `MiniMaxAI/MiniMax-M2.5`, `zai-org/GLM-4.7`. Fallback в конфиге: `deepseek-ai/DeepSeek-V4-Pro`. Reasoning-модели стримят chain-of-thought в отдельном поле `reasoning`, которое биллится как completion-токены.
+Модели (селектор в панели, хранится per-session как `session.model`, список — `ALL_MODELS` в `main.js`, отфильтрованный по `unavailableModels` из конфига): с 2026-10-18 проект Cloud.ru вызывает только `MiniMaxAI/MiniMax-M2.5` (дефолт) и `zai-org/GLM-4.7`. `openai/gpt-oss-120b` и `moonshotai/Kimi-K2.6` отвечают HTTP 403 «Requested model is not available for this project» (каталог `GET /models` их по-прежнему показывает) и скрыты. Визуальная проверка (MiniMax-M3) и расшифровка Whisper по той же причине выключены; субтитры собираются из сохранённой расшифровки (Load transcript → Rebuild). Когда доступ вернут, достаточно убрать id из `unavailableModels`. Reasoning-модели стримят chain-of-thought в отдельном поле `reasoning`, которое биллится как completion-токены.
 
 ---
 
